@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package ciphermesh.mesh.v1;
+
+// CipherMesh peer mesh.
+//
+// The mesh carries three things and deliberately nothing else:
+//   1. shard announcements + range requests, so nodes can find each other's data without
+//      hammering the DA layer;
+//   2. epoch trace digests, so a dispute can reach quorum without a round of on-chain txs;
+//   3. liveness/health, so schedulers can route work away from partitioned nodes.
+//
+// Model weights, plaintext of any kind, and STARKs never travel peer-to-peer. Weights go to
+// the DA layer under the task's ctRoot and the STARK goes on chain. Keeping the mesh narrow
+// means a compromised peer leaks nothing by gossiping.
+//
+// Conventions
+// -----------
+// `task_id` and `channel_id` are `uint256` in the contracts. proto3 has no uint256, and
+// narrowing to `uint64`/`bytes32` would be a silent truncation rather than a compile error, so
+// both are carried as decimal `string`. Peers must parse with an arbitrary-precision integer,
+// not `double` or `int64`.
+//
+// An earlier revision had a `transport_key` field on `ShardRequest` and sent the AEAD key in
+// the clear next to the ciphertext it was supposed to protect. That field is gone: the key is
+// never transmitted. Transport confidentiality comes from mTLS, and the ciphertext's
+// authenticity comes from `ctRoot` on chain, not from a key the requester supplies.
+
+service Mesh {
+  // Long-lived bidirectional gossip stream. Both ends announce shards and trace digests.
+  rpc Connect(stream Envelope) returns (stream Envelope);
+
+  // Unary pull used for range fetches during epoch execution.
+  rpc FetchShard(ShardRequest) returns (ShardResponse);
+
+  // Who can execute epoch `e` of task `t`. The chain assigns, this just announces intent.
+  rpc AnnounceEpoch(EpochAnnouncement) returns (Ack);
+}
+
+// --- envelopes -------------------------------------------------------------------------
+
+message Envelope {
+  uint64 nonce = 1;
+  oneof body {
+    Hello hello = 2;
+    ShardAnnounce shard_announce = 3;
+    TraceDigestAnnounce trace_digest = 4;
+    Ping ping = 5;
+    Ack ack = 6;
+  }
+}
+
+message Hello {
+  bytes node_id = 1;             // 20-byte keccak(blsPubKey[0:20] || operatorAddress)
+  string version = 2;
+  repeated string capabilities = 3;  // e.g. "tfhe-u32", "stark-babybear", "gpu"
+  string chain_id = 4;                // decimal uint256, see conventions above
+  bytes bls_pubkey = 5;
+  bytes signing_pubkey = 6;      // secp256k1, used for EIP-712 payment slices
+}
+
+message Ping {
+  int64 sent_unix_ms = 1;
+  uint64 inflight = 2;
+}
+
+message Ack {
+  bool ok = 1;
+  string reason = 2;
+}
+
+// --- shards ----------------------------------------------------------------------------
+
+message ShardAnnounce {
+  string task_id = 1;            // decimal uint256
+  uint32 leaf_index = 2;
+  bytes32 ciphertext_cid = 3;    // content address in the DA layer
+  bytes32 ct_digest = 4;         // keccak256 of the ciphertext bytes
+  uint32 rows = 5;
+  uint32 bytes = 6;
+  uint64 announced_at = 7;
+}
+
+message ShardRequest {
+  bytes32 ciphertext_cid = 1;
+  // Inclusive byte range. Lets a node pull a 2 GB dataset in bounded chunks and hash-verify
+  // before parsing, which is the defence against a decompression bomb (threat model A12).
+  uint64 offset = 2;
+  uint64 length = 3;
+  // Expected sha256 of the *whole* object, so a partial pull can still be validated once
+  // the caller has all the parts. Peers must refuse to serve a range that would push the
+  // caller's total pull over its configured budget.
+  bytes expected_sha256 = 4;
+}
+
+message ShardResponse {
+  bytes chunk = 1;
+  uint64 next_offset = 2;
+  bool complete = 3;
+  bytes32 chunk_digest = 4;
+  string error = 5;
+}
+
+// --- epochs & disputes ------------------------------------------------------------------
+
+message EpochAnnouncement {
+  string task_id = 1;            // decimal uint256
+  uint32 epoch = 2;
+  string intent = 3;            // "execute" | "reexecute" | "observe"
+  uint64 announced_at = 4;
+}
+
+message TraceDigestAnnounce {
+  string task_id = 1;            // decimal uint256
+  uint32 epoch = 2;
+  bytes32 trace_digest = 3;     // digest of the STARK trace the re-execution produced
+  uint64 observed_at = 4;
+  // Optional: the proof the announcer holds, for peers to verify against the chain. Never
+  // required, and never gossiped by default, because proofs are large.
+  bytes proof = 5;
+}

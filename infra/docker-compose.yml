@@ -1,0 +1,69 @@
+# CipherMesh devnet.
+#
+#   devnet      fhEVM hardhat node + contract deployment (in-process FHE mock coprocessor)
+#   shardstore  content-addressed DA (ShardStore)
+#   node-a/b/c  CipherMesh compute nodes (Rust) - requires `ciphermesh-node:dev` to exist
+#
+# Bring up the chain + DA first (nodes are optional until the Rust binary is built):
+#   docker compose up -d devnet shardstore
+#
+# Build the node image where Rust compiles (CI / a dev machine - not on a host whose App Control
+# policy blocks Cargo build scripts), then:
+#   docker compose up -d --scale node-a=0 node-b=0 node-c=0  # chain + DA only
+#   docker compose up -d node-a node-b node-c                # attach nodes
+#
+# After `devnet` is healthy, its addresses are in infra/devnet/addresses.json; pass the contract
+# addresses to the nodes via CM_TASK_ADDRESS / CM_VAULT_ADDRESS env below.
+
+services:
+  devnet:
+    build:
+      context: ..
+      dockerfile: infra/devnet/Dockerfile
+    environment:
+      HARDHAT_NETWORK: devnet
+      CM_DEPLOYER_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" # hardhat#0
+    ports:
+      - "8545:8545"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8545',{method:'post',body:'{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}',headers:{'content-type':'application/json'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  shardstore:
+    image: node:20-alpine
+    working_dir: /srv
+    volumes:
+      - ./shardstore:/srv
+    command: ["node", "server.mjs"]
+    environment:
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+
+  node-a:
+    image: ciphermesh-node:dev
+    environment: &nodeenv
+      CM_RPC_URL: http://devnet:8545
+      CM_CHAIN_ID: "31338"
+      CM_MESH_LISTEN: 0.0.0.0:7331
+      CM_MESH_PEERS: node-b:7331,node-c:7331
+      CM_OPERATOR_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" # hardhat#1
+      CM_TASK_ADDRESS: ""
+      CM_VAULT_ADDRESS: ""
+      CM_LOG: info
+    depends_on: [devnet]
+    ports: ["7331:7331"]
+
+  node-b:
+    image: ciphermesh-node:dev
+    environment: *nodeenv
+    depends_on: [devnet]
+    ports: ["7332:7331"]
+
+  node-c:
+    image: ciphermesh-node:dev
+    environment: *nodeenv
+    depends_on: [devnet]
+    ports: ["7333:7331"]

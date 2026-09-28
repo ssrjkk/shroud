@@ -1,0 +1,147 @@
+# CipherMesh compute node.
+#
+# Dependency versions below were resolved against crates.io on 2026-09-27. Two of them
+# invalidate what an earlier draft of this file assumed, and both would have been silent
+# build failures rather than obvious errors:
+#
+#   * `tfhe` has no `nightly` feature. The real names are `shortint`, `integer`, `avx512`
+#     (default). Requesting `nightly` fails resolution outright.
+#   * There is no `tfhe-traits` crate. The traits (`FheType`, `FheEncrypt`, ...) are re-exported
+#     from `tfhe::prelude`. A dependency on the non-existent crate fails resolution.
+#
+# MSRV is 1.94.1, set by `alloy` 2.5.0. `tfhe` alone requires 1.91.1 and `winterfell` 1.87, so
+# the value here is the maximum of the three, not a guess.
+
+[package]
+name = "ciphermesh-node"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+description = "CipherMesh compute node: FHE epoch execution, ZK proof of compute, streaming payouts"
+license = "MIT"
+repository = "https://github.com/ciphermesh/ciphermesh"
+
+[lib]
+name = "ciphermesh_node"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ciphermesh-node"
+path = "src/main.rs"
+
+[dependencies]
+# --- async runtime / RPC -------------------------------------------------------------
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+futures = "0.3"
+futures-util = "0.3"
+
+# `connect_http` lives behind `reqwest` in alloy 2.x (the old `provider-http` name still exists
+# but is not what gates the builder method). `sol-types` brings in the `sol!` macro.
+alloy = { version = "2.5", default-features = false, features = [
+  "providers",
+  "reqwest",
+  "reqwest-rustls-tls",
+  "sol-types",
+  "contract",
+  "signer-local",
+  "rpc-types-eth",
+  "eips",
+  "network",
+  "transports",
+] }
+
+# --- gRPC peer mesh --------------------------------------------------------------------
+# tonic 0.14 split TLS into per-backend features; the old `tls`/`tls-roots` names are gone.
+# `tls-ring` is chosen over `tls-aws-lc` because aws-lc-rs needs cmake and perl, while `ring`
+# only needs a C compiler.
+tonic = { version = "0.14", default-features = false, features = ["server", "codegen", "router", "transport", "channel", "gzip", "tls-ring", "tls-webpki-roots"] }
+prost = "0.14"
+prost-types = "0.14"
+
+# `tonic-build` must be a *build* dependency: `build.rs` cannot see regular or optional
+# dependencies. An earlier draft had it as an optional regular dependency activated by the
+# `grpc-server` feature, which can never work.
+[build-dependencies]
+# `prost` is not a feature: prost codegen is always compiled in. `transport` gates the
+# client/server transport code that the generated stubs reference.
+tonic-build = { version = "0.14", default-features = false, features = ["transport"] }
+
+# --- FHE -------------------------------------------------------------------------------
+# `shortint` gives the raw short-integer primitives (the production CPU path).
+# `integer` gives the high-level `FheUint32`-style API the optimiser is written against.
+# `avx512` is the default and is a large win, but it is opt-out on non-x86 targets.
+tfhe = { version = "1.8", default-features = false, features = ["shortint", "integer", "avx512"] }
+
+# --- ZK -------------------------------------------------------------------------------
+# winterfell 0.13 features: `std` (default), `concurrent`, `async`. There is no `nightly`.
+winterfell = { version = "0.13", default-features = false, features = ["std", "concurrent"] }
+winter-utils = "0.13"
+rand_chacha = "0.3"
+sha3 = "0.10"
+sha2 = "0.10"
+sha1 = "0.10"
+hex = "0.4"
+blake3 = "1.5"
+
+# --- serialization / storage ----------------------------------------------------------
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# bincode 2 integrates serde through the always-available `bincode::serde` module; there is no
+# `serde` *feature* to request. (bincode 1.3 had no serde support at all.)
+bincode = { version = "2", default-features = false, features = ["std"] }
+bytes = "1.7"
+# reqwest 0.13 renamed `rustls-tls` to `rustls`. Note that both this and alloy's TLS stack pull
+# in a C dependency (aws-lc-rs by default, or `ring`), so a real `cargo build` needs MSVC build
+# tools or clang; `cargo check` does not.
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls", "webpki-roots", "system-proxy"] }
+object_store = { version = "0.14", default-features = false, features = ["aws", "gcp", "http"] }
+url = "2.5"
+
+# --- config / observability ------------------------------------------------------------
+clap = { version = "4.5", features = ["derive", "env"] }
+figment = { version = "0.10", features = ["env", "toml"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "1.0"
+anyhow = "1.0"
+parking_lot = "0.12"
+rayon = "1.10"
+itertools = "0.13"
+num-bigint = "0.4"
+num-traits = "0.2"
+once_cell = "1.19"
+rand = "0.8"
+
+[dev-dependencies]
+proptest = "1.5"
+tempfile = "3.13"
+# `test-util` adds `tokio::time::pause/advance`, which the watcher's finality tests need.
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "test-util"] }
+
+[features]
+default = ["grpc-server", "prover"]
+# Serve the gRPC peer mesh. A stateless worker that only talks to the sequencer can turn this
+# off; `build.rs` still runs but the server module is not compiled in.
+grpc-server = []
+# Build the ZK proof of compute. Turn this off on bandwidth-constrained re-executor nodes that
+# only re-derive digests for the dispute window.
+prover = []
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+# `panic = "abort"` is deliberately *not* set: a panic inside an FHE epoch must unwind out of
+# the Rayon worker pool and be reported as a stage error, and aborting would take the whole
+# node down with no context.
+
+[profile.release.package."*"]
+opt-level = 3
+
+# The `epoch` bench is declared in `benches/epoch.rs` once the FHE pipeline lands; a `[[bench]]`
+# pointing at a missing file is a hard manifest error, so it is added back with the bench.
+
+[package.metadata.docs.rs]
+all-features = true

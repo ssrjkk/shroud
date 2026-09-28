@@ -1,0 +1,33 @@
+# --- Node / TypeScript ---
+node_modules/
+dist/
+*.tsbuildinfo
+
+# --- Hardhat / contracts build output ---
+packages/contracts/artifacts/
+packages/contracts/cache/
+packages/contracts/typechain-types/
+packages/contracts/fhevmTemp/
+packages/contracts/cache/
+
+# --- Rust ---
+node/target/
+
+# --- SDK build output ---
+packages/sdk/dist/
+
+# --- Env / secrets ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Logs / temp ---
+*.log
+npm-debug.log*
