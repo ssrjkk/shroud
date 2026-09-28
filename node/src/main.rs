@@ -1,4 +1,4 @@
-//! CipherMesh compute node entry point.
+//! Shroud compute node entry point.
 //!
 //! Startup order matters and is deliberate:
 //!
@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use ciphermesh_node::{
+use shroud_node::{
     chain::{OrchestratorClient, Watcher},
     config::{Cli, Config},
     error::{ConfigError, Result},
@@ -32,7 +32,7 @@ async fn main() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
             // Tracing may not be initialised yet, so this first message goes to stderr as well.
-            eprintln!("ciphermesh-node: fatal: {e}");
+            eprintln!("shroud-node: fatal: {e}");
             error!(error = %e, "fatal");
             std::process::ExitCode::FAILURE
         }
@@ -55,7 +55,7 @@ async fn run() -> Result<()> {
         chain_id = cfg.chain.chain_id,
         task = %cfg.contracts.cipher_task,
         vault = %cfg.contracts.payment_vault,
-        "starting ciphermesh-node"
+        "starting shroud-node"
     );
 
     if cfg.contracts.cipher_task.is_zero() || cfg.contracts.payment_vault.is_zero() {

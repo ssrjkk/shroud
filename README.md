@@ -1,9 +1,9 @@
-# CipherMesh — Private, programmable ML with verifiable compute and streaming payouts
+# Shroud — Private, programmable ML with verifiable compute and streaming payouts
 
 **Train a model over other people's encrypted data — without ever seeing it. Sell the model /
 your data's value without revealing either.**
 
-CipherMesh is an fhEVM (Fully Homomorphic Encryption) app chain where data never leaves its
+Shroud is an fhEVM (Fully Homomorphic Encryption) app chain where data never leaves its
 owner's device in cleartext. Buyers escrow a budget, nodes execute training over ciphertext,
 prove the work with a STARK, and settle via streaming payment channels.
 
@@ -22,7 +22,7 @@ buyer ──► CipherTask (escrow + FSM + payment channels) ◄─────�
 - **Agent economies** — privacy-preserving inference and model licensing are infrastructure
   they all lean on.
 
-CipherMesh is the plumbing for the highest-value version of that: **train and sell a model over
+Shroud is the plumbing for the highest-value version of that: **train and sell a model over
 private data, with settlement that only happens when the work is verifiably done.**
 
 ## Core properties
@@ -40,8 +40,8 @@ private data, with settlement that only happens when the work is verifiably done
 
 | path | what |
 |------|------|
-| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (32 tests) |
-| `packages/sdk/` | `@ciphermesh/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, DA + FHE abstractions |
+| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (34 tests) |
+| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, DA + FHE abstractions |
 | `node/` | Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE) |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA), 3 nodes |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |
@@ -51,7 +51,7 @@ private data, with settlement that only happens when the work is verifiably done
 ```sh
 # contracts
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 32 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 34 passing
 
 # sdk
 cd packages/sdk

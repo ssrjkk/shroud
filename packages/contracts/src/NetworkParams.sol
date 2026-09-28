@@ -137,6 +137,7 @@ contract NetworkParams is ReentrancyGuard {
     function approveRotation(Params calldata candidate) external onlyApprover {
         if (pending.scheduledAt == 0 || pending.executed) revert NoPendingRotation();
         if (pending.cancelled) revert RotationCancelled();
+        if (candidate.chainId != block.chainid) revert InvalidParams("chainId mismatch");
         bytes32 h = keccak256(abi.encode(candidate, block.chainid, msg.sender));
         if (h != pending.expectedHash) revert HashMismatch(pending.expectedHash, h);
         pending.approver = msg.sender;
@@ -157,6 +158,7 @@ contract NetworkParams is ReentrancyGuard {
         if (pending.cancelled) revert RotationCancelled();
         if (block.timestamp < pending.scheduledAt) revert TooEarly(pending.scheduledAt);
         if (pending.approver == address(0)) revert NotApprover(pending.approver);
+        if (candidate.chainId != block.chainid) revert InvalidParams("chainId mismatch");
 
         bytes32 h = keccak256(abi.encode(candidate, block.chainid, pending.approver));
         if (h != pending.expectedHash) revert HashMismatch(pending.expectedHash, h);

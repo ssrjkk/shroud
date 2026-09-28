@@ -1,4 +1,4 @@
-//! Error types for the CipherMesh compute node.
+//! Error types for the Shroud compute node.
 //!
 //! One enum, because every fallible operation in an epoch must be attributable to a stage
 //! when it fails: a node that cannot say *which* step of a 41-second FHE epoch broke is

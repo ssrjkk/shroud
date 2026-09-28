@@ -11,7 +11,7 @@ in this repo.
 | "seconds per epoch" | ~41 s per epoch for 1 000 rows × 33 features on 8 AVX2 cores. Deeper nets are **hours to days**. |
 | "production scale" | 10^3–10^4 rows. 10^6 rows × 100 features is out of reach for the u32 TFHE path by roughly 3–4 orders of magnitude. |
 
-If CipherMesh is going to serve real workloads, the roadmap is: (a) GPU bootstrapping
+If Shroud is going to serve real workloads, the roadmap is: (a) GPU bootstrapping
 (CUDA `cuFHE`/HPU), (b) amortised SIMD with lane reuse across features instead of batch, (c) a
 **hybrid** protocol where the FHE path handles the sensitive core and cleartext handles the
 rest. (c) is what production FHE-ML actually does and this repo does not implement it.
@@ -45,7 +45,7 @@ The buyer *must* be able to see the weights, otherwise they cannot use them. So 
 is: inputs never revealed, outputs revealed post-settlement. A determined buyer can still
 memorise-infer information about individuals from the weights of a tiny dataset. Dataset
 minimums (`minRowsPerShard`, `minContributors`) exist to make single-row inference hard and
-are the practical mitigation. CipherMesh does not claim membership-inference resistance.
+are the practical mitigation. Shroud does not claim membership-inference resistance.
 
 ## 6. Sequencer trust
 

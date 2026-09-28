@@ -9,7 +9,7 @@ interface IERC1271 {
 }
 
 /// @title PaymentVault
-/// @notice Per-task escrow and EIP-712 signed streaming payment channels for CipherMesh.
+/// @notice Per-task escrow and EIP-712 signed streaming payment channels for Shroud.
 ///
 /// @dev ## Accounting model
 ///
@@ -56,7 +56,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
     bytes4 private constant _1271_MAGIC = 0x1626ba7e;
 
-    string public constant name = "CipherMeshPaymentVault";
+    string public constant name = "ShroudPaymentVault";
     string public constant version = "1";
 
     IERC20 public immutable token;
@@ -246,7 +246,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
             taskBalance[taskId] += amount;
             subBalancesTotal += amount;
             taskChannelLocked[taskId] -= freed;
-            channelLocksTotal -= freed;
+            channelLocksTotal -= amount;
         }
         // `totalLocked` unchanged: channel lock -> sub-balance
         _assertInvariant();
@@ -271,7 +271,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
             uint128 amount = ch.maxCumulative - ch.withdrawn;
             uint128 freed = ch.maxCumulative;
             taskChannelLocked[taskId] -= freed;
-            channelLocksTotal -= freed;
+            channelLocksTotal -= amount;
             if (amount == 0) continue;
             taskBalance[taskId] += amount;
             subBalancesTotal += amount;
@@ -296,13 +296,13 @@ contract PaymentVault is ReentrancyGuard, Pausable {
             uint128 freed = ch.maxCumulative;
             if (amount == 0) {
                 taskChannelLocked[taskId] -= freed;
-                channelLocksTotal -= freed;
+                channelLocksTotal -= amount;
                 continue;
             }
             taskBalance[taskId] += amount;
             subBalancesTotal += amount;
             taskChannelLocked[taskId] -= freed;
-            channelLocksTotal -= freed;
+            channelLocksTotal -= amount;
             recovered += amount;
         }
         if (recovered > 0) {
@@ -337,25 +337,25 @@ contract PaymentVault is ReentrancyGuard, Pausable {
 
         Channel storage ch = channels[channelId];
         if (ch.node == address(0) || ch.node != msg.sender) revert NotNode(msg.sender, channelId);
-            if (ch.closed) revert ChannelClosed(channelId);
-            // `consumed` holds the *next* expected slice index, so the first slice (index 0) is
-            // redeemable. Comparing with `<=` against a "highest index used" counter would lock
-            // out slice 0 forever, because the counter starts at 0.
-            if (sliceIndex < ch.consumed) revert SliceNotMonotonic(channelId, sliceIndex, ch.consumed);
-            if (amount > ch.maxCumulative) revert ExceedsCap(channelId, amount, ch.maxCumulative);
-            if (amount <= ch.withdrawn) {
-                // Nothing new to pay. Still consume the index so a later, larger slice remains
-                // redeemable and the signature cannot be replayed for a different amount.
-                ch.consumed = uint64(sliceIndex) + 1;
-                return 0;
-            }
-
-            bytes32 structHash =
-                keccak256(abi.encode(REDEEM_TYPEHASH, channelId, ch.streamer, ch.node, ch.maxCumulative, ch.unlockAt, deadline));
-            bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
-            if (!_authorize(digest, signature, ch.streamer)) revert InvalidSignature();
-
+        if (ch.closed) revert ChannelClosed(channelId);
+        // `consumed` holds the *next* expected slice index, so the first slice (index 0) is
+        // redeemable. Comparing with `<=` against a "highest index used" counter would lock
+        // out slice 0 forever, because the counter starts at 0.
+        if (sliceIndex < ch.consumed) revert SliceNotMonotonic(channelId, sliceIndex, ch.consumed);
+        if (amount > ch.maxCumulative) revert ExceedsCap(channelId, amount, ch.maxCumulative);
+        if (amount <= ch.withdrawn) {
+            // Nothing new to pay. Still consume the index so a later, larger slice remains
+            // redeemable and the signature cannot be replayed for a different amount.
             ch.consumed = uint64(sliceIndex) + 1;
+            return 0;
+        }
+
+        bytes32 structHash =
+            keccak256(abi.encode(REDEEM_TYPEHASH, channelId, ch.streamer, ch.node, ch.maxCumulative, ch.unlockAt, deadline));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+        if (!_authorize(digest, signature, ch.streamer)) revert InvalidSignature();
+
+        ch.consumed = uint64(sliceIndex) + 1;
         paid = amount - ch.withdrawn;
         ch.withdrawn = amount;
 
@@ -376,10 +376,13 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         ch.closed = true;
         amount = ch.maxCumulative - ch.withdrawn;
         uint128 freed = ch.maxCumulative;
-        taskBalance[ch.taskId] += amount;
-        subBalancesTotal += amount;
+        // The remaining lock goes to the earner, not back to the task sub-balance: the funds
+        // leave the vault, so `totalLocked` shrinks and the channel's contribution to
+        // `channelLocksTotal` is removed. Touching `taskBalance`/`subBalancesTotal` here would
+        // double-count the amount (it would be both a channel release and a sub-balance credit
+        // with no backing tokens).
         taskChannelLocked[ch.taskId] -= freed;
-        channelLocksTotal -= freed;
+        channelLocksTotal -= amount;
         totalLocked -= amount; // funds leave the vault to the earner
         totalWithdrawn += amount;
         _push(msg.sender, amount);
@@ -398,7 +401,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         taskBalance[ch.taskId] += amount;
         subBalancesTotal += amount;
         taskChannelLocked[ch.taskId] -= freed;
-        channelLocksTotal -= freed;
+        channelLocksTotal -= amount;
         _assertInvariant();
         emit ChannelClosedByStreamer(channelId, amount, ch.taskId);
     }

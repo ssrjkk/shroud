@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import "encrypted-types/EncryptedTypes.sol";
 
 /// @title ICipherTask
-/// @notice Orchestrator interface for CipherMesh: escrow-backed, FHE-native training tasks.
+/// @notice Orchestrator interface for Shroud: escrow-backed, FHE-native training tasks.
 /// @dev All FHE types are the fhEVM/Zama ciphertext handles. Never decrypt inside this contract
 ///      except through DecryptionGate, which is contract-restricted to settled outputs.
 interface ICipherTask {

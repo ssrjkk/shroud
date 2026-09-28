@@ -1,4 +1,4 @@
-# CipherMesh devnet (`infra/`)
+# Shroud devnet (`infra/`)
 
 Local single-host devnet: an fhEVM hardhat node with the contracts deployed, a content-addressed
 DA (ShardStore), and (optionally) three Rust compute nodes.
@@ -47,4 +47,4 @@ cd node
 cargo build --release
 ```
 
-then `docker build -t ciphermesh-node:dev -f infra/node/Dockerfile .` from the repo root.
+then `docker build -t shroud-node:dev -f infra/node/Dockerfile .` from the repo root.

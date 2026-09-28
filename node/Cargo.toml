@@ -1,4 +1,4 @@
-# CipherMesh compute node.
+# Shroud compute node.
 #
 # Dependency versions below were resolved against crates.io on 2026-09-27. Two of them
 # invalidate what an earlier draft of this file assumed, and both would have been silent
@@ -13,20 +13,20 @@
 # the value here is the maximum of the three, not a guess.
 
 [package]
-name = "ciphermesh-node"
+name = "shroud-node"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.94.1"
-description = "CipherMesh compute node: FHE epoch execution, ZK proof of compute, streaming payouts"
+description = "Shroud compute node: FHE epoch execution, ZK proof of compute, streaming payouts"
 license = "MIT"
-repository = "https://github.com/ciphermesh/ciphermesh"
+repository = "https://github.com/shroud/shroud"
 
 [lib]
-name = "ciphermesh_node"
+name = "shroud_node"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ciphermesh-node"
+name = "shroud-node"
 path = "src/main.rs"
 
 [dependencies]

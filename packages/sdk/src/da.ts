@@ -3,6 +3,11 @@
  *
  * The default `MemoryShardStore` is for local development and tests. A production deployment
  * points `ShardStore` at the `infra/` ShardStore service (content-addressed, range-pull).
+ *
+ * Note on addressing: the store's `cid` is a transport address, while the value pinned on-chain
+ * is `ctDigest` = keccak256(payload), computed client-side in `pinPayload`. The two may differ
+ * (Ethereum keccak-256 vs the store's internal hash); a re-executing node must re-verify
+ * `ctDigest` over the fetched bytes rather than trusting the store's cid.
  */
 import { ethers } from "ethers";
 import type { ShardStore } from "./types.js";

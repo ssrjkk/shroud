@@ -1,7 +1,7 @@
 /**
- * @ciphermesh/sdk — client-side orchestration for CipherMesh.
+ * @shroud/sdk — client-side orchestration for Shroud.
  *
- * The primary entry point is `CipherMeshSdk.uploadAndMonetize(data, taskId, opts)`, which
+ * The primary entry point is `ShroudSdk.uploadAndMonetize(data, taskId, opts)`, which
  * encrypts the buyer's rows locally, uploads the shard to the DA, and commits it to the task
  * with the buyer's escrow already in place.
  */
@@ -45,7 +45,7 @@ export interface UploadOptions {
   shapeProof?: Hex;
 }
 
-export class CipherMeshSdk {
+export class ShroudSdk {
   readonly cipherTask: CipherTaskClient;
   readonly paymentVault: PaymentVaultClient;
   readonly encryptor: Encryptor;
@@ -75,6 +75,10 @@ export class CipherMeshSdk {
    *
    * If `opts.createIfMissing` is true and the task does not exist yet, the buyer creates it with
    * `opts.budget` first, so the escrow is in place before the shard lands.
+   *
+   * The client pre-validates everything the contract would revert on - task status, per-address
+   * contribution cap, minimum rows, and shape-proof presence - so a misconfigured call fails
+   * locally with an actionable message instead of burning gas on a revert.
    */
   async uploadAndMonetize(
     data: Float64Array | number[],
@@ -89,6 +93,28 @@ export class CipherMeshSdk {
 
     const resolvedId = await this.resolveTask(taskId, opts);
 
+    // Pre-flight against the on-chain task state, so the common failure modes surface here
+    // rather than as `ShardTooSmall` / `AlreadyContributed` reverts.
+    const t = await this.cipherTask.task(resolvedId);
+    const opening = 1n; // TaskStatus.Opening
+    const collecting = 2n; // TaskStatus.Collecting
+    if (t.status !== opening && t.status !== collecting) {
+      throw new Error(
+        `task ${resolvedId} does not accept shards (status ${t.status}); contribution is only possible while Opening(1) or Collecting(2)`
+      );
+    }
+    const minRows = Number(t.params.minRowsPerShard);
+    if (rows < minRows) {
+      throw new Error(`shard has ${rows} rows, below the task minimum of ${minRows}`);
+    }
+    if (await this.cipherTask.shapeProofsRequired()) {
+      if (!opts.shapeProof || opts.shapeProof === ethers.ZeroHash) {
+        throw new Error(
+          "this task requires a Groth16 shape proof; pass opts.shapeProof (an empty proof reverts on-chain with ShapeProofInvalid)"
+        );
+      }
+    }
+
     // 1. Encrypt locally - plaintext never leaves the client.
     const payload = await this.encryptor.encryptRows(data, opts.features);
 
@@ -100,7 +126,7 @@ export class CipherMeshSdk {
     const shard: PreparedShard = {
       ciphertextCid: cid,
       ctDigest,
-      shapeProof: opts.shapeProof ?? ethers.ZeroHash,
+      shapeProof: opts.shapeProof as Hex,
       rowCommitment,
       rows,
     };

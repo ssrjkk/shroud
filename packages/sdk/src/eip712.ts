@@ -1,5 +1,5 @@
 /**
- * EIP-712 helpers for the CipherMesh PaymentVault slice redemption.
+ * EIP-712 helpers for the Shroud PaymentVault slice redemption.
  *
  * The Solidity side computes:
  *   REDEEM_TYPEHASH = keccak256("Redeem(uint256 channelId,address streamer,address node,uint128
@@ -19,7 +19,7 @@ const DOMAIN_TYPEHASH = ethers.id(
   "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
 );
 
-export const VAULT_DOMAIN_NAME = "CipherMeshPaymentVault";
+export const VAULT_DOMAIN_NAME = "ShroudPaymentVault";
 export const VAULT_DOMAIN_VERSION = "1";
 
 /** The full EIP-712 domain used by `PaymentVault`. */

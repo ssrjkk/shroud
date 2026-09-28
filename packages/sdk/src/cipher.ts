@@ -20,7 +20,8 @@ export class CipherTaskClient {
 
   async createTask(budget: bigint, params: TaskParams): Promise<{ taskId: bigint; tx: string }> {
     const tx = await this.contract.createTask(budget, params);
-    await tx.wait();
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for createTask");
     const taskId = await this.contract.taskCount();
     return { taskId: BigInt(taskId), tx: tx.hash };
   }
@@ -34,7 +35,8 @@ export class CipherTaskClient {
       shard.rowCommitment,
       shard.rows
     );
-    await tx.wait();
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for submitContribution");
     return tx.hash;
   }
 
@@ -44,6 +46,11 @@ export class CipherTaskClient {
 
   async taskCount(): Promise<bigint> {
     return BigInt(await this.contract.taskCount());
+  }
+
+  /** Whether the orchestrator requires a non-empty shape proof on every shard. */
+  async shapeProofsRequired(): Promise<boolean> {
+    return this.contract.shapeProofsRequired();
   }
 
   async epochChannel(taskId: bigint, epoch: number): Promise<bigint> {
@@ -71,7 +78,8 @@ export class PaymentVaultClient {
       slice.deadline,
       signature
     );
-    await tx.wait();
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for redeem");
     return tx.hash;
   }
 
@@ -94,7 +102,8 @@ export class PaymentVaultClient {
   async claim(claimer: Signer): Promise<void> {
     const claimerContract = new Contract(this.contract.target as string, PaymentVaultAbi, claimer);
     const tx = await claimerContract.claim();
-    await tx.wait();
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for claim");
   }
 
   async pendingWithdrawal(account: string): Promise<bigint> {

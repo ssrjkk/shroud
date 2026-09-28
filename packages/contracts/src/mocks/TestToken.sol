@@ -7,8 +7,8 @@ import {IERC20} from "../interfaces/IERC20.sol";
 ///         token: `PaymentVault` is written to tolerate both standards, and that tolerance is
 ///         covered by `NoReturnTokenMock` instead.
 contract TestToken is IERC20 {
-    string public name = "CipherMesh USD";
-    string public symbol = "CMUSD";
+    string public name = "Shroud USD";
+    string public symbol = "SHD";
     uint8 public immutable decimals = 6;
 
     uint256 public totalSupply;

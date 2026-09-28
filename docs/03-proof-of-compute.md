@@ -2,7 +2,7 @@
 
 This document exists because "we prove the node trained the model on the encrypted data"
 is the claim that most FHE-market whitepapers make and almost none of them can back. Here is
-exactly what CipherMesh proves, and what it does not.
+exactly what Shroud proves, and what it does not.
 
 ## 1. Statement
 
@@ -21,7 +21,7 @@ For task `T`, epoch `e`, dataset Merkle root `R = ctRoot`, and prover `P`:
 Public inputs (all in BabyBear, 8 bytes each, plus SHA-256 word for the root):
 
 ```
-0: domain_separator        = keccak("CIPHERMESH/PoC/v1")
+0: domain_separator        = keccak("SHROUD/PoC/v1")
 1: chainId
 2: taskId
 3: epoch

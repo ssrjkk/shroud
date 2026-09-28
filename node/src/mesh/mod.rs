@@ -9,7 +9,7 @@
 pub mod proto {
     #![allow(clippy::all)]
     #![allow(missing_docs)]
-    tonic::include_proto!("ciphermesh.mesh.v1");
+    tonic::include_proto!("shroud.mesh.v1");
 }
 
 pub use proto::{mesh_client, mesh_server};

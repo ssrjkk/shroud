@@ -14,7 +14,7 @@ export class NoopEncryptor implements Encryptor {
   async encryptRows(data: Float64Array | number[], features: number): Promise<Uint8Array> {
     const arr = data instanceof Float64Array ? data : new Float64Array(data);
     const n = arr.length / features;
-    const head = new TextEncoder().encode(`ciphermesh/noop/v1\0${features}\0${n}\0`);
+    const head = new TextEncoder().encode(`shroud/noop/v1\0${features}\0${n}\0`);
     const buf = new Uint8Array(head.length + arr.length * 8);
     buf.set(head, 0);
     for (let i = 0; i < arr.length; i++) {

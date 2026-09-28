@@ -15,7 +15,7 @@
 
 **Scaling guard.** A bootstrapped SIMD add over 8 lanes on one AVX2 core ≈ 12 ms. A 33-lane
 dot product is 33 chained adds ⇒ ~400 ms; SGD over a 1 000-row dataset = 1 000 dot products
-= ~7 min/epoch. CipherMesh therefore trains **full-batch or minibatch-of-8 with
+= ~7 min/epoch. Shroud therefore trains **full-batch or minibatch-of-8 with
 gradient accumulation**, i.e. 1 bootstrap-set per minibatch, and *not* per-sample SGD.
 This is stated in the buyer-facing model spec as `update_mode: "batch"|"minibatch"`.
 

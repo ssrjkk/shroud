@@ -1,4 +1,4 @@
-//! Solidity bindings for the CipherMesh contracts.
+//! Solidity bindings for the Shroud contracts.
 //!
 //! Hand-maintained rather than generated so the reviewer can see exactly which ABI the node
 //! depends on. `just codegen-bindings` regenerates them from `packages/contracts/artifacts`

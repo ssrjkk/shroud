@@ -25,23 +25,24 @@ use crate::{
     error::{Error, Result},
 };
 
-/// `TaskStatus` mirrors `ICipherTask.Status`. Duplicated as a plain enum so the state machine
+/// `TaskStatus` mirrors `ICipherTask.TaskStatus`. Duplicated as a plain enum so the state machine
 /// can be unit-tested without a chain, and so a contract-side reordering surfaces as a
 /// non-exhaustive-match compile error rather than a wrong branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum TaskStatus {
     None = 0,
-    Funded = 1,
-    Contributed = 2,
+    Opening = 1,
+    Collecting = 2,
     Sealed = 3,
     EpochOpen = 4,
-    EpochCommitted = 5,
+    EpochCommitting = 5,
     EpochSettled = 6,
     Settling = 7,
-    Settled = 8,
-    Aborted = 9,
-    Revealed = 10,
+    Revealing = 8,
+    Disclosed = 9,
+    Aborted = 10,
+    Paused = 11,
 }
 
 impl TaskStatus {
@@ -49,23 +50,24 @@ impl TaskStatus {
         use TaskStatus::*;
         Some(match v {
             0 => None,
-            1 => Funded,
-            2 => Contributed,
+            1 => Opening,
+            2 => Collecting,
             3 => Sealed,
             4 => EpochOpen,
-            5 => EpochCommitted,
+            5 => EpochCommitting,
             6 => EpochSettled,
             7 => Settling,
-            8 => Settled,
-            9 => Aborted,
-            10 => Revealed,
+            8 => Revealing,
+            9 => Disclosed,
+            10 => Aborted,
+            11 => Paused,
             _ => return None,
         })
     }
 
     /// Whether no further work is expected for this task.
     pub fn is_terminal(self) -> bool {
-        matches!(self, TaskStatus::Settled | TaskStatus::Aborted | TaskStatus::Revealed)
+        matches!(self, TaskStatus::Disclosed | TaskStatus::Aborted | TaskStatus::Paused)
     }
 }
 
@@ -361,7 +363,7 @@ impl NodeState {
                     block: 0,
                     proof_bytes: 0,
                 });
-                t.status = TaskStatus::EpochCommitted;
+                t.status = TaskStatus::EpochCommitting;
                 if let Some(our) = consensus_digest_locked(t) {
                     let claimed = first_digest_locked(t, *epoch);
                     if claimed.is_some() && our != claimed {
@@ -745,16 +747,17 @@ mod tests {
     fn status_round_trips_through_u8() {
         for s in [
             TaskStatus::None,
-            TaskStatus::Funded,
-            TaskStatus::Contributed,
+            TaskStatus::Opening,
+            TaskStatus::Collecting,
             TaskStatus::Sealed,
             TaskStatus::EpochOpen,
-            TaskStatus::EpochCommitted,
+            TaskStatus::EpochCommitting,
             TaskStatus::EpochSettled,
             TaskStatus::Settling,
-            TaskStatus::Settled,
+            TaskStatus::Revealing,
+            TaskStatus::Disclosed,
             TaskStatus::Aborted,
-            TaskStatus::Revealed,
+            TaskStatus::Paused,
         ] {
             assert_eq!(TaskStatus::from_u8(s as u8), Some(s));
         }
@@ -763,9 +766,9 @@ mod tests {
 
     #[test]
     fn terminal_statuses_are_recognised() {
-        assert!(TaskStatus::Settled.is_terminal());
+        assert!(TaskStatus::Disclosed.is_terminal());
         assert!(TaskStatus::Aborted.is_terminal());
-        assert!(TaskStatus::Revealed.is_terminal());
-        assert!(!TaskStatus::EpochCommitted.is_terminal());
+        assert!(TaskStatus::Paused.is_terminal());
+        assert!(!TaskStatus::EpochCommitting.is_terminal());
     }
 }

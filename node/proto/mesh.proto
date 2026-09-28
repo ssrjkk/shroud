@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package ciphermesh.mesh.v1;
+package shroud.mesh.v1;
 
-// CipherMesh peer mesh.
+// Shroud peer mesh.
 //
 // The mesh carries three things and deliberately nothing else:
 //   1. shard announcements + range requests, so nodes can find each other's data without

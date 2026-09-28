@@ -1,4 +1,4 @@
-//! CipherMesh compute node.
+//! Shroud compute node.
 //!
 //! The node watches a `CipherTask` contract, executes FHE epochs against encrypted shards, and
 //! posts a ZK proof of compute. It is written as a library plus a thin binary so the epoch

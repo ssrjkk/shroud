@@ -103,20 +103,4 @@ contract ProofVerifier is IProofVerifier {
         return abi.decode(ret, (bool));
     }
 
-    /// @dev Read the 32-byte word at index `i` of a packed `abi.encode(...)` buffer.
-    ///      Out-of-range reads yield `0` instead of reverting, because `publicInput` is
-    ///      attacker-supplied and must never be able to brick verification with a short buffer.
-    function _word32(bytes calldata buf, uint256 i) private pure returns (bytes32) {
-        uint256 offset = i * 32;
-        if (buf.length < offset + 32) return bytes32(0);
-        bytes32 w;
-        assembly {
-            w := calldataload(add(buf.offset, offset))
-        }
-        return w;
-    }
-
-    function _word(bytes calldata buf, uint256 i) private pure returns (uint256) {
-        return uint256(_word32(buf, i));
-    }
 }

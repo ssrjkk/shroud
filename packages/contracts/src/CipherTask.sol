@@ -14,7 +14,7 @@ import {PaymentVault} from "./payments/PaymentVault.sol";
 import {Dividend} from "./libraries/Dividend.sol";
 import {ReentrancyGuard, Pausable} from "./libraries/Guard.sol";
 
-/// @title CipherTask — CipherMesh FHE training orchestrator
+/// @title CipherTask — Shroud FHE training orchestrator
 /// @notice Escrows a buyer's budget, admits client-side-encrypted contributions, orchestrates
 ///         training epochs over the ciphertext dataset, verifies ZK proofs of compute, and
 ///         streams USDC to contributors, compute nodes and the decryption committee.
@@ -59,7 +59,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      reject an epoch. See docs/03-proof-of-compute.md §4.
     uint256 public constant DISPUTE_QUORUM = 3;
 
-    bytes32 private constant _EMPTY_ROOT = keccak256("CIPHERMESH/CTROOT/v1");
+    bytes32 private constant _EMPTY_ROOT = keccak256("SHROUD/CTROOT/v1");
     bytes4 private constant _1271_MAGIC = 0x1626ba7e;
 
     /// @dev 4-byte reason codes for `TaskAborted`. Fixed on-chain so an abort is machine-readable
@@ -257,10 +257,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         _requireShares(pm.userShareBps, pm.nodeShareBps, pm.committeeShareBps);
 
         if (budget == 0) revert BudgetTooSmall(1, 0);
-        // The buyer names the exact budget; nothing more is pulled from their wallet. `fundTask`
-        // reverts `TransferFailed` if the balance or allowance falls short, which is the honest
-        // failure the SDK should surface rather than silently escrowing a smaller amount.
-        if (budget > type(uint128).max) revert BudgetTooSmall(type(uint128).max, budget);
 
         taskId = ++taskCount;
         vault.fundTask(taskId, budget, msg.sender);
@@ -563,8 +559,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (_disputeRecorded[taskId][epoch][msg.sender]) revert DuplicateCommit(taskId, epoch, msg.sender);
         if (reexecutedDigest == _claimedDigest[taskId][epoch]) revert InvalidParams("digest=claim");
 
-            _disputeRecorded[taskId][epoch][msg.sender] = true;
-            _disputeCount[taskId][epoch] += 1;
+        _disputeRecorded[taskId][epoch][msg.sender] = true;
+        _disputeCount[taskId][epoch] += 1;
         emit DisputeReported(taskId, epoch, msg.sender, reexecutedDigest);
     }
 
@@ -592,7 +588,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             // task sub-balance to be refunded at settlement. Reporters are paid out of the
             // lock so that reporting is rational.
             emit TaskAborted(taskId, _REASON_EPOCH_DISPUTED);
-            } else if (winner != address(0)) {
+        } else if (winner != address(0)) {
                 // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides
                 // `budget * nodeShareBps` across the epochs), so the node share must not be taken
                 // a second time here. Re-applying `nodeShareBps` would hand the winner 15% of
@@ -754,7 +750,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         }
         _setStatus(taskId, TaskStatus.Aborted);
         emit TaskAborted(taskId, reason);
-        recovered; // accounted for inside the vault sub-balance
     }
 
     /// @notice Return the escrow belonging to epochs that will never run back to the buyer.
@@ -950,7 +945,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest) public view returns (bytes32) {
         return keccak256(
             abi.encode(
-                "CIPHERMESH/PoC/v1",
+                "SHROUD/PoC/v1",
                 block.chainid,
                 address(this),
                 taskId,

@@ -1,6 +1,6 @@
 # Threat Model
 
-Scope: CipherMesh MVP (L3 AppChain + FHE compute + ZK proof of compute + escrow).
+Scope: Shroud MVP (L3 AppChain + FHE compute + ZK proof of compute + escrow).
 Out of scope: side-channel resistance of the FHE library (audited separately), L1 finality
 guarantees, wallet security, the buyer's own model IP.
 
@@ -74,7 +74,7 @@ a settled task, so a minority cannot even meaningfully co-process user shards.
 
 ### F-10 — Committee majority decryption (ADV7) — **RESIDUAL, documented**
 If `t` committee members collude they can compute the decryption of *any* ciphertext under
-`s_pub`, including individual user rows. CipherMesh does not claim to prevent this. Mitigations
+`s_pub`, including individual user rows. Shroud does not claim to prevent this. Mitigations
 in place: (a) requests are contract-gated, so collusion needs `t` members to *publish* an
 off-protocol request, which is publicly auditable; (b) members are bonded and their identity is
 on-chain, so it is slashable/forensic; (c) the honest-majority assumption is stated in the

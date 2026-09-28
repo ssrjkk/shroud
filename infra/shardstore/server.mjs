@@ -1,14 +1,16 @@
 /**
- * ShardStore - content-addressed DA for CipherMesh.
+ * ShardStore - content-addressed DA for Shroud.
  *
  * A minimal in-process HTTP service implementing the contract the SDK's `HttpShardStore` speaks:
  *
  *   PUT /objects            body = raw bytes      -> { cid, digest }
  *   GET /objects/:cid                             -> raw bytes (404 if absent)
  *
- * The CID is keccak256(payload), so the store is content-addressed and content-verifiable; the
- * digest returned equals the CID. This is a reference implementation for the devnet - a
- * production deployment adds range-pull, replication, and AEAD transport (see the threat model).
+ * Addressing: the CID here is the store's *transport* address (Node's sha3-256). The on-chain
+ * pin is a different identifier - `ctDigest`, keccak256(payload), computed by the SDK client -
+ * because Ethereum's keccak-256 differs from NIST SHA3-256 in padding and Node's crypto does not
+ * expose the former. A re-executing node must therefore recompute keccak256 over the fetched
+ * bytes and compare against the on-chain `ctDigest`; the DA's cid only needs to be stable.
  *
  * Run: `node server.mjs`  (default PORT=8080)
  */

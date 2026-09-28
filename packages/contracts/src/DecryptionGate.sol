@@ -151,7 +151,7 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
     ///      against another, and so the same signature cannot be used as a payment permit.
     function revealMessage(uint256 taskId, bytes32 weightsCid) public view returns (bytes32) {
         if (address(cipherTask) == address(0)) revert CommitteeNotInitialized();
-        return keccak256(abi.encodePacked("CIPHERMESH/REVEAL/v1", block.chainid, address(cipherTask), taskId, weightsCid));
+        return keccak256(abi.encodePacked("SHROUD/REVEAL/v1", block.chainid, address(cipherTask), taskId, weightsCid));
     }
 
     /// @notice Submit this member's partial decryption of the *registered output ciphertext*.
@@ -177,6 +177,16 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
             g.combined = true;
             emit RevealCompleted(taskId, cipherTask.tasks(taskId).params.buyer, g.members.length);
         }
+    }
+
+    /// @notice Check if a task's reveal is ready to be finalized.
+    /// @dev Returns true when the gate is open, the threshold has been reached, and the
+    ///      reveal has not yet been finalized.
+    /// @param taskId The task to check.
+    /// @return True if the reveal can be finalized.
+    function canFinalize(uint256 taskId) external view returns (bool) {
+        TaskGate storage g = gates[taskId];
+        return g.open && !g.combined && g.members.length >= g.required;
     }
 
     function finalizeReveal(uint256 taskId) external whenNotPaused nonReentrant {

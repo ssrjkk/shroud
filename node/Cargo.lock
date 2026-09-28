@@ -1452,7 +1452,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ciphermesh-node"
+name = "shroud-node"
 version = "0.1.0"
 dependencies = [
  "alloy",

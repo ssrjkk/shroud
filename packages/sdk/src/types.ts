@@ -1,5 +1,5 @@
 /**
- * Shared types for @ciphermesh/sdk.
+ * Shared types for @shroud/sdk.
  *
  * These mirror the on-chain structs in `packages/contracts/src/interfaces/ICipherTask.sol`
  * and `PaymentVault.sol`. Keep them in lockstep with the Solidity definitions.

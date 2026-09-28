@@ -8,7 +8,7 @@ import { DecryptionGate, MockBLS, MockStarkVerifier, NetworkParams, PaymentVault
 import { bytes32Of, externalUint64, params, proofFor, proofRef, reason4, redeemDigest, sliceDomain } from "./helpers";
 
 /**
- * End-to-end lifecycle test of the CipherMesh orchestrator.
+ * End-to-end lifecycle test of the Shroud orchestrator.
  *
  * Covers the money path (escrow -> reward channel -> settlement), the proof path (STARK
  * binding, replay, dispute quorum) and the reveal path (BLS gate, output allowlist).
@@ -550,6 +550,51 @@ describe("CipherTask", () => {
       expect(await gate.partialCount(id)).to.equal(1n);
       expect(await gate.canDecrypt(id)).to.equal(false); // threshold is 1, so already combined
       void outsider;
+    });
+  });
+
+  describe("reward channel lifecycle", () => {
+    it("reclaim after a full redeem closes the channel cleanly and preserves the vault invariant", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, node } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, node);
+
+      const channelId = await task.epochChannel(id, 0);
+      const ch = await vault.channelInfo(channelId);
+      const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, ch.maxCumulative]);
+      await vault.connect(node).redeem(channelId, 0, ch.maxCumulative, ethers.MaxUint256, sig);
+
+      // Window matures; the node reclaims the (empty) remainder. This used to underflow
+      // `channelLocksTotal` because the release subtracted the full cap, not the residual.
+      await time.increase(7 * 86_400 + 1);
+      await expect(vault.connect(node).reclaim(channelId)).to.emit(vault, "ChannelReclaimed");
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+      // The whole node pool reached the node via the redeem, nothing more to reclaim.
+      expect(await token.balanceOf(node.address)).to.equal(ch.maxCumulative);
+    });
+
+    it("settle sweeps an expired channel back into the sub-balance without breaking the invariant", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, node);
+
+      const channelId = await task.epochChannel(id, 0);
+      const ch = await vault.channelInfo(channelId);
+      const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, ch.maxCumulative]);
+      await vault.connect(node).redeem(channelId, 0, ch.maxCumulative, ethers.MaxUint256, sig);
+
+      // Let the reward window mature so `settle`'s sweep actually closes the channel. A sweep
+      // of a fully-redeemed channel must be a no-op that keeps `channelLocksTotal` consistent.
+      await time.increase(7 * 86_400 + 1);
+      await task.settle(id);
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+      expect((await vault.channelInfo(channelId)).closed).to.equal(true);
+      // The buyer gets back nothing (all legs consumed), but the vault accounting is sound.
+      expect(await vault.taskBalance(id)).to.equal(0n);
+      void token;
+      void buyer;
     });
   });
 

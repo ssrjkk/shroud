@@ -1,6 +1,6 @@
 //! Node configuration.
 //!
-//! Resolution order (later wins): built-in defaults -> `ciphermesh.toml` -> environment
+//! Resolution order (later wins): built-in defaults -> `shroud.toml` -> environment
 //! variables. Every value is also settable with a `--flag`, so a container image can run as a
 //! sequencer-attached worker, a dispute re-executor, or a prover by changing flags alone.
 
@@ -18,10 +18,10 @@ use crate::error::{ConfigError, Result};
 
 /// Compute node.
 #[derive(Debug, Parser, Clone)]
-#[command(name = "ciphermesh-node", version, about, long_about = None)]
+#[command(name = "shroud-node", version, about, long_about = None)]
 pub struct Cli {
     /// Path to the TOML config. Env vars (`CM_` prefix) override whatever it contains.
-    #[arg(long, env = "CM_CONFIG", default_value = "ciphermesh.toml")]
+    #[arg(long, env = "CM_CONFIG", default_value = "shroud.toml")]
     pub config: PathBuf,
 
     /// Override the chain RPC endpoint.
@@ -69,7 +69,7 @@ pub struct Cli {
     #[arg(long, env = "CM_DISPUTE_ONLY", default_value_t = false)]
     pub dispute_only: bool,
 
-    /// Log filter, e.g. `info,ciphermesh_node::fhe=debug`.
+    /// Log filter, e.g. `info,shroud_node::fhe=debug`.
     #[arg(long, env = "CM_LOG", default_value = "info")]
     pub log: String,
 
@@ -323,7 +323,7 @@ impl Default for Config {
 impl Config {
     /// Merge defaults, the TOML file, the environment and the CLI flags.
     ///
-    /// Precedence, lowest to highest: built-in defaults -> `ciphermesh.toml` -> `CM_*`
+    /// Precedence, lowest to highest: built-in defaults -> `shroud.toml` -> `CM_*`
     /// environment -> `--flags`. The CLI is applied last and *only* for flags the user
     /// actually passed, so a `CM_CHAIN__RPC_URL` set in the environment is not clobbered by a
     /// clap default value. (`Option<T>` fields are "not passed"; the non-optional fields with
@@ -626,7 +626,7 @@ mod tests {
             task_address: Some(Address::repeat_byte(0x33)),
             vault_address: Some(Address::repeat_byte(0x44)),
             operator_key: Some("0xabcd".into()),
-            ..Cli::parse_from(["ciphermesh-node"])
+            ..Cli::parse_from(["shroud-node"])
         };
         let out = cli_overrides(&cli).data().expect("provider yields a map");
         let contracts = out.get("contracts").expect("contracts table present");
@@ -642,7 +642,7 @@ mod tests {
     fn unset_cli_options_do_not_shadow_the_toml_file() {
         // The `chain` table is present but empty, which figment merges as a no-op. What
         // matters is that no key inside it can overwrite the file's value.
-        let cli = Cli::parse_from(["ciphermesh-node"]);
+        let cli = Cli::parse_from(["shroud-node"]);
         let out = cli_overrides(&cli).data().expect("provider yields a map");
         let chain = out.get("chain").expect("chain table present");
         assert!(chain.is_empty(), "an unset --rpc-url must not shadow the TOML file, got {chain:?}");
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn dispute_only_maps_onto_stark_digest_only() {
-        let cli = Cli::parse_from(["ciphermesh-node", "--dispute-only"]);
+        let cli = Cli::parse_from(["shroud-node", "--dispute-only"]);
         let out = cli_overrides(&cli).data().expect("provider yields a map");
         assert_eq!(
             out.get("stark").and_then(|s| s.get("digest_only")).and_then(|v| v.to_string().ok()).as_deref(),

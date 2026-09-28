@@ -41,7 +41,7 @@ use crate::{
     state::NodeState,
 };
 
-/// A decoded CipherMesh event, as the rest of the node sees it.
+/// A decoded Shroud event, as the rest of the node sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChainEvent {
     TaskSealed { task_id: U256, ct_root: B256, shards: u32, contributors: u32 },
@@ -431,7 +431,7 @@ impl Watcher {
 //
 // Hand-written rather than `alloy::sol!`-generated so the layout is explicit and auditable
 // against the Solidity `emit` sites. Every decoder takes *both* `topics` and `data` because
-// CipherMesh marks the entity identifiers `indexed` (they are filters) and the payloads
+// Shroud marks the entity identifiers `indexed` (they are filters) and the payloads
 // non-indexed (they are not). Reading the wrong one yields zeros, so the split is a parameter
 // rather than a convention. Each decoder is total: it checks the word count and returns
 // `None` on a short buffer instead of reading past the end.

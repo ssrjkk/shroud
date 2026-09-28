@@ -1,8 +1,8 @@
 {
-    "name":  "@ciphermesh/contracts",
+    "name":  "@shroud/contracts",
     "version":  "0.1.0",
     "private":  true,
-    "description":  "CipherMesh fhEVM contracts: FHE training orchestrator, escrow, streaming payouts, threshold decryption gate",
+    "description":  "Shroud fhEVM contracts: FHE training orchestrator, escrow, streaming payouts, threshold decryption gate",
     "license":  "MIT",
     "scripts":  {
                     "build":  "hardhat compile",

@@ -5,7 +5,7 @@ export const STARK_MAGIC = "0x53544152";
 
 /** Deterministic 32-byte value from a small integer or label, for readable test fixtures. */
 export function bytes32Of(n: number | bigint | string): string {
-  return ethers.keccak256(ethers.toUtf8Bytes(`ciphermesh/test/${n}`));
+  return ethers.keccak256(ethers.toUtf8Bytes(`Shroud/test/${n}`));
 }
 
 /** A syntactically valid `bytes` blob carrying the STARK magic prefix. */
@@ -54,10 +54,10 @@ export function reason4(label: string): string {
 /** The domain separator of `PaymentVault`, needed to sign epoch reward slices off-chain. */
 export function sliceDomain(vaultAddress: string, chainId: number | bigint) {
   const domainTypehash = ethers.keccak256(ethers.toUtf8Bytes("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"));
-  const name = ethers.keccak256(ethers.toUtf8Bytes("CipherMeshPaymentVault"));
+  const name = ethers.keccak256(ethers.toUtf8Bytes("ShroudPaymentVault"));
   const version = ethers.keccak256(ethers.toUtf8Bytes("1"));
   return {
-    name: "CipherMeshPaymentVault",
+    name: "ShroudPaymentVault",
     version: "1",
     chainId,
     verifyingContract: vaultAddress,

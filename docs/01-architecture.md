@@ -1,4 +1,4 @@
-# CipherMesh — System Architecture (L3 AppChain on FHE)
+# Shroud — System Architecture (L3 AppChain on FHE)
 
 > Status: MVP specification. Parameter targets are measured on the reference node; see
 > `docs/05-honest-limitations.md` before quoting any throughput.
@@ -7,7 +7,7 @@
 
 ## 0. The one-paragraph version
 
-A user encrypts their record **on their own device** under the CipherMesh network public
+A user encrypts their record **on their own device** under the Shroud network public
 key and publishes only the ciphertext. A buyer escrows a budget on-chain in USDC and
 publishes a model spec (IPFS). Any node can execute the buyer's training job over the
 ciphertexts because the network public key is an **FHE key** — arithmetic on ciphertexts
@@ -50,7 +50,7 @@ a majority report triggers slashing. See `docs/03-proof-of-compute.md`.
 
 ```
                     ┌──────────────────────────────────────────────┐
-   DKG (n=7, t=4)   │  CipherMesh Network FHE Keypair              │
+   DKG (n=7, t=4)   │  Shroud Network FHE Keypair              │
    committee        │                                              │
                     │  s_pub  ── published at /v1/params/network   │
                     │  s      ── f(0), split as shares (i, f(i))    │
@@ -85,7 +85,7 @@ sequenceDiagram
     autonumber
     participant U as User (Web2 app + SDK)
     participant DA as Data Availability<br/>(blob/IPFS)
-    participant SEQ as CipherMesh Sequencer<br/>(encrypted mempool)
+    participant SEQ as Shroud Sequencer<br/>(encrypted mempool)
     participant L3 as fhEVM L3 Rollup
     participant C as CipherTask.sol
     participant CN1 as Rust Compute Node #1
@@ -141,12 +141,12 @@ sequenceDiagram
 flowchart TB
     subgraph client["Client tier"]
         APP["Web2 app<br/>health / banking"]
-        SDK["@ciphermesh/sdk<br/>FHEWasm in browser"]
+        SDK["@shroud/sdk<br/>FHEWasm in browser"]
         WK["Wallet (SIWE bind)"]
         APP --> SDK --> WK
     end
 
-    subgraph edge["L3 execution tier (CipherMesh chain)"]
+    subgraph edge["L3 execution tier (Shroud chain)"]
         SEQ["Sequencer + encrypted mempool"]
         RPC["fhEVM JSON-RPC"]
         COP["FHE coprocessor<br/>Zama KMS / host rotation"]
@@ -211,7 +211,7 @@ flowchart TB
  │  (e.g. health│
  │   tracker)   │
  └──────┬───────┘
-        │  @ciphermesh/sdk
+        │  @shroud/sdk
         ▼
  ┌─────────────────────────────────────────────────────────────┐
  │ CLIENT TIER                                                  │
@@ -225,7 +225,7 @@ flowchart TB
         │ submitContribution                    │ ciphertext blobs
         ▼                                       ▼
  ┌───────────────────────┐        ┌──────────────────────────────┐
- │ CIPHERMESH L3 (fhEVM) │        │ DATA AVAILABILITY            │
+ │ Shroud L3 (fhEVM) │        │ DATA AVAILABILITY            │
  │  encrypted mempool    │        │  shard-0 ... shard-m         │
  │  sequencer -> RPC     │        │  ci = sha256(blob)           │
  └──────┬────────────────┘        └──────────┬───────────────────┘
@@ -337,7 +337,7 @@ STARK's public input is the on-chain `ctRoot`.
 ```jsonc
 // 33-lane (CIFAR-10/EU-bank schema) → uint32 after scale-by-1e4
 {
-  "schema": "ciphermesh/row/v1",
+  "schema": "Shroud/row/v1",
   "taskId": "0x…",
   "lanes": 33,
   "scale": 10000,
@@ -445,7 +445,7 @@ flowchart LR
 docs/                       architecture, crypto, proofs, threat model, runbook
 packages/contracts/         fhEVM Solidity: CipherTask, PaymentVault, DecryptionGate,
                             NetworkParams, ProofVerifier + Foundry/Hardhat tests
-packages/sdk/               @ciphermesh/sdk — uploadAndMonetize(), EIP-712 binding,
+packages/sdk/               @shroud/sdk — uploadAndMonetize(), EIP-712 binding,
                             FHEWasm encryption, reveal
 node/                       Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK,
                             tfhe-rs FHE engine behind a trait so a GPU backend drops in)

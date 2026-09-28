@@ -1,5 +1,5 @@
 /**
- * Deploy the CipherMesh devnet contracts and write their addresses to
+ * Deploy the Shroud devnet contracts and write their addresses to
  * `infra/devnet/addresses.json` so the sequencer, SDK and Rust nodes can find them.
  *
  * Run against the hardhat network:
@@ -16,7 +16,7 @@ import { join } from "path";
 const OUT = join(__dirname, "../../../infra/devnet/addresses.json");
 
 function h(s: string): string {
-  return ethers.id(`ciphermesh/devnet/${s}`);
+  return ethers.id(`Shroud/devnet/${s}`);
 }
 
 async function main() {
@@ -73,7 +73,7 @@ async function main() {
 
   mkdirSync(join(__dirname, "../../../infra/devnet"), { recursive: true });
   writeFileSync(OUT, JSON.stringify(addresses, null, 2));
-  console.log(`deployed CipherMesh devnet contracts; addresses written to ${OUT}`);
+  console.log(`deployed Shroud devnet contracts; addresses written to ${OUT}`);
 }
 
 main().catch((e) => {

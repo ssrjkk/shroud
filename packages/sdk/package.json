@@ -1,7 +1,7 @@
 {
-  "name": "@ciphermesh/sdk",
+  "name": "@shroud/sdk",
   "version": "0.1.0",
-  "description": "Client-side CipherMesh SDK: local FHE encryption, shard upload, task contribution, and EIP-712 payment binding.",
+  "description": "Client-side Shroud SDK: local FHE encryption, shard upload, task contribution, and EIP-712 payment binding.",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
