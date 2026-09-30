@@ -74,15 +74,15 @@ message Ack {
 message ShardAnnounce {
   string task_id = 1;            // decimal uint256
   uint32 leaf_index = 2;
-  bytes32 ciphertext_cid = 3;    // content address in the DA layer
-  bytes32 ct_digest = 4;         // keccak256 of the ciphertext bytes
+  bytes ciphertext_cid = 3;    // content address in the DA layer
+  bytes ct_digest = 4;         // keccak256 of the ciphertext bytes
   uint32 rows = 5;
   uint32 bytes = 6;
   uint64 announced_at = 7;
 }
 
 message ShardRequest {
-  bytes32 ciphertext_cid = 1;
+  bytes ciphertext_cid = 1;
   // Inclusive byte range. Lets a node pull a 2 GB dataset in bounded chunks and hash-verify
   // before parsing, which is the defence against a decompression bomb (threat model A12).
   uint64 offset = 2;
@@ -97,7 +97,7 @@ message ShardResponse {
   bytes chunk = 1;
   uint64 next_offset = 2;
   bool complete = 3;
-  bytes32 chunk_digest = 4;
+  bytes chunk_digest = 4;
   string error = 5;
 }
 
@@ -113,7 +113,7 @@ message EpochAnnouncement {
 message TraceDigestAnnounce {
   string task_id = 1;            // decimal uint256
   uint32 epoch = 2;
-  bytes32 trace_digest = 3;     // digest of the STARK trace the re-execution produced
+  bytes trace_digest = 3;     // digest of the STARK trace the re-execution produced
   uint64 observed_at = 4;
   // Optional: the proof the announcer holds, for peers to verify against the chain. Never
   // required, and never gossiped by default, because proofs are large.
