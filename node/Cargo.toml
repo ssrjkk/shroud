@@ -67,7 +67,6 @@ prost-types = "0.14"
 # `tonic_build::configure()` codegen entry point used by `build.rs`; `transport` gates the
 # client/server transport code the generated stubs reference. `default-features = false`
 # disables `configure()`, so the default set is required here.
-tonic-build = { version = "0.14", features = ["transport"] }
 
 # --- FHE -------------------------------------------------------------------------------
 # `shortint` gives the raw short-integer primitives (the production CPU path).
@@ -114,6 +113,9 @@ num-bigint = "0.4"
 num-traits = "0.2"
 once_cell = "1.19"
 rand = "0.8"
+
+[build-dependencies]
+tonic-build = { version = "0.14", features = ["transport"] }
 
 [dev-dependencies]
 proptest = "1.5"
