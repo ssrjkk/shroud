@@ -62,10 +62,11 @@ prost-types = "0.14"
 # `tonic-build` must be a *build* dependency: `build.rs` cannot see regular or optional
 # dependencies. An earlier draft had it as an optional regular dependency activated by the
 # `grpc-server` feature, which can never work.
-[build-dependencies]
-# `prost` is not a feature: prost codegen is always compiled in. `transport` gates the
-# client/server transport code that the generated stubs reference.
-tonic-build = { version = "0.14", default-features = false, features = ["transport"] }
+#
+# `default-features = false` turns OFF the `prost` codegen feature, which gates the
+# `tonic_build::configure()` entry point used by `build.rs`. Both `prost` (codegen) and
+# `transport` (the client/server transport code the generated stubs reference) are required.
+tonic-build = { version = "0.14", default-features = false, features = ["prost", "transport"] }
 
 # --- FHE -------------------------------------------------------------------------------
 # `shortint` gives the raw short-integer primitives (the production CPU path).
