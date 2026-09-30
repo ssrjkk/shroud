@@ -115,7 +115,10 @@ once_cell = "1.19"
 rand = "0.8"
 
 [build-dependencies]
-tonic-build = { version = "0.14", features = ["transport"] }
+# In tonic 0.14 the protobuf codegen entry point moved from `tonic_build::configure()` (which
+# no longer exists) to `tonic_prost_build::configure()`. `transport` gates the generated
+# `connect` methods.
+tonic-prost-build = { version = "0.14", features = ["transport"] }
 
 [dev-dependencies]
 proptest = "1.5"
