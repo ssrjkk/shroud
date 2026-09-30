@@ -2,7 +2,7 @@ name: contracts
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths: ["packages/contracts/**", ".github/workflows/contracts.yml"]
   pull_request:
     paths: ["packages/contracts/**", ".github/workflows/contracts.yml"]

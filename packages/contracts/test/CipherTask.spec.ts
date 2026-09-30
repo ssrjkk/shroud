@@ -643,4 +643,75 @@ describe("CipherTask", () => {
       await expect(task.connect(buyer).createTask(fx.escrow, params(buyer.address))).to.be.revertedWithCustomError(task, "Paused");
     });
   });
+
+  describe("governance recovery", () => {
+    it("emergencyUnwind aborts a task stuck past its epoch deadline + dispute window", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node } = fx;
+      const id = await sealed(fx, { nodes: [node] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+
+      // The epoch is open but nobody committed; after deadline + dispute window the owner
+      // can unwind it so funds are recoverable.
+      await time.increase(3600 + 600 + 1);
+      await expect(task.connect(fx.owner).emergencyUnwind(id)).to.emit(task, "TaskAborted");
+      expect((await task.tasks(id)).status).to.equal(10n); // Aborted
+    });
+
+    it("emergencyUnwind refuses while the epoch is still live", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node } = fx;
+      const id = await sealed(fx, { nodes: [node] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await expect(fx.task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(task, "InvalidParams");
+    });
+
+    it("reclaimUnspentEpochs returns the unused node pool to the buyer once epochs are done", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node, escrow } = fx;
+      const id = await sealed(fx, { epochs: 1, nodes: [node] });
+      await runEpoch(fx, id, 0, node);
+
+      // After the single epoch, the node pool (150M) sits in the winner's channel. The buyer
+      // reclaims what is still in the sub-balance (contributors + committee pools).
+      const before = await vault.taskBalance(id);
+      await expect(task.connect(buyer).reclaimUnspentEpochs(id)).to.emit(task, "Withdrawn");
+      const after = await vault.taskBalance(id);
+      expect(after).to.equal(0n);
+      expect(before).to.be.greaterThan(0n);
+      void token;
+      void escrow;
+    });
+  });
+
+  describe("full reveal flow", () => {
+    async function settled() {
+      const fx = await deployFixture();
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, fx.node);
+      await fx.task.settle(id);
+      return { fx, id };
+    }
+
+    it("requestReveal -> partial decryptions -> withdraw releases the task to Disclosed", async () => {
+      const { fx, id } = await settled();
+      const { task, bls, gate, buyer, committee } = fx;
+      const [cid] = await task.acceptedWeights(id);
+
+      await bls.approve(await gate.revealMessage(id, cid));
+      await expect(task.connect(buyer).requestReveal(id, "0x01")).to.emit(task, "RevealRequested");
+      expect((await task.tasks(id)).status).to.equal(8n); // Revealing
+
+      await gate.connect(committee).submitPartialDecryption(id, bytes32Of(1));
+      expect(await gate.partialCount(id)).to.equal(1n);
+
+      await expect(task.connect(buyer).withdraw(id)).to.emit(task, "RevealCompleted");
+      expect((await task.tasks(id)).status).to.equal(9n); // Disclosed
+    });
+
+    it("withdraw is blocked before the reveal starts", async () => {
+      const { fx, id } = await settled();
+      await expect(fx.task.connect(fx.buyer).withdraw(id)).to.be.revertedWithCustomError(fx.task, "RevealNotAllowed");
+    });
+  });
 });
