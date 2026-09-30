@@ -1452,52 +1452,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "shroud-node"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "bincode 2.0.1",
- "blake3",
- "bytes",
- "clap",
- "figment",
- "futures",
- "futures-util",
- "hex",
- "itertools 0.13.0",
- "num-bigint",
- "num-traits",
- "object_store",
- "once_cell",
- "parking_lot",
- "proptest",
- "prost",
- "prost-types",
- "rand 0.8.8",
- "rand_chacha 0.3.1",
- "rayon",
- "reqwest",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "sha3 0.10.9",
- "tempfile",
- "tfhe",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "tonic",
- "tonic-build",
- "tracing",
- "tracing-subscriber",
- "url",
- "winter-utils",
- "winterfell",
-]
-
-[[package]]
 name = "clap"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4543,6 +4497,52 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "shroud-node"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "bincode 2.0.1",
+ "blake3",
+ "bytes",
+ "clap",
+ "figment",
+ "futures",
+ "futures-util",
+ "hex",
+ "itertools 0.13.0",
+ "num-bigint",
+ "num-traits",
+ "object_store",
+ "once_cell",
+ "parking_lot",
+ "proptest",
+ "prost",
+ "prost-types",
+ "rand 0.8.8",
+ "rand_chacha 0.3.1",
+ "rayon",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "sha3 0.10.9",
+ "tempfile",
+ "tfhe",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "winter-utils",
+ "winterfell",
+]
 
 [[package]]
 name = "signal-hook-registry"
