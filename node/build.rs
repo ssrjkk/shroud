@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let want_server = std::env::var("CARGO_FEATURE_GRPC_SERVER").is_ok();
     println!("cargo:warning=building mesh codegen (server={want_server})");
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_client(true)
         .build_server(want_server)
         .compile_protos(&[proto], &["proto"])?;

@@ -2,7 +2,7 @@ name: contracts
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths: ["packages/contracts/**", ".github/workflows/contracts.yml"]
   pull_request:
     paths: ["packages/contracts/**", ".github/workflows/contracts.yml"]
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: packages/contracts/package-lock.json
       - run: npm ci

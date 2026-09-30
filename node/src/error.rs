@@ -16,7 +16,10 @@ pub enum Error {
     Chain(String),
 
     #[error("contract call {method} reverted: {reason}")]
-    ContractCall { method: &'static str, reason: String },
+    ContractCall {
+        method: &'static str,
+        reason: String,
+    },
 
     #[error("fhe engine: {0}")]
     Fhe(#[from] FheError),
@@ -196,13 +199,21 @@ pub enum PaymentError {
     },
 
     #[error("operator key {address} has no funds to pay the gas for {purpose}")]
-    NoGas { address: alloy::primitives::Address, purpose: &'static str },
+    NoGas {
+        address: alloy::primitives::Address,
+        purpose: &'static str,
+    },
 
     #[error("slice {index} was already redeemed (consumed = {consumed})")]
     SliceReplayed { index: u64, consumed: u64 },
 
     #[error("refusing to claim {claim} from channel {channel_id:#x} for task {task_id:#x}: the channel only authorises {authorised}")]
-    OverAuthorised { task_id: alloy::primitives::B256, channel_id: alloy::primitives::U256, claim: u128, authorised: u128 },
+    OverAuthorised {
+        task_id: alloy::primitives::B256,
+        channel_id: alloy::primitives::U256,
+        claim: u128,
+        authorised: u128,
+    },
 
     #[error("on-chain redeem reverted: {reason}")]
     Reverted { reason: String },

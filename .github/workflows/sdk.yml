@@ -2,7 +2,7 @@ name: sdk
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths: ["packages/sdk/**", ".github/workflows/sdk.yml"]
   pull_request:
     paths: ["packages/sdk/**", ".github/workflows/sdk.yml"]
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
           cache-dependency-path: packages/sdk/package-lock.json
       # The SDK smoke tests cross-check its embedded ABIs against the compiled contracts, so the

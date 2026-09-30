@@ -40,7 +40,7 @@ private data, with settlement that only happens when the work is verifiably done
 
 | path | what |
 |------|------|
-| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (34 tests) |
+| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (39 tests) |
 | `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, DA + FHE abstractions |
 | `node/` | Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE) |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA), 3 nodes |
@@ -51,7 +51,7 @@ private data, with settlement that only happens when the work is verifiably done
 ```sh
 # contracts
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 34 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 39 passing
 
 # sdk
 cd packages/sdk
@@ -74,6 +74,11 @@ docker compose up -d --build devnet shardstore
 - [`docs/04-threat-model.md`](docs/04-threat-model.md) — security analysis
 - [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) — honest MVP scope
 
+## Contributing & security
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to build, test and contribute.
+- [SECURITY.md](SECURITY.md) — how to report a vulnerability (this protocol moves funds).
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
