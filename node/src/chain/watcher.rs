@@ -26,7 +26,7 @@ use std::{
 };
 
 use alloy::{
-    primitives::{Address, B256, Log, U256},
+    primitives::{Address, Log, B256, U256},
     providers::{BoxedProvider, Provider},
 };
 use futures::StreamExt;
@@ -44,12 +44,40 @@ use crate::{
 /// A decoded Shroud event, as the rest of the node sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChainEvent {
-    TaskSealed { task_id: U256, ct_root: B256, shards: u32, contributors: u32 },
-    EpochOpened { task_id: U256, epoch: u32, enc_weights_cid: B256, weights_digest: B256 },
-    EpochCommitted { task_id: U256, epoch: u32, node: Address, trace_digest: B256 },
-    EpochSettled { task_id: U256, epoch: u32, node: Address, amount: u128 },
-    DisputeReported { task_id: U256, epoch: u32, reporter: Address, digest: B256 },
-    TaskAborted { task_id: U256, reason: [u8; 4] },
+    TaskSealed {
+        task_id: U256,
+        ct_root: B256,
+        shards: u32,
+        contributors: u32,
+    },
+    EpochOpened {
+        task_id: U256,
+        epoch: u32,
+        enc_weights_cid: B256,
+        weights_digest: B256,
+    },
+    EpochCommitted {
+        task_id: U256,
+        epoch: u32,
+        node: Address,
+        trace_digest: B256,
+    },
+    EpochSettled {
+        task_id: U256,
+        epoch: u32,
+        node: Address,
+        amount: u128,
+    },
+    DisputeReported {
+        task_id: U256,
+        epoch: u32,
+        reporter: Address,
+        digest: B256,
+    },
+    TaskAborted {
+        task_id: U256,
+        reason: [u8; 4],
+    },
     ChannelOpened {
         channel_id: U256,
         task_id: U256,
@@ -58,7 +86,13 @@ pub enum ChainEvent {
         max_cumulative: u128,
         unlock_at: u64,
     },
-    SliceRedeemed { channel_id: U256, node: Address, cumulative: u128, amount: u128, slice_index: u64 },
+    SliceRedeemed {
+        channel_id: U256,
+        node: Address,
+        cumulative: u128,
+        amount: u128,
+        slice_index: u64,
+    },
 }
 
 impl ChainEvent {
@@ -160,16 +194,30 @@ impl Watcher {
     /// configured backfill depth.
     pub async fn restore(&self, cp: &Checkpoint, chain_id: u64) -> Result<()> {
         if cp.chain_id != chain_id {
-            warn!(expected = chain_id, found = cp.chain_id, "checkpoint is for another chain; full replay");
+            warn!(
+                expected = chain_id,
+                found = cp.chain_id,
+                "checkpoint is for another chain; full replay"
+            );
             return Ok(());
         }
         if let Some(h) = cp.last_scanned_hash {
-            let Some(block) = self.provider.get_block_by_number(cp.last_scanned.into()).await? else {
-                warn!(block = cp.last_scanned, "checkpoint block is not in the canonical chain; full replay");
+            let Some(block) = self
+                .provider
+                .get_block_by_number(cp.last_scanned.into())
+                .await?
+            else {
+                warn!(
+                    block = cp.last_scanned,
+                    "checkpoint block is not in the canonical chain; full replay"
+                );
                 return Ok(());
             };
             if block.header.hash != h {
-                warn!(block = cp.last_scanned, "checkpoint block hash changed; full replay");
+                warn!(
+                    block = cp.last_scanned,
+                    "checkpoint block hash changed; full replay"
+                );
                 return Ok(());
             }
         }
@@ -185,7 +233,10 @@ impl Watcher {
     }
 
     /// Run until `shutdown` resolves. Reorg-safe, idempotent, and safe to restart.
-    pub async fn run(self: Arc<Self>, mut shutdown: tokio::sync::watch::Receiver<bool>) -> Result<()> {
+    pub async fn run(
+        self: Arc<Self>,
+        mut shutdown: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<()> {
         info!(
             contract = %self.contract,
             confirmations = self.finality.confirmations,
@@ -265,11 +316,17 @@ impl Watcher {
             match self.provider.get_block_by_number(number.into()).await {
                 Ok(Some(block)) if block.header.hash == expected => {}
                 Ok(Some(_)) => {
-                    warn!(fork_point = number, "reorg: block hash changed; replaying from the fork point");
+                    warn!(
+                        fork_point = number,
+                        "reorg: block hash changed; replaying from the fork point"
+                    );
                     return self.replay_from(number).await;
                 }
                 Ok(None) => {
-                    warn!(block = number, "reorg: recorded block is not in the canonical chain; full replay");
+                    warn!(
+                        block = number,
+                        "reorg: recorded block is not in the canonical chain; full replay"
+                    );
                     self.anchors.lock().await.clear();
                     self.state.reset();
                     return Ok(());
@@ -302,7 +359,11 @@ impl Watcher {
     }
 
     async fn replay_from(&self, block: u64) -> Result<()> {
-        warn!(block, depth = self.cursor.load(Ordering::SeqCst).saturating_sub(block), "reorg: discarding derived state");
+        warn!(
+            block,
+            depth = self.cursor.load(Ordering::SeqCst).saturating_sub(block),
+            "reorg: discarding derived state"
+        );
         self.state.reset();
         self.anchors.lock().await.retain(|(n, _)| *n < block);
         self.cursor.store(block, Ordering::SeqCst);
@@ -328,7 +389,10 @@ impl Watcher {
             // order the RPC returns.
             let mut ordered: Vec<Log> = logs.into_iter().collect();
             ordered.sort_by_key(|l| {
-                (l.block_header.map(|h| h.number).unwrap_or_default(), l.log_index.unwrap_or_default())
+                (
+                    l.block_header.map(|h| h.number).unwrap_or_default(),
+                    l.log_index.unwrap_or_default(),
+                )
             });
 
             for log in ordered {
@@ -341,7 +405,9 @@ impl Watcher {
                         let _ = self.tx.send(ev);
                     }
                     Ok(None) => {}
-                    Err(e) => error!(error = %e, tx = %log.address, "watcher: undecodable log; skipping"),
+                    Err(e) => {
+                        error!(error = %e, tx = %log.address, "watcher: undecodable log; skipping")
+                    }
                 }
             }
 
@@ -414,7 +480,12 @@ impl Watcher {
             .get_block_by_number(scanned.into())
             .await?
             .map(|b| b.header.hash);
-        Ok(Checkpoint { last_scanned: scanned, head_at_write: head, chain_id: self.state.chain_id(), last_scanned_hash: hash })
+        Ok(Checkpoint {
+            last_scanned: scanned,
+            head_at_write: head,
+            chain_id: self.state.chain_id(),
+            last_scanned_hash: hash,
+        })
     }
 
     pub fn checkpoint(&self) -> Checkpoint {
@@ -578,7 +649,10 @@ mod tests {
     fn epoch_opened_reads_indexed_and_data_from_the_right_places() {
         let t = topics(
             events::epoch_opened(),
-            &[B256::from(U256::from(7).to_be_bytes::<32>()), B256::from(U256::from(2).to_be_bytes::<32>())],
+            &[
+                B256::from(U256::from(7).to_be_bytes::<32>()),
+                B256::from(U256::from(2).to_be_bytes::<32>()),
+            ],
         );
         let mut data = [0u8; 64];
         data[0..32].copy_from_slice(&[0xAA; 32]);
@@ -586,7 +660,12 @@ mod tests {
 
         let ev = decode_task_event(&events::epoch_opened(), &t, &data).expect("decodes");
         match ev {
-            ChainEvent::EpochOpened { task_id, epoch, enc_weights_cid, weights_digest } => {
+            ChainEvent::EpochOpened {
+                task_id,
+                epoch,
+                enc_weights_cid,
+                weights_digest,
+            } => {
                 assert_eq!(task_id, U256::from(7));
                 assert_eq!(epoch, 2);
                 assert_eq!(enc_weights_cid, B256::from([0xAA; 32]));
@@ -614,7 +693,11 @@ mod tests {
 
         let ev = decode_task_event(&events::epoch_committed(), &t, &data).expect("decodes");
         match ev {
-            ChainEvent::EpochCommitted { node: got, trace_digest, .. } => {
+            ChainEvent::EpochCommitted {
+                node: got,
+                trace_digest,
+                ..
+            } => {
                 assert_eq!(got, node);
                 assert_eq!(trace_digest, B256::from([0xCC; 32]));
             }
@@ -638,25 +721,42 @@ mod tests {
 
     #[test]
     fn task_aborted_reads_a_bytes4_reason_from_the_low_word() {
-        let t = topics(events::task_aborted(), &[B256::from(U256::from(9).to_be_bytes::<32>())]);
+        let t = topics(
+            events::task_aborted(),
+            &[B256::from(U256::from(9).to_be_bytes::<32>())],
+        );
         let mut data = [0u8; 32];
         data[28..32].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
         let ev = decode_task_event(&events::task_aborted(), &t, &data).expect("decodes");
-        assert_eq!(ev, ChainEvent::TaskAborted { task_id: U256::from(9), reason: [0xde, 0xad, 0xbe, 0xef] });
+        assert_eq!(
+            ev,
+            ChainEvent::TaskAborted {
+                task_id: U256::from(9),
+                reason: [0xde, 0xad, 0xbe, 0xef]
+            }
+        );
     }
 
     #[test]
     fn channel_opened_splits_two_indexed_and_four_data_words() {
         let t = topics(
             events::channel_opened(),
-            &[B256::from(U256::from(5).to_be_bytes::<32>()), B256::from(U256::from(3).to_be_bytes::<32>())],
+            &[
+                B256::from(U256::from(5).to_be_bytes::<32>()),
+                B256::from(U256::from(3).to_be_bytes::<32>()),
+            ],
         );
         let mut data = [0u8; 128];
         data[96..128].copy_from_slice(&1_234u128.to_be_bytes());
 
         let ev = decode_vault_event(&events::channel_opened(), &t, &data).expect("decodes");
         match ev {
-            ChainEvent::ChannelOpened { channel_id, task_id, max_cumulative, .. } => {
+            ChainEvent::ChannelOpened {
+                channel_id,
+                task_id,
+                max_cumulative,
+                ..
+            } => {
                 assert_eq!(channel_id, U256::from(5));
                 assert_eq!(task_id, U256::from(3));
                 assert_eq!(max_cumulative, 1_234);
@@ -670,13 +770,22 @@ mod tests {
         // `SliceRedeemed` indexes only `channelId`; `sliceIndex` is the 4th data word.
         // Reading it from the topics would silently yield zero and every slice would be
         // numbered 0, which is exactly the kind of bug that only shows up in a dispute.
-        let t = topics(events::slice_redeemed(), &[B256::from(U256::from(11).to_be_bytes::<32>())]);
+        let t = topics(
+            events::slice_redeemed(),
+            &[B256::from(U256::from(11).to_be_bytes::<32>())],
+        );
         let mut data = [0u8; 128];
         data[96..128].copy_from_slice(&42u64.to_be_bytes());
 
         let ev = decode_vault_event(&events::slice_redeemed(), &t, &data).expect("decodes");
         match ev {
-            ChainEvent::SliceRedeemed { channel_id, slice_index, amount, cumulative, .. } => {
+            ChainEvent::SliceRedeemed {
+                channel_id,
+                slice_index,
+                amount,
+                cumulative,
+                ..
+            } => {
                 assert_eq!(channel_id, U256::from(11));
                 assert_eq!(slice_index, 42);
                 assert_eq!(cumulative, 0);
@@ -688,6 +797,11 @@ mod tests {
 
     #[test]
     fn unknown_topic_decodes_to_none() {
-        assert!(decode_task_event(&B256::from([9u8; 32]), &[B256::from([9u8; 32])], &[0u8; 128]).is_none());
+        assert!(decode_task_event(
+            &B256::from([9u8; 32]),
+            &[B256::from([9u8; 32])],
+            &[0u8; 128]
+        )
+        .is_none());
     }
 }

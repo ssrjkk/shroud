@@ -274,7 +274,7 @@ impl Default for Config {
                 lanes_per_ciphertext: 8,
                 scale: 10_000,
                 lr_q16: 65_536, // 1.0
-                l2_q16: 65, // 0.001
+                l2_q16: 65,     // 0.001
                 minibatch: 8,
                 max_noise_deficit: 8,
                 seed: 0x4369_7068_6572_4d65, // "CipherMe"
@@ -295,7 +295,9 @@ impl Default for Config {
                 aead_transport: true,
             },
             mesh: MeshConfig {
-                listen: "0.0.0.0:7331".parse().expect("valid default socket address"),
+                listen: "0.0.0.0:7331"
+                    .parse()
+                    .expect("valid default socket address"),
                 peers: Vec::new(),
                 announce_interval: Duration::from_secs(30),
                 request_timeout: Duration::from_secs(20),
@@ -336,7 +338,9 @@ impl Config {
             .merge(cli_overrides(cli))
             .select();
 
-        let mut cfg: Config = figment.extract().map_err(|e| ConfigError::Load(e.to_string()))?;
+        let mut cfg: Config = figment
+            .extract()
+            .map_err(|e| ConfigError::Load(e.to_string()))?;
         cfg.validate()?;
         Ok(cfg)
     }
@@ -354,18 +358,33 @@ impl Config {
         if self.fhe.lanes_per_ciphertext == 0 || !self.fhe.lanes_per_ciphertext.is_power_of_two() {
             return Err(ConfigError::Invalid {
                 field: "fhe.lanes_per_ciphertext",
-                reason: format!("{} must be a power of two for Bleve batching", self.fhe.lanes_per_ciphertext),
+                reason: format!(
+                    "{} must be a power of two for Bleve batching",
+                    self.fhe.lanes_per_ciphertext
+                ),
             }
             .into());
         }
         if self.fhe.scale == 0 {
-            return Err(ConfigError::Invalid { field: "fhe.scale", reason: "must be > 0".into() }.into());
+            return Err(ConfigError::Invalid {
+                field: "fhe.scale",
+                reason: "must be > 0".into(),
+            }
+            .into());
         }
         if self.fhe.minibatch == 0 {
-            return Err(ConfigError::Invalid { field: "fhe.minibatch", reason: "must be > 0".into() }.into());
+            return Err(ConfigError::Invalid {
+                field: "fhe.minibatch",
+                reason: "must be > 0".into(),
+            }
+            .into());
         }
         if self.fhe.lr_q16 == 0 {
-            return Err(ConfigError::Invalid { field: "fhe.lr_q16", reason: "must be > 0".into() }.into());
+            return Err(ConfigError::Invalid {
+                field: "fhe.lr_q16",
+                reason: "must be > 0".into(),
+            }
+            .into());
         }
         if !matches!(self.stark.security_bits, 128 | 192) {
             return Err(ConfigError::Invalid {
@@ -493,8 +512,13 @@ fn cli_overrides(cli: &Cli) -> figment::providers::Serialized<CliOverrides> {
             bls_key: cli.bls_key.clone(),
             task_filter: cli.task_filter,
         },
-        mesh: MeshOverride { listen: cli.mesh_listen, peers: cli.mesh_peers.clone() },
-        stark: StarkOverride { digest_only: cli.dispute_only.then_some(true) },
+        mesh: MeshOverride {
+            listen: cli.mesh_listen,
+            peers: cli.mesh_peers.clone(),
+        },
+        stark: StarkOverride {
+            digest_only: cli.dispute_only.then_some(true),
+        },
     };
     figment::providers::Serialized::from(ov)
 }
@@ -503,7 +527,9 @@ fn cli_overrides(cli: &Cli) -> figment::providers::Serialized<CliOverrides> {
 #[cfg(test)]
 pub fn from_toml_str(src: &str) -> Result<Config> {
     let figment = Figment::new().merge(Toml::string(src)).select();
-    let cfg: Config = figment.extract().map_err(|e| ConfigError::Load(e.to_string()))?;
+    let cfg: Config = figment
+        .extract()
+        .map_err(|e| ConfigError::Load(e.to_string()))?;
     cfg.validate()?;
     Ok(cfg)
 }
@@ -561,7 +587,13 @@ mod tests {
             "#,
         )
         .expect_err("zero task address must be rejected");
-        assert!(matches!(err, Error::Config(ConfigError::Missing("contracts.cipher_task"))), "got {err:?}");
+        assert!(
+            matches!(
+                err,
+                Error::Config(ConfigError::Missing("contracts.cipher_task"))
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -574,7 +606,13 @@ mod tests {
             "#,
         )
         .expect_err("missing operator key must be rejected");
-        assert!(matches!(err, Error::Config(ConfigError::Missing("node.operator_key"))), "got {err:?}");
+        assert!(
+            matches!(
+                err,
+                Error::Config(ConfigError::Missing("node.operator_key"))
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -584,8 +622,19 @@ mod tests {
         cfg.contracts.payment_vault = Address::repeat_byte(0x22);
         cfg.node.operator_key = "0xdeadbeef".into();
         cfg.fhe.lanes_per_ciphertext = 3;
-        let err = cfg.validate().expect_err("3 lanes is not a Bleve batch size");
-        assert!(matches!(err, Error::Config(ConfigError::Invalid { field: "fhe.lanes_per_ciphertext", .. })), "got {err:?}");
+        let err = cfg
+            .validate()
+            .expect_err("3 lanes is not a Bleve batch size");
+        assert!(
+            matches!(
+                err,
+                Error::Config(ConfigError::Invalid {
+                    field: "fhe.lanes_per_ciphertext",
+                    ..
+                })
+            ),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -595,7 +644,8 @@ mod tests {
         cfg.contracts.payment_vault = Address::repeat_byte(0x22);
         cfg.node.operator_key = "0xdeadbeef".into();
         cfg.finality.confirmations = 0;
-        cfg.validate().expect_err("acting on unconfirmed logs must be rejected");
+        cfg.validate()
+            .expect_err("acting on unconfirmed logs must be rejected");
     }
 
     #[test]
@@ -631,7 +681,10 @@ mod tests {
         let out = cli_overrides(&cli).data().expect("provider yields a map");
         let contracts = out.get("contracts").expect("contracts table present");
         assert_eq!(
-            contracts.get("cipher_task").and_then(|v| v.to_string().ok()).map(|s| s.trim_matches('"').to_string()),
+            contracts
+                .get("cipher_task")
+                .and_then(|v| v.to_string().ok())
+                .map(|s| s.trim_matches('"').to_string()),
             Some(format!("{:#x}", Address::repeat_byte(0x33)))
         );
         let node = out.get("node").expect("node table present");
@@ -645,7 +698,10 @@ mod tests {
         let cli = Cli::parse_from(["shroud-node"]);
         let out = cli_overrides(&cli).data().expect("provider yields a map");
         let chain = out.get("chain").expect("chain table present");
-        assert!(chain.is_empty(), "an unset --rpc-url must not shadow the TOML file, got {chain:?}");
+        assert!(
+            chain.is_empty(),
+            "an unset --rpc-url must not shadow the TOML file, got {chain:?}"
+        );
     }
 
     #[test]
@@ -653,7 +709,10 @@ mod tests {
         let cli = Cli::parse_from(["shroud-node", "--dispute-only"]);
         let out = cli_overrides(&cli).data().expect("provider yields a map");
         assert_eq!(
-            out.get("stark").and_then(|s| s.get("digest_only")).and_then(|v| v.to_string().ok()).as_deref(),
+            out.get("stark")
+                .and_then(|s| s.get("digest_only"))
+                .and_then(|v| v.to_string().ok())
+                .as_deref(),
             Some("true")
         );
     }

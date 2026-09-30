@@ -39,7 +39,9 @@ impl std::str::FromStr for DecimalU256 {
         if !s.bytes().all(|b| b.is_ascii_digit()) {
             return Err(ParseIdError::NotDecimal(s.to_string()));
         }
-        U256::from_str_radix(s, 10).map(DecimalU256).map_err(ParseIdError::Overflow)
+        U256::from_str_radix(s, 10)
+            .map(DecimalU256)
+            .map_err(ParseIdError::Overflow)
     }
 }
 
@@ -87,7 +89,10 @@ mod tests {
     #[test]
     fn hex_and_whitespace_are_rejected() {
         for bad in ["0x2a", " 2", "2 ", "+2", "-2", "2.0"] {
-            assert!(bad.parse::<DecimalU256>().is_err(), "{bad:?} must be rejected");
+            assert!(
+                bad.parse::<DecimalU256>().is_err(),
+                "{bad:?} must be rejected"
+            );
         }
     }
 
@@ -98,7 +103,8 @@ mod tests {
 
     #[test]
     fn overflow_is_rejected_rather_than_wrapping() {
-        let too_big = "115792089237316195423570985008687907853269984665640564039457584007913129639936";
+        let too_big =
+            "115792089237316195423570985008687907853269984665640564039457584007913129639936";
         assert!(too_big.parse::<DecimalU256>().is_err());
     }
 

@@ -191,14 +191,22 @@ pub mod events {
     }
 
     /// The full set the watcher filters on.
-    pub static WATCH: Lazy<Vec<B256>> = Lazy::new(|| SIGNATURES.iter().copied().map(topic).collect());
+    pub static WATCH: Lazy<Vec<B256>> =
+        Lazy::new(|| SIGNATURES.iter().copied().map(topic).collect());
 
     /// The subset that means "there is work for me to do".
-    pub static ACTIONABLE: Lazy<Vec<B256>> = Lazy::new(|| vec![task_sealed(), epoch_opened(), dispute_reported()]);
+    pub static ACTIONABLE: Lazy<Vec<B256>> =
+        Lazy::new(|| vec![task_sealed(), epoch_opened(), dispute_reported()]);
 
     /// The subset that means "someone else did the work; verify, settle or collect".
     pub static OBSERVABLE: Lazy<Vec<B256>> = Lazy::new(|| {
-        vec![epoch_committed(), epoch_settled(), task_aborted(), channel_opened(), slice_redeemed()]
+        vec![
+            epoch_committed(),
+            epoch_settled(),
+            task_aborted(),
+            channel_opened(),
+            slice_redeemed(),
+        ]
     });
 
     #[cfg(test)]

@@ -67,7 +67,10 @@ impl TaskStatus {
 
     /// Whether no further work is expected for this task.
     pub fn is_terminal(self) -> bool {
-        matches!(self, TaskStatus::Disclosed | TaskStatus::Aborted | TaskStatus::Paused)
+        matches!(
+            self,
+            TaskStatus::Disclosed | TaskStatus::Aborted | TaskStatus::Paused
+        )
     }
 }
 
@@ -143,7 +146,10 @@ impl TaskState {
         }
         // Deterministic tie-break: the most-reported digest, then the lowest value. A tie must
         // not resolve differently on two nodes, or half the network files a pointless dispute.
-        counts.into_iter().max_by(|(a, ca), (b, cb)| ca.cmp(cb).then_with(|| b.cmp(a))).map(|(d, _)| d)
+        counts
+            .into_iter()
+            .max_by(|(a, ca), (b, cb)| ca.cmp(cb).then_with(|| b.cmp(a)))
+            .map(|(d, _)| d)
     }
 }
 
@@ -191,9 +197,17 @@ pub enum Work {
     /// We missed the window; nothing to do but stay consistent.
     SkipEpoch { task_id: U256, epoch: u32 },
     /// Re-execute and report disagreement.
-    Reexecute { task_id: U256, epoch: u32, claimed_digest: B256 },
+    Reexecute {
+        task_id: U256,
+        epoch: u32,
+        claimed_digest: B256,
+    },
     /// File an on-chain dispute.
-    FileDispute { task_id: U256, epoch: u32, our_digest: B256 },
+    FileDispute {
+        task_id: U256,
+        epoch: u32,
+        our_digest: B256,
+    },
     /// Finalise/settle a task whose epochs are done.
     Settle { task_id: U256 },
     /// Redeem an authorised slice.
@@ -226,7 +240,10 @@ pub struct NodeState {
 impl NodeState {
     pub fn new() -> Self {
         let (tx, _rx) = broadcast::channel(1_024);
-        Self { inner: Arc::new(RwLock::new(Inner::default())), tx }
+        Self {
+            inner: Arc::new(RwLock::new(Inner::default())),
+            tx,
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Work> {
@@ -301,12 +318,18 @@ impl NodeState {
         let mut g = self.write();
         let mut work = Vec::new();
         match ev {
-            ChainEvent::TaskSealed { task_id, ct_root, shards, contributors } => {
+            ChainEvent::TaskSealed {
+                task_id,
+                ct_root,
+                shards,
+                contributors,
+            } => {
                 let t = g.tasks.entry(*task_id).or_insert_with(|| TaskState {
                     task_id: *task_id,
                     ..Default::default()
                 });
-                if t.status != TaskStatus::None && t.ct_root != B256::ZERO && t.ct_root != *ct_root {
+                if t.status != TaskStatus::None && t.ct_root != B256::ZERO && t.ct_root != *ct_root
+                {
                     g.tainted = true;
                     warn!(task = %task_id, "ctRoot changed for an already-seen task; state is tainted");
                 }
@@ -315,18 +338,30 @@ impl NodeState {
                 t.contributors = *contributors;
                 t.status = TaskStatus::Sealed;
                 if !t.registered {
-                    work.push(Work::SkipEpoch { task_id: *task_id, epoch: 0 });
+                    work.push(Work::SkipEpoch {
+                        task_id: *task_id,
+                        epoch: 0,
+                    });
                 } else if !t.epochs.contains_key(&0) {
-                    work.push(Work::Execute { task_id: *task_id, epoch: 0 });
+                    work.push(Work::Execute {
+                        task_id: *task_id,
+                        epoch: 0,
+                    });
                 }
             }
-            ChainEvent::EpochOpened { task_id, epoch, enc_weights_cid, weights_digest } => {
+            ChainEvent::EpochOpened {
+                task_id,
+                epoch,
+                enc_weights_cid,
+                weights_digest,
+            } => {
                 let t = g.tasks.entry(*task_id).or_insert_with(|| TaskState {
                     task_id: *task_id,
                     ..Default::default()
                 });
                 t.status = TaskStatus::EpochOpen;
-                t.epochs.entry(*epoch).or_default().opened_at = t.epochs.get(epoch).map_or(0, |e| e.opened_at);
+                t.epochs.entry(*epoch).or_default().opened_at =
+                    t.epochs.get(epoch).map_or(0, |e| e.opened_at);
                 let e = t.epochs.entry(*epoch).or_default();
                 // The first `EpochOpened` of an epoch carries the seed weights. Later opens of
                 // the *next* epoch carry the previous winner's weights; those go to
@@ -338,10 +373,18 @@ impl NodeState {
                     t.last_weights = Some((*enc_weights_cid, *weights_digest));
                 }
                 if t.registered && !e.commits.is_empty() {
-                    work.push(Work::Execute { task_id: *task_id, epoch: *epoch });
+                    work.push(Work::Execute {
+                        task_id: *task_id,
+                        epoch: *epoch,
+                    });
                 }
             }
-            ChainEvent::EpochCommitted { task_id, epoch, node, trace_digest } => {
+            ChainEvent::EpochCommitted {
+                task_id,
+                epoch,
+                node,
+                trace_digest,
+            } => {
                 let Some(t) = g.tasks.get_mut(task_id) else {
                     // Commit for an untracked task: the watcher joined late. Nothing to do but
                     // note that we cannot reason about this task.
@@ -355,24 +398,38 @@ impl NodeState {
                     }
                     return work;
                 }
-                e.commits.insert(*node, CommitRecord {
-                    // Filled in by the metrics fetch; the commit event does not carry the CIDs.
-                    enc_weights_cid: B256::ZERO,
-                    weights_digest: B256::ZERO,
-                    trace_digest: *trace_digest,
-                    block: 0,
-                    proof_bytes: 0,
-                });
+                e.commits.insert(
+                    *node,
+                    CommitRecord {
+                        // Filled in by the metrics fetch; the commit event does not carry the CIDs.
+                        enc_weights_cid: B256::ZERO,
+                        weights_digest: B256::ZERO,
+                        trace_digest: *trace_digest,
+                        block: 0,
+                        proof_bytes: 0,
+                    },
+                );
                 t.status = TaskStatus::EpochCommitting;
                 if let Some(our) = consensus_digest_locked(t) {
                     let claimed = first_digest_locked(t, *epoch);
                     if claimed.is_some() && our != claimed {
-                        work.push(Work::FileDispute { task_id: *task_id, epoch: *epoch, our_digest: our });
+                        work.push(Work::FileDispute {
+                            task_id: *task_id,
+                            epoch: *epoch,
+                            our_digest: our,
+                        });
                     }
                 }
             }
-            ChainEvent::EpochSettled { task_id, epoch, node, amount } => {
-                let Some(t) = g.tasks.get_mut(task_id) else { return work };
+            ChainEvent::EpochSettled {
+                task_id,
+                epoch,
+                node,
+                amount,
+            } => {
+                let Some(t) = g.tasks.get_mut(task_id) else {
+                    return work;
+                };
                 let e = t.epochs.entry(*epoch).or_default();
                 if e.settled {
                     return work;
@@ -385,15 +442,32 @@ impl NodeState {
                     work.push(Work::Settle { task_id: *task_id });
                 }
             }
-            ChainEvent::DisputeReported { task_id, epoch, reporter, digest } => {
-                let Some(t) = g.tasks.get_mut(task_id) else { return work };
-                t.epochs.entry(*epoch).or_default().disputes.insert(*reporter, *digest);
+            ChainEvent::DisputeReported {
+                task_id,
+                epoch,
+                reporter,
+                digest,
+            } => {
+                let Some(t) = g.tasks.get_mut(task_id) else {
+                    return work;
+                };
+                t.epochs
+                    .entry(*epoch)
+                    .or_default()
+                    .disputes
+                    .insert(*reporter, *digest);
                 if *reporter != self_zero_address() {
-                    work.push(Work::Reexecute { task_id: *task_id, epoch: *epoch, claimed_digest: *digest });
+                    work.push(Work::Reexecute {
+                        task_id: *task_id,
+                        epoch: *epoch,
+                        claimed_digest: *digest,
+                    });
                 }
             }
             ChainEvent::TaskAborted { task_id, .. } => {
-                let Some(t) = g.tasks.get_mut(task_id) else { return work };
+                let Some(t) = g.tasks.get_mut(task_id) else {
+                    return work;
+                };
                 t.status = TaskStatus::Aborted;
                 t.executing = None;
             }
@@ -420,11 +494,22 @@ impl NodeState {
                     },
                 );
                 if *max_cumulative > 0 {
-                    work.push(Work::Redeem { channel_id: *channel_id, amount: *max_cumulative });
+                    work.push(Work::Redeem {
+                        channel_id: *channel_id,
+                        amount: *max_cumulative,
+                    });
                 }
             }
-            ChainEvent::SliceRedeemed { channel_id, node, cumulative, amount, .. } => {
-                let Some(c) = g.channels.get_mut(channel_id) else { return work };
+            ChainEvent::SliceRedeemed {
+                channel_id,
+                node,
+                cumulative,
+                amount,
+                ..
+            } => {
+                let Some(c) = g.channels.get_mut(channel_id) else {
+                    return work;
+                };
                 if *cumulative < c.withdrawn {
                     // A redeem that lowers the observed cumulative means our view is stale or
                     // the chain reorganised under us.
@@ -466,7 +551,12 @@ impl NodeState {
     }
 
     pub fn channels_for(&self, node: Address) -> Vec<ChannelState> {
-        self.read().channels.values().filter(|c| c.node == node).cloned().collect()
+        self.read()
+            .channels
+            .values()
+            .filter(|c| c.node == node)
+            .cloned()
+            .collect()
     }
 
     pub fn is_tainted(&self) -> bool {
@@ -549,11 +639,17 @@ fn consensus_digest_locked(t: &TaskState) -> Option<B256> {
             *counts.entry(*d).or_default() += 1;
         }
     }
-    counts.into_iter().max_by(|(a, ca), (b, cb)| ca.cmp(cb).then_with(|| b.cmp(a))).map(|(d, _)| d)
+    counts
+        .into_iter()
+        .max_by(|(a, ca), (b, cb)| ca.cmp(cb).then_with(|| b.cmp(a)))
+        .map(|(d, _)| d)
 }
 
 fn first_digest_locked(t: &TaskState, epoch: u32) -> Option<B256> {
-    t.epochs.get(&epoch).and_then(|e| e.commits.values().next()).map(|c| c.trace_digest)
+    t.epochs
+        .get(&epoch)
+        .and_then(|e| e.commits.values().next())
+        .map(|c| c.trace_digest)
 }
 
 #[cfg(test)]
@@ -573,14 +669,25 @@ mod tests {
             shards: 4,
             contributors: 2,
         });
-        assert_eq!(work, vec![Work::SkipEpoch { task_id: U256::from(1), epoch: 0 }]);
+        assert_eq!(
+            work,
+            vec![Work::SkipEpoch {
+                task_id: U256::from(1),
+                epoch: 0
+            }]
+        );
         assert_eq!(s.task(U256::from(1)).unwrap().status, TaskStatus::Sealed);
     }
 
     #[test]
     fn task_sealed_for_a_registered_node_produces_execute_work() {
         let s = state();
-        s.apply(&ChainEvent::TaskSealed { task_id: U256::from(2), ct_root: B256::repeat_byte(1), shards: 1, contributors: 1 });
+        s.apply(&ChainEvent::TaskSealed {
+            task_id: U256::from(2),
+            ct_root: B256::repeat_byte(1),
+            shards: 1,
+            contributors: 1,
+        });
         {
             let mut g = s.write();
             g.tasks.get_mut(&U256::from(2)).unwrap().registered = true;
@@ -591,7 +698,10 @@ mod tests {
             enc_weights_cid: B256::repeat_byte(2),
             weights_digest: B256::repeat_byte(3),
         });
-        assert!(s.take_work().iter().any(|w| matches!(w, Work::Execute { epoch: 0, .. })));
+        assert!(s
+            .take_work()
+            .iter()
+            .any(|w| matches!(w, Work::Execute { epoch: 0, .. })));
     }
 
     #[test]
@@ -609,7 +719,10 @@ mod tests {
         assert!(work.is_empty(), "a duplicate commit must not produce work");
         let t = s.task(U256::from(3)).unwrap();
         assert_eq!(t.epoch(0).unwrap().commits.len(), 1);
-        assert_eq!(t.epoch(0).unwrap().commits[&Address::repeat_byte(0x11)].trace_digest, B256::repeat_byte(0xaa));
+        assert_eq!(
+            t.epoch(0).unwrap().commits[&Address::repeat_byte(0x11)].trace_digest,
+            B256::repeat_byte(0xaa)
+        );
         assert!(s.is_tainted(), "contradictory commits must taint the state");
     }
 
@@ -640,7 +753,10 @@ mod tests {
         };
         let first = s.apply(&ev);
         assert_eq!(first.len(), 1, "the first settlement schedules Settle work");
-        assert!(s.apply(&ev).is_empty(), "replaying the log must not schedule it twice");
+        assert!(
+            s.apply(&ev).is_empty(),
+            "replaying the log must not schedule it twice"
+        );
     }
 
     #[test]
@@ -670,12 +786,20 @@ mod tests {
             slice_index: 1,
         });
         assert!(s.is_tainted());
-        assert_eq!(s.channel(U256::from(9)).unwrap().withdrawn, 400, "a bad event must not corrupt the recorded cumulative");
+        assert_eq!(
+            s.channel(U256::from(9)).unwrap().withdrawn,
+            400,
+            "a bad event must not corrupt the recorded cumulative"
+        );
     }
 
     #[test]
     fn channel_remaining_never_goes_negative() {
-        let c = ChannelState { max_cumulative: 100, withdrawn: 250, ..Default::default() };
+        let c = ChannelState {
+            max_cumulative: 100,
+            withdrawn: 250,
+            ..Default::default()
+        };
         assert_eq!(c.remaining(), 0);
     }
 
@@ -683,7 +807,12 @@ mod tests {
     fn reset_clears_tasks_and_channels_but_keeps_the_chain_id() {
         let s = state();
         s.set_chain_id(31_338);
-        s.apply(&ChainEvent::TaskSealed { task_id: U256::from(6), ct_root: B256::repeat_byte(1), shards: 1, contributors: 1 });
+        s.apply(&ChainEvent::TaskSealed {
+            task_id: U256::from(6),
+            ct_root: B256::repeat_byte(1),
+            shards: 1,
+            contributors: 1,
+        });
         s.apply(&ChainEvent::ChannelOpened {
             channel_id: U256::from(1),
             task_id: U256::from(6),
@@ -701,8 +830,18 @@ mod tests {
     #[test]
     fn a_ct_root_change_for_a_seen_task_taints_the_state() {
         let s = state();
-        s.apply(&ChainEvent::TaskSealed { task_id: U256::from(7), ct_root: B256::repeat_byte(0xaa), shards: 1, contributors: 1 });
-        s.apply(&ChainEvent::TaskSealed { task_id: U256::from(7), ct_root: B256::repeat_byte(0xbb), shards: 1, contributors: 1 });
+        s.apply(&ChainEvent::TaskSealed {
+            task_id: U256::from(7),
+            ct_root: B256::repeat_byte(0xaa),
+            shards: 1,
+            contributors: 1,
+        });
+        s.apply(&ChainEvent::TaskSealed {
+            task_id: U256::from(7),
+            ct_root: B256::repeat_byte(0xbb),
+            shards: 1,
+            contributors: 1,
+        });
         assert!(s.is_tainted());
     }
 

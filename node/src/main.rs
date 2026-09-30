@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use alloy::providers::{BoxedProvider, ProviderBuilder};
+use clap::Parser;
 use shroud_node::{
     chain::{OrchestratorClient, Watcher},
     config::{Cli, Config},
@@ -21,8 +23,6 @@ use shroud_node::{
     state::NodeState,
     VERSION,
 };
-use alloy::providers::{BoxedProvider, ProviderBuilder};
-use clap::Parser;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
@@ -71,10 +71,14 @@ async fn run() -> Result<()> {
     // A provider for the watcher, separate from the client's. The watcher is a long-lived
     // poller and the client issues bursty writes; sharing one pool lets a slow `eth_getLogs`
     // window starve a commit that is racing an epoch deadline.
-    let rpc_url = cfg.chain.rpc_url.parse::<url::Url>().map_err(|e| ConfigError::Invalid {
-        field: "chain.rpc_url",
-        reason: format!("{e}"),
-    })?;
+    let rpc_url = cfg
+        .chain
+        .rpc_url
+        .parse::<url::Url>()
+        .map_err(|e| ConfigError::Invalid {
+            field: "chain.rpc_url",
+            reason: format!("{e}"),
+        })?;
     let watcher_provider: BoxedProvider = ProviderBuilder::new().connect_http(rpc_url).boxed();
 
     let watcher = Arc::new(Watcher::new(watcher_provider, &cfg, state.clone())?);
@@ -89,7 +93,9 @@ async fn run() -> Result<()> {
         }
         None => {
             let start = cfg.chain.start_block.unwrap_or_else(|| {
-                warn!("no checkpoint and no chain.start_block; backfilling from the configured depth");
+                warn!(
+                    "no checkpoint and no chain.start_block; backfilling from the configured depth"
+                );
                 0
             });
             info!(start, "no checkpoint; starting a fresh backfill");
