@@ -47,7 +47,7 @@ private data, with settlement that only happens when the work is verifiably done
 |------|------|
 | `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (39 tests) |
 | `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, DA + FHE abstractions |
-| `node/` | Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE) |
+| `node/` | Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE) — **work in progress**, does not compile yet |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA), 3 nodes |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |
 
@@ -67,9 +67,11 @@ cd infra
 docker compose up -d --build devnet shardstore
 ```
 
-> **Note on the Rust node:** on this host, Windows Smart App Control / WDAC blocks Cargo
-> build-script binaries, so `node/` cannot be compiled here. It builds on any normal machine or
-> in CI (`.github/workflows/rust.yml`). See `infra/README.md`.
+> **Note on the Rust node:** `node/` is a work in progress — it does not compile yet. The
+> hand-written alloy bindings (`src/chain/`) target an API that does not match any released
+> alloy version (e.g. `Filter::selectors`, `PendingTransactionBuilder::block_id`), so the rust
+> CI job is expected to be red until the node is finished. The contracts and SDK are complete
+> and green.
 
 ## Docs
 

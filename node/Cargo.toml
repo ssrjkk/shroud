@@ -39,11 +39,10 @@ futures-util = "0.3"
 # `connect_http` lives behind `reqwest` in alloy 2.x (the old `provider-http` name still exists
 # but is not what gates the builder method). `sol-types` brings in the `sol!` macro.
 alloy = { version = "2.5", default-features = false, features = [
-  "provider-http",
+  "providers",
   "reqwest",
   "reqwest-rustls-tls",
   "sol-types",
-  "rpc",
   "contract",
   "signer-local",
   "rpc-types-eth",
@@ -57,7 +56,6 @@ alloy = { version = "2.5", default-features = false, features = [
 # `tls-ring` is chosen over `tls-aws-lc` because aws-lc-rs needs cmake and perl, while `ring`
 # only needs a C compiler.
 tonic = { version = "0.14", default-features = false, features = ["server", "codegen", "router", "transport", "channel", "gzip", "tls-ring", "tls-webpki-roots"] }
-tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
 

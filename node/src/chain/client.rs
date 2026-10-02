@@ -11,8 +11,7 @@
 
 use alloy::{
     primitives::{Address, B256, U256},
-    providers::{DynProvider, Provider, ProviderBuilder},
-    signers::local::PrivateKeySigner,
+    providers::{BoxedProvider, Provider, ProviderBuilder},
     sol,
 };
 use tracing::{debug, info, warn};
@@ -60,24 +59,6 @@ pub struct Limits {
     pub max_claim_per_task: u128,
 }
 
-#[derive(Debug, Clone)]
-pub struct CommitIntent {
-    /// Task identifier this epoch belongs to.
-    pub task_id: U256,
-    /// Sequential epoch index within the task.
-    pub epoch: u32,
-    /// STARK proof of compute for this epoch.
-    pub proof: B256,
-    /// CID of the encrypted weights committed for this epoch.
-    pub enc_weights_cid: B256,
-    /// Digest of the plaintext weights.
-    pub weights_digest: B256,
-    /// CID of the training metrics.
-    pub metrics_cid: B256,
-    /// CID of the execution trace.
-    pub trace_digest: B256,
-}
-
 /// Point reads and transactions.
 ///
 /// Deliberately thin. Every write is a single call with no retry-on-revert and no internal
@@ -90,7 +71,7 @@ pub struct CommitIntent {
 /// the operator's balance on a task that is not worth it.
 #[derive(Debug, Clone)]
 pub struct OrchestratorClient {
-    provider: DynProvider,
+    provider: BoxedProvider,
     wallet: PrivateKeySigner,
     cipher_task: Address,
     vault: Address,
@@ -115,7 +96,7 @@ impl OrchestratorClient {
 
         // The wallet is bound here rather than at each call site so nonce management and gas
         // estimation are the provider's problem, not the caller's.
-        let provider: DynProvider = ProviderBuilder::new()
+        let provider: BoxedProvider = ProviderBuilder::new()
             .wallet(wallet.clone())
             .connect_http(url)
             .boxed();
@@ -163,13 +144,13 @@ impl OrchestratorClient {
     /// checks `nodeRegistered` first to avoid paying gas.
     pub async fn register_node(&self, task_id: U256, bls_pub_key: B256) -> Result<()> {
         let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
+            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
         let tx = contract.registerNode(task_id, bls_pub_key).send().await?;
         let receipt = tx.get_receipt().await?;
         ensure_success(
             receipt.status(),
             "registerNode",
-            format!("{:x}", tx.tx_hash()),
+            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
         )?;
         info!(%task_id, "registered for task");
         Ok(())
@@ -178,7 +159,7 @@ impl OrchestratorClient {
     /// Post an epoch commit. Returns the transaction hash.
     pub async fn commit_epoch(&self, intent: &CommitIntent) -> Result<B256> {
         let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
+            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
         let tx = contract
             .commitEpoch(
                 intent.task_id,
@@ -201,7 +182,7 @@ impl OrchestratorClient {
     /// Report that our independent re-execution disagreed with the committed digest.
     pub async fn report_dispute(&self, task_id: U256, epoch: u32, digest: B256) -> Result<()> {
         let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
+            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
         let tx = contract
             .reportDispute(task_id, epoch, digest)
             .send()
@@ -210,7 +191,7 @@ impl OrchestratorClient {
         ensure_success(
             receipt.status(),
             "reportDispute",
-            format!("{:x}", tx.tx_hash()),
+            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
         )?;
         info!(%task_id, epoch, "dispute reported");
         Ok(())
@@ -226,7 +207,7 @@ impl OrchestratorClient {
         signature: Vec<u8>,
     ) -> Result<u128> {
         let contract =
-            IPaymentVaultCalls::new(self.vault, self.provider.clone());
+            IPaymentVaultCalls::new(self.vault, self.wallet.clone(), self.provider.clone());
         let tx = contract
             .redeem(
                 channel_id,
@@ -241,7 +222,7 @@ impl OrchestratorClient {
         ensure_success(
             receipt.status(),
             "redeem",
-            format!("{:x}", tx.tx_hash()),
+            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
         )?;
         Ok(amount)
     }

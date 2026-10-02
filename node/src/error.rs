@@ -15,9 +15,6 @@ pub enum Error {
     #[error("chain rpc: {0}")]
     Chain(String),
 
-    #[error("alloy: {0}")]
-    Alloy(String),
-
     #[error("contract call {method} reverted: {reason}")]
     ContractCall {
         method: &'static str,
@@ -235,22 +232,4 @@ pub enum IdentityError {
         configured: alloy::primitives::Address,
         derived: alloy::primitives::Address,
     },
-}
-
-impl From<alloy::providers::RpcError<alloy::transports::TransportErrorKind>> for Error {
-    fn from(e: alloy::providers::RpcError<alloy::transports::TransportErrorKind>) -> Self {
-        Error::Alloy(e.to_string())
-    }
-}
-
-impl From<alloy::contract::Error> for Error {
-    fn from(e: alloy::contract::Error) -> Self {
-        Error::Alloy(e.to_string())
-    }
-}
-
-impl From<alloy::transport::TransportErrorKind> for Error {
-    fn from(e: alloy::transport::TransportErrorKind) -> Self {
-        Error::Alloy(e.to_string())
-    }
 }
