@@ -163,7 +163,7 @@ impl OrchestratorClient {
     /// checks `nodeRegistered` first to avoid paying gas.
     pub async fn register_node(&self, task_id: U256, bls_pub_key: B256) -> Result<()> {
         let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
+            ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
         let tx = contract.registerNode(task_id, bls_pub_key).send().await?;
         let receipt = tx.get_receipt().await?;
         ensure_success(
@@ -178,7 +178,7 @@ impl OrchestratorClient {
     /// Post an epoch commit. Returns the transaction hash.
     pub async fn commit_epoch(&self, intent: &CommitIntent) -> Result<B256> {
         let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
+            ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
         let tx = contract
             .commitEpoch(
                 intent.task_id,
@@ -201,7 +201,7 @@ impl OrchestratorClient {
     /// Report that our independent re-execution disagreed with the committed digest.
     pub async fn report_dispute(&self, task_id: U256, epoch: u32, digest: B256) -> Result<()> {
         let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
+            ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
         let tx = contract
             .reportDispute(task_id, epoch, digest)
             .send()
@@ -226,7 +226,7 @@ impl OrchestratorClient {
         signature: Vec<u8>,
     ) -> Result<u128> {
         let contract =
-            IPaymentVaultCalls::new(self.vault, self.wallet.clone(), self.provider.clone());
+            IPaymentVaultCalls::new(self.vault, self.provider.clone());
         let tx = contract
             .redeem(
                 channel_id,
