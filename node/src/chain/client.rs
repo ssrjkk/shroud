@@ -11,7 +11,8 @@
 
 use alloy::{
     primitives::{Address, B256, U256},
-    providers::{BoxedProvider, Provider, ProviderBuilder},
+    providers::{DynProvider, Provider, ProviderBuilder},
+    signers::local::PrivateKeySigner,
     sol,
 };
 use tracing::{debug, info, warn};
@@ -59,6 +60,24 @@ pub struct Limits {
     pub max_claim_per_task: u128,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommitIntent {
+    /// Task identifier this epoch belongs to.
+    pub task_id: U256,
+    /// Sequential epoch index within the task.
+    pub epoch: u32,
+    /// STARK proof of compute for this epoch.
+    pub proof: B256,
+    /// CID of the encrypted weights committed for this epoch.
+    pub enc_weights_cid: B256,
+    /// Digest of the plaintext weights.
+    pub weights_digest: B256,
+    /// CID of the training metrics.
+    pub metrics_cid: B256,
+    /// CID of the execution trace.
+    pub trace_digest: B256,
+}
+
 /// Point reads and transactions.
 ///
 /// Deliberately thin. Every write is a single call with no retry-on-revert and no internal
@@ -71,7 +90,7 @@ pub struct Limits {
 /// the operator's balance on a task that is not worth it.
 #[derive(Debug, Clone)]
 pub struct OrchestratorClient {
-    provider: BoxedProvider,
+    provider: DynProvider,
     wallet: PrivateKeySigner,
     cipher_task: Address,
     vault: Address,
@@ -96,7 +115,7 @@ impl OrchestratorClient {
 
         // The wallet is bound here rather than at each call site so nonce management and gas
         // estimation are the provider's problem, not the caller's.
-        let provider: BoxedProvider = ProviderBuilder::new()
+        let provider: DynProvider = ProviderBuilder::new()
             .wallet(wallet.clone())
             .connect_http(url)
             .boxed();

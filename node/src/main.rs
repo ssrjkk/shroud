@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use alloy::providers::{BoxedProvider, ProviderBuilder};
+use alloy::providers::{DynProvider, ProviderBuilder};
 use clap::Parser;
 use shroud_node::{
     chain::{OrchestratorClient, Watcher},
@@ -79,7 +79,7 @@ async fn run() -> Result<()> {
             field: "chain.rpc_url",
             reason: format!("{e}"),
         })?;
-    let watcher_provider: BoxedProvider = ProviderBuilder::new().connect_http(rpc_url).boxed();
+    let watcher_provider: DynProvider = ProviderBuilder::new().connect_http(rpc_url).boxed();
 
     let watcher = Arc::new(Watcher::new(watcher_provider, &cfg, state.clone())?);
 

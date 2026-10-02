@@ -27,7 +27,7 @@ use std::{
 
 use alloy::{
     primitives::{Address, Log, B256, U256},
-    providers::{BoxedProvider, Provider},
+    providers::{DynProvider, Provider},
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,7 @@ pub struct Checkpoint {
 /// Cursor + reorg policy.
 #[derive(Debug)]
 pub struct Watcher {
-    provider: BoxedProvider,
+    provider: DynProvider,
     contract: Address,
     vault: Address,
     finality: FinalityConfig,
@@ -159,7 +159,7 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new(provider: BoxedProvider, cfg: &Config, state: Arc<NodeState>) -> Result<Self> {
+    pub fn new(provider: DynProvider, cfg: &Config, state: Arc<NodeState>) -> Result<Self> {
         let (tx, rx) = broadcast::channel(1_024);
         if cfg.chain.get_logs_chunk > cfg.chain.get_logs_window {
             return Err(ConfigError::Invalid {
