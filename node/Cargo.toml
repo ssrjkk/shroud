@@ -19,7 +19,7 @@ edition = "2021"
 rust-version = "1.94.1"
 description = "Shroud compute node: FHE epoch execution, ZK proof of compute, streaming payouts"
 license = "MIT"
-repository = "https://github.com/shroud/shroud"
+repository = "https://github.com/ssrjkk/shroud"
 
 [lib]
 name = "shroud_node"
