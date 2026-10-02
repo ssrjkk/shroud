@@ -43,6 +43,7 @@ alloy = { version = "2.5", default-features = false, features = [
   "reqwest",
   "reqwest-rustls-tls",
   "sol-types",
+  "rpc",
   "contract",
   "signer-local",
   "rpc-types-eth",
