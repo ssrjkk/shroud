@@ -169,7 +169,7 @@ impl OrchestratorClient {
         ensure_success(
             receipt.status(),
             "registerNode",
-            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
+            format!("{:x}", tx.tx_hash()),
         )?;
         info!(%task_id, "registered for task");
         Ok(())
@@ -210,7 +210,7 @@ impl OrchestratorClient {
         ensure_success(
             receipt.status(),
             "reportDispute",
-            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
+            format!("{:x}", tx.tx_hash()),
         )?;
         info!(%task_id, epoch, "dispute reported");
         Ok(())
@@ -241,7 +241,7 @@ impl OrchestratorClient {
         ensure_success(
             receipt.status(),
             "redeem",
-            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
+            format!("{:x}", tx.tx_hash()),
         )?;
         Ok(amount)
     }

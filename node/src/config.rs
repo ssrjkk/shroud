@@ -14,7 +14,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::{ConfigError, Result};
+use crate::error::{ConfigError, Error, Result};
 
 /// Compute node.
 #[derive(Debug, Parser, Clone)]
