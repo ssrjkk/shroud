@@ -19,7 +19,7 @@ edition = "2021"
 rust-version = "1.94.1"
 description = "Shroud compute node: FHE epoch execution, ZK proof of compute, streaming payouts"
 license = "MIT"
-repository = "https://github.com/shroud/shroud"
+repository = "https://github.com/ssrjkk/shroud"
 
 [lib]
 name = "shroud_node"
@@ -58,6 +58,7 @@ alloy = { version = "2.5", default-features = false, features = [
 tonic = { version = "0.14", default-features = false, features = ["server", "codegen", "router", "transport", "channel", "gzip", "tls-ring", "tls-webpki-roots"] }
 prost = "0.14"
 prost-types = "0.14"
+tonic-prost = "0.14"
 
 # `tonic-build` must be a *build* dependency: `build.rs` cannot see regular or optional
 # dependencies. An earlier draft had it as an optional regular dependency activated by the

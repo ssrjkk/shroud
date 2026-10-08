@@ -347,7 +347,7 @@ describe("CipherTask", () => {
       await expect(fx.task.finalizeEpoch(id, 0)).to.be.revertedWithCustomError(fx.task, "DisputeBelowQuorum");
     });
 
-    it("quorum rejects the epoch and pays nobody", async () => {
+    it("quorum rejects the epoch and pays reporters from the lock", async () => {
       const { fx, id } = await committing();
       const { task, vault, node2, node3, node4 } = fx;
       await task.connect(node2).reportDispute(id, 0, bytes32Of(1234));
@@ -360,9 +360,55 @@ describe("CipherTask", () => {
 
       await expect(task.finalizeEpoch(id, 0)).to.emit(task, "TaskAborted");
       expect((await task.tasks(id)).nextEpoch).to.equal(1n);
+      // The disputed epoch's lock went to the reporters, not to a node winner.
       expect(await task.epochChannel(id, 0)).to.equal(0n);
-      // Escrow untouched, still in the sub-balance.
-      expect(await vault.taskBalance(id)).to.be.greaterThan(0n);
+      // Escrow is reduced by the reporter bounty (reexecutionBps=200 of lock 7.5e7 = 1.5e6)
+      // but contributor + committee pools remain for settle.
+      const balanceAfter = await vault.taskBalance(id);
+      expect(balanceAfter).to.be.greaterThan(0n);
+    });
+
+    it("pays reporters a bounty from the disputed lock, and nobody is paid as winner", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node, node2, node3, node4 } = fx;
+      const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
+
+      await task.connect(node2).reportDispute(id, 0, bytes32Of(1234));
+      await task.connect(node3).reportDispute(id, 0, bytes32Of(1235));
+      await task.connect(node4).reportDispute(id, 0, bytes32Of(1236));
+      await task.finalizeEpoch(id, 0);
+
+      // lock = 1e9 * 1500 / 10000 / 2 = 7.5e7; bounty = lock * 200 / 10000 = 1.5e6;
+      // 1.5e6 / 3 = 5e5 each, remainder 0.
+      const expectedEach = 500_000n;
+      const subBalanceBefore = await vault.taskBalance(id);
+
+      // Each reporter can redeem its slice over ERC-1271, exactly like a winner. The channels are
+      // opened in report order, so channel 1/2/3 belong to node2/node3/node4.
+      for (const [i, reporter] of [node2, node3, node4].entries()) {
+        const ch = await vault.channelInfo(BigInt(i + 1));
+        expect(ch.node).to.equal(reporter.address);
+        expect(ch.maxCumulative).to.equal(expectedEach);
+        const sig = ethers.AbiCoder.defaultAbiCoder().encode(
+          ["uint256", "uint256", "uint128"],
+          [BigInt(i + 1), 0, ch.maxCumulative]
+        );
+        const digest = await vault.redeemDigest(
+          BigInt(i + 1), await task.getAddress(), reporter.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256
+        );
+        expect(await task.isValidSignature(digest, sig)).to.equal("0x1626ba7e");
+        await vault.connect(reporter).redeem(BigInt(i + 1), 0, ch.maxCumulative, ethers.MaxUint256, sig);
+        expect(await token.balanceOf(reporter.address)).to.equal(expectedEach);
+      }
+
+      // The lying claimant is paid nothing.
+      expect(await token.balanceOf(node.address)).to.equal(0n);
+      // `epochChannel` still reads 0: a bounty is not a win.
+      expect(await task.epochChannel(id, 0)).to.equal(0n);
+      expect(subBalanceBefore).to.equal(1_000_000_000n - 1_500_000n);
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
     });
 
     it("refuses a report that agrees with the claim", async () => {
@@ -370,6 +416,45 @@ describe("CipherTask", () => {
       await expect(
         fx.task.connect(fx.node2).reportDispute(id, 0, bytes32Of(999))
       ).to.be.revertedWithCustomError(fx.task, "InvalidParams");
+    });
+
+    it("does not let a losing committer redirect the dispute away from the winner", async () => {
+      // The bug this guards: `_claimedDigest` was written by *every* committer, so the last
+      // commit won it. A losing node could then submit a valid-but-different commit and move the
+      // dispute target onto its own digest. Every honest re-executor reproduces the winner's
+      // digest (computation is deterministic), so they would all file "disputes", reach quorum,
+      // and get an honest epoch rejected — for free, since the liar paid nothing.
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node, node2, node3, node4 } = fx;
+      const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+
+      // The tie-break is the lower address, not commit order, so derive it rather than assume.
+      const [winner, loser] = BigInt(node.address) < BigInt(node2.address) ? [node, node2] : [node2, node];
+      const winnerDigest = bytes32Of(999);
+
+      await task.connect(winner).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), winnerDigest);
+      await task.connect(loser).commitEpoch(id, 0, proofRef(2), bytes32Of(302), bytes32Of(402), bytes32Of(502), bytes32Of(888));
+
+      expect(await task.epochWinner(id, 0)).to.equal(winner.address);
+
+      // Honest re-executors all reproduce the winner's digest, so there is no disagreement and
+      // every report is refused. With the bug, `_claimedDigest` would be 888 and these reports
+      // would have been counted, poisoning the epoch.
+      for (const reporter of [node3, node4]) {
+        await expect(
+          task.connect(reporter).reportDispute(id, 0, winnerDigest)
+        ).to.be.revertedWithCustomError(task, "InvalidParams");
+      }
+      const [, have] = await task.disputeQuorum(id);
+      expect(have).to.equal(0n);
+
+      // So the epoch settles normally and the honest winner is paid.
+      await time.increase(3600 + 600);
+      await task.finalizeEpoch(id, 0);
+      const channelId = await task.epochChannel(id, 0);
+      expect((await vault.channelInfo(channelId)).node).to.equal(winner.address);
+      expect(await token.balanceOf(loser.address)).to.equal(0n);
     });
 
     it("no dispute -> the winner gets an ERC-1271 redeemable channel", async () => {
@@ -554,6 +639,32 @@ describe("CipherTask", () => {
   });
 
   describe("reward channel lifecycle", () => {
+    it("rejects a sliceIndex that does not fit the monotonic counter", async () => {
+      // `consumed` is a uint64 and `uint64(sliceIndex)` truncates instead of reverting, so
+      // `2**64` folded to 0 and set `consumed` back to 1 — silently rewinding the replay guard
+      // that F-14 documents. `withdrawn` still bounds the money, but the index must not move
+      // backwards, and `uint64(sliceIndex) + 1` must not be able to overflow either.
+      const fx = await deployFixture();
+      const { task, vault, node } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, node);
+
+      const channelId = await task.epochChannel(id, 0);
+      const ch = await vault.channelInfo(channelId);
+      const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, ch.maxCumulative]);
+      await vault.connect(node).redeem(channelId, 0, ch.maxCumulative, ethers.MaxUint256, sig);
+      const consumedAfterFirst = (await vault.channelInfo(channelId)).consumed;
+      expect(consumedAfterFirst).to.equal(1n);
+
+      for (const bad of [1n << 64n, ethers.MaxUint256]) {
+        await expect(
+          vault.connect(node).redeem(channelId, bad, ch.maxCumulative, ethers.MaxUint256, sig)
+        ).to.be.revertedWithCustomError(vault, "SliceIndexOutOfRange");
+      }
+      // The counter did not move.
+      expect((await vault.channelInfo(channelId)).consumed).to.equal(consumedAfterFirst);
+    });
+
     it("reclaim after a full redeem closes the channel cleanly and preserves the vault invariant", async () => {
       const fx = await deployFixture();
       const { task, vault, token, node } = fx;
@@ -612,16 +723,48 @@ describe("CipherTask", () => {
       expect(await token.balanceOf(buyer.address)).to.equal(escrow);
     });
 
-    it("retains a slice for work in flight", async () => {
+    it("strands nothing when aborted with an open but uncommitted epoch", async () => {
       const fx = await deployFixture();
-      const { task, vault, buyer, node, escrow } = fx;
+      const { task, vault, token, buyer, node, escrow } = fx;
       const id = await sealed(fx, { epochs: 3 });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
       await task.connect(buyer).abort(id, reason4("too_expensive"));
 
-      // `ABORT_LOCK_BPS` is 2000, so 20% of the 5e7 epoch lock (1e7) is retained for the node
-      // that may have been working, and the remaining 9.9e8 goes back to the buyer.
-      expect(await vault.taskBalance(id)).to.equal(10_000_000n);
+      // Nobody committed, so nobody did work and nothing is retained: the buyer is made whole.
+      // The previous behaviour withheld ABORT_LOCK_BPS (20% of the 5e7 lock = 1e7) that was
+      // then never paid to anyone, permanently burning it in the vault.
+      await vault.connect(buyer).claim();
+      expect(await token.balanceOf(buyer.address)).to.equal(escrow);
+      expect(await vault.taskBalance(id)).to.equal(0n);
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+      void node;
+    });
+
+    it("retains a redeemable slice for a node that verified an epoch before the abort", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node, escrow } = fx;
+      const id = await sealed(fx, { epochs: 3 });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
+      await task.connect(buyer).abort(id, reason4("too_expensive"));
+
+      // ABORT_LOCK_BPS is 2000, so the node keeps 20% of the 5e7 epoch lock, and it is a real
+      // redeemable channel rather than a number stuck in the sub-balance.
+      const slice = 10_000_000n;
+      const channelId = await vault.channelNonce();
+      const ch = await vault.channelInfo(channelId);
+      expect(ch.node).to.equal(node.address);
+      expect(ch.maxCumulative).to.equal(slice);
+
+      const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, slice]);
+      const digest = await vault.redeemDigest(channelId, await task.getAddress(), node.address, slice, ch.unlockAt, ethers.MaxUint256);
+      await vault.connect(node).redeem(channelId, 0, slice, ethers.MaxUint256, sig);
+      expect(await token.balanceOf(node.address)).to.equal(slice);
+
+      await vault.connect(buyer).claim();
+      expect(await token.balanceOf(buyer.address)).to.equal(escrow - slice);
+      expect(await vault.taskBalance(id)).to.equal(0n);
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
     });
   });
 
@@ -641,6 +784,141 @@ describe("CipherTask", () => {
       const { task, owner, buyer } = fx;
       await task.connect(owner).setPaused(true);
       await expect(task.connect(buyer).createTask(fx.escrow, params(buyer.address))).to.be.revertedWithCustomError(task, "Paused");
+    });
+
+    it("holds the reentrancy guard when a token calls back mid-transfer", async () => {
+      // A hostile escrow token is the realistic attack surface: `fundTask` is `nonReentrant` and
+      // pulls with `transferFrom`, so a token that re-enters the vault inside its own
+      // `transferFrom` lands while the guard flag is set. The callback targets `claim`, which has
+      // no access control, so the only thing that can stop it is the guard.
+      const base = await deployFixture();
+      const evil = await ethers.deployContract("ReentrantTokenMock", [ethers.ZeroAddress, "0x"]);
+      const victim = await ethers.deployContract("PaymentVault", [await evil.getAddress()]);
+
+      await evil.mint(base.buyer.address, 1_000_000n);
+      await evil.connect(base.buyer).approve(await victim.getAddress(), ethers.MaxUint256);
+      await victim.setTaskManager(base.owner.address);
+      await evil.setTarget(await victim.getAddress());
+      await evil.setReentry(victim.interface.encodeFunctionData("claim"));
+
+      await victim.connect(base.owner).fundTask(1n, 1_000_000n, base.buyer.address);
+
+      // The callback fired and was rejected with the guard's own selector, not with a business
+      // error: that is the difference between "the flag held" and "the call happened to fail".
+      expect(await evil.tried()).to.equal(true);
+      const ret = await evil.lastRevert();
+      expect(ret).to.not.equal("0x");
+      expect(ret.slice(0, 10)).to.equal(ethers.id("Reentrancy()").slice(0, 10));
+      // The outer call completed and the vault's invariant still holds.
+      expect(await victim.taskBalance(1n)).to.equal(1_000_000n);
+      expect(await victim.totalLocked()).to.equal(await victim.accountedLocked());
+    });
+
+    it("releases the reentrancy guard after a successful call", async () => {
+      const fx = await deployFixture();
+      const token = await ethers.deployContract("TestToken");
+      const vault = await ethers.deployContract("PaymentVault", [await token.getAddress()]);
+      await vault.setTaskManager(fx.owner.address);
+      await token.mint(fx.buyer.address, 3_000_000n);
+      await token.connect(fx.buyer).approve(await vault.getAddress(), ethers.MaxUint256);
+
+      // Three sequential guarded calls: if the flag leaked from the first, the later ones would
+      // revert with `Reentrancy`. Transient storage is per-transaction, so all three must pass.
+      for (const id of [7n, 8n, 9n]) {
+        await vault.fundTask(id, 500_000n, fx.buyer.address);
+        expect(await vault.taskBalance(id)).to.equal(500_000n);
+      }
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+    });
+  });
+
+  describe("verifier rotation timelock", () => {
+    // The verifier gates every payout, so a one-transaction owner swap meant a compromised key
+    // could install a permissive verifier with no window in which to notice.
+    async function verifierFixture() {
+      const [owner, outsider] = await ethers.getSigners();
+      const inner = await ethers.deployContract("MockStarkVerifier", [48_576]);
+      const altInner = await ethers.deployContract("MockStarkVerifier", [48_576]);
+      // The timelock lives on the ProofVerifier adapter, not on the mock it points at.
+      const verifier = await ethers.deployContract("ProofVerifier", [await inner.getAddress(), 48_576, bytes32Of("domain")]);
+      const alt = await altInner.getAddress();
+      return { owner, outsider, verifier, alt };
+    }
+
+    it("refuses to rotate immediately and requires the timelock to elapse", async () => {
+      const { owner, verifier, alt } = await verifierFixture();
+      const original = await verifier.starkVerifier();
+
+      await expect(verifier.connect(owner).proposeRotation(alt)).to.emit(verifier, "VerifierRotationProposed");
+      // Still the old verifier: proposing must not change anything yet.
+      expect(await verifier.starkVerifier()).to.equal(original);
+
+      await expect(verifier.executeRotation()).to.be.revertedWithCustomError(verifier, "TooEarly");
+      await time.increase(7 * 86_400);
+      await expect(verifier.executeRotation()).to.emit(verifier, "VerifierRotated");
+      expect(await verifier.starkVerifier()).to.equal(alt);
+    });
+
+    it("lets anyone execute after the delay, so a frozen rotation cannot outlive its owner key", async () => {
+      const { outsider, verifier, alt } = await verifierFixture();
+      await verifier.proposeRotation(alt);
+      await time.increase(7 * 86_400);
+      // Not the owner, and not blocked: the delay has passed, so the rotation is owed.
+      await expect(verifier.connect(outsider).executeRotation()).to.emit(verifier, "VerifierRotated");
+      expect(await verifier.starkVerifier()).to.equal(alt);
+    });
+
+    it("lets only the owner cancel a queued rotation, and refuses a double rotation", async () => {
+      const { owner, outsider, verifier, alt } = await verifierFixture();
+      await verifier.connect(owner).proposeRotation(alt);
+      await expect(verifier.connect(outsider).cancelRotation()).to.be.revertedWithCustomError(verifier, "NotOwner");
+
+      await expect(verifier.connect(owner).cancelRotation()).to.emit(verifier, "VerifierRotationCancelled");
+      await time.increase(7 * 86_400);
+      // Cancelled means cancelled: the old verifier stays.
+      await expect(verifier.executeRotation()).to.be.revertedWithCustomError(verifier, "NoPendingRotation");
+      expect(await verifier.starkVerifier()).to.not.equal(alt);
+    });
+
+    it("refuses a rotation to the zero address and by a non-owner", async () => {
+      const { owner, outsider, verifier } = await verifierFixture();
+      await expect(verifier.connect(owner).proposeRotation(ethers.ZeroAddress)).to.be.revertedWithCustomError(verifier, "ZeroAddress");
+      await expect(verifier.connect(outsider).proposeRotation(ethers.ZeroAddress)).to.be.revertedWithCustomError(verifier, "NotOwner");
+    });
+  });
+
+  describe("devnet mocks are not open to anyone", () => {
+    // `deploy.ts` installs both of these as the devnet's real verifier and BLS verifier, so
+    // unrestricted test helpers were reachable attack surface rather than test-only sloppiness.
+    it("stops an outsider from poisoning a transcript", async () => {
+      const fx = await deployFixture();
+      const { verifier, outsider, task, buyer, node } = fx;
+      const id = await sealed(fx);
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      const transcript = await task.proofTranscript(id, 0, bytes32Of(999));
+
+      // Anyone could spend a transcript and permanently invalidate the honest node's proof for
+      // that (task, epoch), because `consumed` is never cleared.
+      await expect(verifier.connect(outsider).consume(transcript)).to.be.revertedWithCustomError(verifier, "NotOwner");
+      await verifier.connect(fx.owner).consume(transcript);
+      // Now the owner-issued consumption takes effect and the proof is refused.
+      await expect(
+        task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(999))
+      ).to.be.revertedWithCustomError(task, "ProofRejected");
+    });
+
+    it("stops an outsider from forging the committee signature", async () => {
+      const fx = await deployFixture();
+      const { bls, outsider, gate, task } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, fx.node);
+      await task.settle(id);
+      const [cid] = await task.acceptedWeights(id);
+      const message = await gate.revealMessage(id, cid);
+
+      await expect(bls.connect(outsider).approve(message)).to.be.revertedWithCustomError(bls, "NotOwner");
+      // So an outsider cannot open a reveal for a task they have no business touching.
+      await expect(gate.requestReveal(id, cid, "0x01")).to.be.revertedWithCustomError(gate, "InvalidBLS");
     });
   });
 
@@ -666,20 +944,49 @@ describe("CipherTask", () => {
       await expect(fx.task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(task, "InvalidParams");
     });
 
-    it("reclaimUnspentEpochs returns the unused node pool to the buyer once epochs are done", async () => {
+    it("reclaimUnspentEpochs never touches the contributor or committee pools", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node, node2, node3, node4, escrow } = fx;
+      const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
+      // Quorum rejects epoch 0: no winner is paid, and the reporter bounty is only 200 bps of
+      // the lock. Run epoch 1 cleanly so `nextEpoch == epochs` and the buyer can reclaim.
+      for (const r of [node2, node3, node4]) await task.connect(r).reportDispute(id, 0, bytes32Of(777));
+      await task.finalizeEpoch(id, 0);
+      await runEpoch(fx, id, 1, node);
+
+      // userPool 800M + committeePool 50M must survive; only the unspent node pool may go back.
+      const reserved = 800_000_000n + 50_000_000n;
+      const available = await vault.taskBalance(id);
+      expect(available).to.be.greaterThan(reserved);
+      await task.connect(buyer).reclaimUnspentEpochs(id);
+
+      expect(await vault.taskBalance(id)).to.equal(reserved);
+      // The payout is credited, not pushed, so the buyer claims it.
+      expect(await task.pendingPayout(buyer.address)).to.equal(available - reserved);
+      await vault.connect(buyer).claim();
+      expect(await token.balanceOf(buyer.address)).to.equal(available - reserved);
+      void escrow;
+    });
+
+    it("reclaimUnspentEpochs returns nothing when only the contributor and committee pools remain", async () => {
       const fx = await deployFixture();
       const { task, vault, token, buyer, node, escrow } = fx;
       const id = await sealed(fx, { epochs: 1, nodes: [node] });
       await runEpoch(fx, id, 0, node);
 
-      // After the single epoch, the node pool (150M) sits in the winner's channel. The buyer
-      // reclaims what is still in the sub-balance (contributors + committee pools).
-      const before = await vault.taskBalance(id);
-      await expect(task.connect(buyer).reclaimUnspentEpochs(id)).to.emit(task, "Withdrawn");
-      const after = await vault.taskBalance(id);
-      expect(after).to.equal(0n);
-      expect(before).to.be.greaterThan(0n);
-      void token;
+      // The whole node pool went to the winner's channel, so the sub-balance holds exactly the
+      // two pools that `settle` owns. Reclaiming must be a no-op rather than a silent drain of
+      // what the contributors and the committee are owed.
+      expect(await vault.taskBalance(id)).to.equal(850_000_000n);
+      await task.connect(buyer).reclaimUnspentEpochs(id);
+      expect(await vault.taskBalance(id)).to.equal(850_000_000n);
+      expect(await token.balanceOf(buyer.address)).to.equal(0n);
+
+      // `settle` still pays everyone out in full afterwards.
+      await task.settle(id);
+      expect(await vault.taskBalance(id)).to.equal(0n);
       void escrow;
     });
   });
@@ -712,6 +1019,71 @@ describe("CipherTask", () => {
     it("withdraw is blocked before the reveal starts", async () => {
       const { fx, id } = await settled();
       await expect(fx.task.connect(fx.buyer).withdraw(id)).to.be.revertedWithCustomError(fx.task, "RevealNotAllowed");
+    });
+
+    it("withdraw is blocked while the gate has not reached threshold", async () => {
+      // The bug this guards: `withdraw` only checked `status == Revealing`, so the buyer could
+      // call it the instant `requestReveal` succeeded — zero partials submitted — and reach
+      // `Disclosed`. That status is the protocol's on-chain attestation that the committee
+      // decrypted the output, so bypassing the ceremony made it worthless as evidence.
+      const { fx, id } = await settled();
+      const { task, bls, gate, buyer, committee, owner } = fx;
+      const [cid] = await task.acceptedWeights(id);
+
+      await bls.approve(await gate.revealMessage(id, cid));
+      await task.connect(buyer).requestReveal(id, "0x01");
+      expect((await task.tasks(id)).status).to.equal(8n); // Revealing
+      expect(await gate.revealCompleted(id)).to.equal(false);
+
+      // Not the buyer, not the update manager, not even the owner: nobody may shortcut it.
+      for (const caller of [buyer, owner]) {
+        await expect(task.connect(caller).withdraw(id)).to.be.revertedWithCustomError(task, "RevealNotAllowed");
+      }
+      expect((await task.tasks(id)).status).to.equal(8n); // still Revealing
+
+      // Once the committee actually submits, the same call succeeds.
+      await gate.connect(committee).submitPartialDecryption(id, bytes32Of(1));
+      expect(await gate.revealCompleted(id)).to.equal(true);
+      await expect(task.connect(buyer).withdraw(id)).to.emit(task, "RevealCompleted");
+      expect((await task.tasks(id)).status).to.equal(9n); // Disclosed
+    });
+
+    it("revealCompleted is false for a task that never requested a reveal", async () => {
+      const { fx, id } = await settled();
+      expect(await fx.gate.revealCompleted(id)).to.equal(false);
+      expect(await fx.gate.partialCount(id)).to.equal(0n);
+    });
+  });
+
+  describe("encrypted state ACL", () => {
+    it("refuses to grant decryption of the orchestration state to an unrelated address", async () => {
+      // The bug this guards: `grantStateAccess(account)` had no access control at all, so any
+      // caller could hand a third party a decryption grant on `_encState` — the buyer's
+      // encrypted loss curve, noise budget and epoch checkpoint.
+      const fx = await deployFixture();
+      const { task, buyer, alice, outsider, node } = fx;
+      const id = await sealed(fx, { nodes: [node] });
+
+      for (const stranger of [alice, outsider]) {
+        await expect(
+          task.grantStateAccess(id, stranger.address)
+        ).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("not a task party");
+      }
+      // The restriction is on the *target*, not just the caller: even the buyer, whose telemetry
+      // this is, cannot widen the ACL to an address that has no role in the task.
+      await expect(
+        task.connect(buyer).grantStateAccess(id, alice.address)
+      ).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("not a task party");
+
+      // The parties the protocol already trusts keep working access: a registered node, the
+      // buyer themselves, and the owner.
+      await expect(task.grantStateAccess(id, node.address)).to.emit(task, "StateAccessGranted");
+      await expect(task.grantStateAccess(id, buyer.address)).to.emit(task, "StateAccessGranted");
+      await expect(task.grantStateAccess(id, fx.owner.address)).to.emit(task, "StateAccessGranted");
+      // Zero address is rejected outright.
+      await expect(task.grantStateAccess(id, ethers.ZeroAddress)).to.be.revertedWithCustomError(task, "ZeroAddress");
+      // Unknown task.
+      await expect(task.grantStateAccess(999n, node.address)).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("unknown");
     });
   });
 });

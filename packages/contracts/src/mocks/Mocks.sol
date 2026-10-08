@@ -15,6 +15,8 @@ contract MockStarkVerifier is IProofVerifier {
     bytes4 internal constant MAGIC = 0x53544152; // "STAR"
     uint256 public immutable maxProofBytes;
 
+    address public owner;
+
     mapping(bytes32 => bool) public consumed;
     uint256 public verifiedCount;
     uint256 public rejectedCount;
@@ -23,6 +25,7 @@ contract MockStarkVerifier is IProofVerifier {
     error Replayed(bytes32 transcript);
 
     constructor(uint256 maxProofBytes_) {
+        owner = msg.sender;
         maxProofBytes = maxProofBytes_;
     }
 
@@ -56,25 +59,124 @@ contract MockStarkVerifier is IProofVerifier {
 
     /// @notice Mark a transcript as used. Kept separate from the `view` verify so the mock
     ///         honours the replay-protection semantics the real verifier has internally.
-    function consume(bytes32 transcript) external {
+/// @dev Owner-only. `deploy.ts` installs this contract as the devnet's *real* `ProofVerifier`, so
+    ///      an unrestricted `consume` was not a test-only sloppiness: any address could mark a
+    ///      transcript spent and permanently invalidate the honest node's proof for that
+    ///      (task, epoch) pair, since `consumed` is keyed on the transcript and never cleared.
+    function consume(bytes32 transcript) external onlyOwner {
         if (consumed[transcript]) revert Replayed(transcript);
         consumed[transcript] = true;
         verifiedCount++;
     }
 
-    function fail(bytes32 transcript) external {
+    function fail(bytes32 transcript) external onlyOwner {
         rejectedCount++;
         transcript;
+    }
+
+    error NotOwner(address caller);
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner(msg.sender);
+        _;
+    }
+}
+
+/// @notice Reentrancy probe: an ERC-20 whose `transferFrom` calls back into an arbitrary target
+///         once, in the middle of the victim's token transfer.
+///
+///         This is the only honest way to test a reentrancy guard, because the callback has to
+///         land *inside* the victim's function body while its flag is set. Probing from the
+///         outside only proves the guard was clear before and after the call, which is the
+///         trivial half. `PaymentVault.fundTask` is the chosen victim: it is `nonReentrant` and
+///         pulls tokens, so `transferFrom` is the exact point a real attacker's token would fire.
+contract ReentrantTokenMock {
+    address public reentryTarget;
+    bytes public reentry;
+    bool public tried;
+    bytes public lastRevert;
+
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalSupply;
+
+    error ReentrancyStillPossible();
+
+    function mint(address to, uint256 v) external {
+        totalSupply += v;
+        balanceOf[to] += v;
+    }
+
+    /// @param reentry_ calldata to fire at `target_` during the first `transferFrom`; empty to
+    ///        disable the callback. Both are settable afterwards because a vault under test has to
+    ///        be deployed *after* the token it pulls, so the token cannot know its address in the
+    ///        constructor.
+    constructor(address target_, bytes memory reentry_) {
+        reentryTarget = target_;
+        reentry = reentry_;
+    }
+
+    function setTarget(address target_) external {
+        reentryTarget = target_;
+    }
+
+    function setReentry(bytes calldata reentry_) external {
+        reentry = reentry_;
+    }
+
+    function approve(address spender, uint256 v) external returns (bool) {
+        allowance[msg.sender][spender] = v;
+        return true;
+    }
+
+    function transfer(address to, uint256 v) external returns (bool) {
+        balanceOf[msg.sender] -= v;
+        balanceOf[to] += v;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 v) external returns (bool) {
+        uint256 a = allowance[from][msg.sender];
+        if (a != type(uint256).max) allowance[from][msg.sender] = a - v;
+        balanceOf[from] -= v;
+        balanceOf[to] += v;
+
+        if (!tried) {
+            tried = true;
+            bytes memory cd = reentry;
+            if (cd.length > 0) {
+                (bool ok, bytes memory ret) = reentryTarget.call(cd);
+                if (!ok) lastRevert = ret;
+            }
+        }
+        return true;
     }
 }
 
 /// @notice BLS verifier stand-in. Accepts a signature whose first 32 bytes equal a hash the
 ///         test registered as "signed by the committee".
+/// @dev `approve` is owner-only for the same reason `MockStarkVerifier.consume` is: `deploy.ts`
+///      installs this as the devnet's real `IBLS`, and an unrestricted `approve` would let any
+///      address forge the committee's aggregate signature and open a reveal for a task it has no
+///      business touching — defeating the entire point of the threshold gate.
 contract MockBLS is IBLS {
     mapping(bytes32 => bool) public approvedMessages;
     uint256 public verifyCount;
 
-    function approve(bytes32 message) external {
+    address public owner;
+
+    error NotOwner(address caller);
+
+    constructor() {
+        owner = msg.sender;
+    }
+
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotOwner(msg.sender);
+        _;
+    }
+
+    function approve(bytes32 message) external onlyOwner {
         approvedMessages[message] = true;
     }
 

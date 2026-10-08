@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shroud — private, programmable ML with verifiable compute</title>
+<meta name="description" content="An fhEVM app chain where data never leaves its owner's device in cleartext. Train a model over encrypted data, prove the work with a STARK, get paid per epoch." />
+<link rel="stylesheet" href="./assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305070a'/%3E%3Cpath d='M9 21c4-9 10-9 14 0' stroke='%2334e0c8' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='13' r='2.6' fill='%238b5cf6'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<div class="grain" aria-hidden="true"></div>
+<canvas id="mesh" class="mesh" aria-hidden="true"></canvas>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="./index.html">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26"><path d="M6 22c5-11 15-11 20 0" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><circle cx="16" cy="11" r="2.8" fill="#8b5cf6"/></svg>
+      </span>
+      <span class="brand-name">Shroud</span>
+    </a>
+    <nav class="links">
+      <a href="#how">How it works</a>
+      <a href="#properties">Properties</a>
+      <a href="./security.html">Security</a>
+      <a href="https://github.com/ssrjkk/shroud" class="btn btn-ghost">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero">
+    <p class="eyebrow">fhEVM · verifiable compute · streaming payouts</p>
+    <h1 class="hero-h">
+      Train a model over other people's<br />
+      <span class="grad">encrypted data</span> — without<br />
+      ever seeing it.
+    </h1>
+    <p class="lede">
+      Shroud is an app chain where data never leaves its owner's device in cleartext.
+      Buyers escrow a budget, nodes execute training over ciphertext, prove the work with a
+      STARK, and settle through streaming payment channels.
+    </p>
+    <div class="cta">
+      <a class="btn" href="#how">See the pipeline</a>
+      <a class="btn btn-ghost" href="./security.html">Read what is <em>not</em> enforced</a>
+    </div>
+
+    <div class="hero-note">
+      <span class="dot" aria-hidden="true"></span>
+      This code moves funds and has <strong>not</strong> been externally audited.
+      <a href="./security.html">The full status table</a> is part of the docs, not a footnote.
+    </div>
+  </section>
+
+  <section id="how" class="sect">
+    <h2 class="sect-h">The pipeline</h2>
+    <p class="sect-lede">
+      Plaintext is encrypted in the browser. From that point on nothing on the chain, and nothing
+      in a node's memory, ever holds it.
+    </p>
+
+    <div class="flow" role="img" aria-label="Data flows from plaintext through client-side FHEWasm encryption into ciphertext, then into the data-availability layer, then into a node that executes it with FHE and produces a STARK proof, which is recorded on the CipherTask contract alongside escrow, a state machine and payment channels.">
+      <div class="flow-row">
+        <div class="flow-box plain"><span class="fb-t">plaintext</span><span class="fb-s">on your device</span></div>
+        <span class="arw" aria-hidden="true"></span>
+        <div class="flow-box enc"><span class="fb-t">FHEWasm</span><span class="fb-s">in-browser encrypt</span></div>
+        <span class="arw" aria-hidden="true"></span>
+        <div class="flow-box ct"><span class="fb-t">ciphertext</span><span class="fb-s">sealed rows</span></div>
+      </div>
+      <div class="flow-row">
+        <span class="arw down" aria-hidden="true"></span>
+      </div>
+      <div class="flow-row">
+        <div class="flow-box da"><span class="fb-t">data availability</span><span class="fb-s">shards + ctDigest</span></div>
+        <span class="arw" aria-hidden="true"></span>
+        <div class="flow-box node"><span class="fb-t">node</span><span class="fb-s">FHE execute</span></div>
+        <span class="arw" aria-hidden="true"></span>
+        <div class="flow-box proof"><span class="fb-t">STARK proof</span><span class="fb-s">binds chain, task, weights</span></div>
+      </div>
+      <div class="flow-foot">
+        <code>buyer ──► CipherTask (escrow + state machine + payment channels)</code>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <article class="card">
+        <h3>Compute on encrypted data</h3>
+        <p>
+          ZK proved <em>what</em> was computed. FHE removes the need to reveal <em>the input</em>
+          at all. That is the difference between proving a result and never having to expose a
+          row.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Proof of compute</h3>
+        <p>
+          Each epoch is pinned by a STARK public input binding the chain, task, dataset root and
+          prior weights. A registered node can re-execute and report a different digest; a quorum
+          of three distinct reporters rejects the epoch and pays nobody.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Streaming payments</h3>
+        <p>
+          <code>PaymentVault</code> settles in slices via EIP-1271, so contributors and nodes are
+          paid as epochs land. An unredeemed remainder can be reclaimed by the node itself.
+        </p>
+      </article>
+    </div>
+  </section>
+
+  <section id="properties" class="sect alt">
+    <h2 class="sect-h">Properties that are actually enforced</h2>
+    <p class="sect-lede">
+      Every row below is checked by a test. The rows that are <em>not</em> enforced are on the
+      <a href="./security.html">security page</a> instead of being quietly omitted.
+    </p>
+
+    <ul class="props">
+      <li>
+        <span class="tick" aria-hidden="true"></span>
+        <div><h4>FHE end-to-end</h4><p>Input rows are encrypted client-side and never decrypted. Final weights are committee-revealed after settlement.</p></div>
+      </li>
+      <li>
+        <span class="tick" aria-hidden="true"></span>
+        <div><h4>Explicit budgets</h4><p><code>createTask(budget, params)</code> escrows exactly what the buyer names — no more.</p></div>
+      </li>
+      <li>
+        <span class="tick" aria-hidden="true"></span>
+        <div><h4>Settlement always completes</h4><p>Paying every contributor in one call measured ~584M gas against a 30M block limit, so <code>settleFrom(taskId, cursor)</code> pages at 200 per call.</p></div>
+      </li>
+      <li>
+        <span class="tick" aria-hidden="true"></span>
+        <div><h4>Disclosure is attested</h4><p>A task only reaches <code>Disclosed</code> once the committee has submitted <code>threshold</code> distinct partial decryptions. The buyer cannot shortcut the ceremony.</p></div>
+      </li>
+      <li>
+        <span class="tick" aria-hidden="true"></span>
+        <div><h4>Key rotation cannot lie</h4><p><code>NetworkParams</code> binds a candidate to its hash at proposal time and re-validates at execution, so the struct that was checked is the struct that lands.</p></div>
+      </li>
+      <li>
+        <span class="tick" aria-hidden="true"></span>
+        <div><h4>The verifier cannot be swapped instantly</h4><p>Propose → 7-day timelock → execute, with permissionless execution so a queued rotation cannot be frozen by a compromised owner.</p></div>
+      </li>
+    </ul>
+  </section>
+
+  <section class="sect">
+    <h2 class="sect-h">Three things that are not true yet</h2>
+    <p class="sect-lede">
+      A protocol that moves money should tell you where it is soft. These are the ones that matter.
+    </p>
+
+    <div class="grid-3">
+      <article class="card warn">
+        <span class="pill pill-bad">not enforced</span>
+        <h3>The dispute quorum is not Sybil-resistant</h3>
+        <p>
+          <code>registerNode</code> is permissionless and takes no stake. The quorum is a flat count
+          of three registered addresses, so a ring of three cheap addresses can deny a node its
+          reward. It cannot steal it.
+        </p>
+      </article>
+      <article class="card warn">
+        <span class="pill pill-bad">not implemented</span>
+        <h3>No contribution bond, and no on-chain STARK check</h3>
+        <p>
+          Sybil row-farming is mitigated only by <code>sqrt(rows)</code> weighting plus one shard per
+          address. Verification is sampled on chain and completed off-chain.
+        </p>
+      </article>
+      <article class="card warn">
+        <span class="pill pill-bad">residual</span>
+        <h3>A committee majority can decrypt user rows</h3>
+        <p>
+          This is documented as residual F-10 and is a property of the threshold scheme, not a bug
+          to be patched later.
+        </p>
+      </article>
+    </div>
+
+    <p class="more"><a href="./security.html">All 35 findings in the threat model →</a></p>
+  </section>
+
+  <section class="sect alt">
+    <h2 class="sect-h">Repository</h2>
+    <div class="grid-2">
+      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/packages/contracts">
+        <h3>packages/contracts</h3>
+        <p>fhEVM Solidity: <code>CipherTask</code>, <code>PaymentVault</code>, <code>DecryptionGate</code>, <code>NetworkParams</code>, <code>ProofVerifier</code>. 69 Hardhat tests.</p>
+      </a>
+      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/packages/sdk">
+        <h3>packages/sdk</h3>
+        <p><code>@shroud/sdk</code> — local FHE encryption, shard upload, EIP-712 payment binding, hardened DA client. 20 tests.</p>
+      </a>
+      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/node">
+        <h3>node</h3>
+        <p>Rust compute node: tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE.</p>
+      </a>
+      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/infra">
+        <h3>infra</h3>
+        <p>docker-compose devnet: fhEVM node, ShardStore data availability, three compute nodes.</p>
+      </a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p>MIT licensed. Built as a reference implementation of private compute, not as a product.</p>
+    <p class="foot-links">
+      <a href="https://github.com/ssrjkk/shroud">Source</a>
+      <a href="./security.html">Security status</a>
+      <a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md">Report a vulnerability</a>
+    </p>
+  </div>
+</footer>
+
+<script src="./assets/app.js"></script>
+</body>
+</html>

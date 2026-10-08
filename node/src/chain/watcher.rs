@@ -26,10 +26,10 @@ use std::{
 };
 
 use alloy::{
-    primitives::{Address, Log, B256, U256},
-    providers::{BoxedProvider, Provider},
+    primitives::{Address, B256, U256},
+    providers::{DynProvider, Provider},
+    rpc::types::Log,
 };
-use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
@@ -139,7 +139,7 @@ pub struct Checkpoint {
 /// Cursor + reorg policy.
 #[derive(Debug)]
 pub struct Watcher {
-    provider: BoxedProvider,
+    provider: DynProvider,
     contract: Address,
     vault: Address,
     finality: FinalityConfig,
@@ -159,7 +159,7 @@ pub struct Watcher {
 }
 
 impl Watcher {
-    pub fn new(provider: BoxedProvider, cfg: &Config, state: Arc<NodeState>) -> Result<Self> {
+    pub fn new(provider: DynProvider, cfg: &Config, state: Arc<NodeState>) -> Result<Self> {
         let (tx, rx) = broadcast::channel(1_024);
         if cfg.chain.get_logs_chunk > cfg.chain.get_logs_window {
             return Err(ConfigError::Invalid {
@@ -344,7 +344,7 @@ impl Watcher {
 
     /// Record the hash of the last block folded, trimming anchors we can no longer need.
     async fn record_anchor(&self, number: u64) {
-        let Some(Ok(Some(block))) = self.provider.get_block_by_number(number.into()).await else {
+        let Ok(Some(block)) = self.provider.get_block_by_number(number.into()).await else {
             // Losing an anchor is not fatal: it only means this block will not be used as a
             // fork point. The checkpoint still pins `last_scanned` across restarts.
             debug!(block = number, "could not record a reorg anchor");
@@ -376,12 +376,11 @@ impl Watcher {
         let chunk = self.get_logs_chunk.max(1);
         while cursor <= to {
             let end = to.min(cursor + chunk - 1);
-            let filter = self.filter();
+            let filter = self.filter().from_block(cursor).to_block(end);
 
             let logs = self
                 .provider
                 .get_logs(&filter)
-                .block_range(cursor..=end)
                 .await
                 .map_err(|e| Error::Chain(format!("eth_getLogs {cursor}..={end}: {e}")))?;
 
@@ -390,7 +389,7 @@ impl Watcher {
             let mut ordered: Vec<Log> = logs.into_iter().collect();
             ordered.sort_by_key(|l| {
                 (
-                    l.block_header.map(|h| h.number).unwrap_or_default(),
+                    l.block_number.unwrap_or_default(),
                     l.log_index.unwrap_or_default(),
                 )
             });
@@ -406,7 +405,7 @@ impl Watcher {
                     }
                     Ok(None) => {}
                     Err(e) => {
-                        error!(error = %e, tx = %log.address, "watcher: undecodable log; skipping")
+                        error!(error = %e, tx = %log.address(), "watcher: undecodable log; skipping")
                     }
                 }
             }
@@ -429,7 +428,7 @@ impl Watcher {
         alloy::rpc::types::Filter::new()
             .address(addresses)
             .from_block(0)
-            .selectors(events::WATCH.iter().copied())
+            .event_signature(events::WATCH.clone())
     }
 
     /// Decode a log. `Ok(None)` means "not ours after all" (a topic we subscribe to that
@@ -443,14 +442,14 @@ impl Watcher {
         let Some(first) = topics.first() else {
             return Ok(None);
         };
-        let data = log.data().0.as_slice();
+        let data = &log.data().data[..];
 
-        if log.address == self.contract {
+        if log.address() == self.contract {
             if let Some(ev) = decode_task_event(first, topics, data) {
                 return Ok(Some(ev));
             }
         }
-        if log.address == self.vault {
+        if log.address() == self.vault {
             if let Some(ev) = decode_vault_event(first, topics, data) {
                 return Ok(Some(ev));
             }
@@ -459,7 +458,7 @@ impl Watcher {
     }
 
     async fn maybe_checkpoint(&self, scanned: u64, head: u64) {
-        if scanned % self.finality.checkpoint_interval != 0 {
+        if !scanned.is_multiple_of(self.finality.checkpoint_interval) {
             return;
         }
         let cp = match self.build_checkpoint(scanned, head).await {
@@ -747,7 +746,9 @@ mod tests {
             ],
         );
         let mut data = [0u8; 128];
-        data[96..128].copy_from_slice(&1_234u128.to_be_bytes());
+        // Word 2 is the `uint128`, right-aligned in its 32-byte slot; word 3 is the `uint64`.
+        data[80..96].copy_from_slice(&1_234u128.to_be_bytes());
+        data[120..128].copy_from_slice(&7u64.to_be_bytes());
 
         let ev = decode_vault_event(&events::channel_opened(), &t, &data).expect("decodes");
         match ev {
@@ -755,11 +756,13 @@ mod tests {
                 channel_id,
                 task_id,
                 max_cumulative,
+                unlock_at,
                 ..
             } => {
                 assert_eq!(channel_id, U256::from(5));
                 assert_eq!(task_id, U256::from(3));
                 assert_eq!(max_cumulative, 1_234);
+                assert_eq!(unlock_at, 7);
             }
             other => panic!("wrong variant: {other:?}"),
         }
@@ -775,7 +778,7 @@ mod tests {
             &[B256::from(U256::from(11).to_be_bytes::<32>())],
         );
         let mut data = [0u8; 128];
-        data[96..128].copy_from_slice(&42u64.to_be_bytes());
+        data[120..128].copy_from_slice(&42u64.to_be_bytes());
 
         let ev = decode_vault_event(&events::slice_redeemed(), &t, &data).expect("decodes");
         match ev {

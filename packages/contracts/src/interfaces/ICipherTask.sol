@@ -86,6 +86,11 @@ interface ICipherTask {
         uint64 submittedAt;
         uint96 weightQ16; // Dividend.weight(rows, liveness), frozen at submission
         bool accepted;
+        /// @dev Always false. There is no slashing mechanism in this codebase: no bond is ever
+        ///      taken (`contributionBond` does not exist) and nothing writes this field. It is
+        ///      kept because `settle` reads it and because adding slashing later should not change
+        ///      the payout path — but do not read it as "fraud has been punished". Threat model
+        ///      F-01 records the missing bond as unimplemented work rather than a mitigation.
         bool slashed;
     }
 
@@ -113,7 +118,6 @@ interface ICipherTask {
         bytes32 ciphertextCid,
         uint32 rows
     );
-    event ContributionRejected(uint256 indexed taskId, address indexed contributor, bytes4 reason);
     event TaskSealed(uint256 indexed taskId, bytes32 ctRoot, uint32 shards, uint32 contributors);
     event EpochOpened(uint256 indexed taskId, uint32 indexed epoch, bytes32 encWeightsCid, bytes32 weightsDigest);
     event EpochCommitted(uint256 indexed taskId, uint32 indexed epoch, address indexed node, bytes32 traceDigest);
@@ -152,7 +156,6 @@ interface ICipherTask {
     error DuplicateCommit(uint256 taskId, uint32 epoch, address node);
     error DisputeAlreadyClosed(uint256 taskId, uint32 epoch);
     error DisputeBelowQuorum(uint256 taskId, uint32 epoch, uint256 have, uint256 need);
-    error BondInsufficient(address account, uint256 required, uint256 available);
     error EscrowMismatch(uint256 taskId, uint128 expected);
     error WeightPinMismatch(uint256 taskId, bytes32 expected, bytes32 provided);
     error RevealNotAllowed(uint256 taskId, TaskStatus status);
@@ -198,13 +201,16 @@ interface ICipherTask {
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external;
     function finalizeEpoch(uint256 taskId, uint32 epoch) external;
     function settle(uint256 taskId) external;
+    function settleFrom(uint256 taskId, uint256 cursor) external;
+    function settleCursor(uint256 taskId) external view returns (uint256);
+    function isFullySettled(uint256 taskId) external view returns (bool);
     function requestReveal(uint256 taskId, bytes calldata blsAggregateSig) external;
     function submitPartialDecryption(uint256 taskId, bytes32 partialDecryption) external;
     function withdraw(uint256 taskId) external returns (uint128 amount);
     function reclaimUnspentEpochs(uint256 taskId) external returns (uint128 amount);
     function abort(uint256 taskId, bytes4 reason) external;
     function emergencyUnwind(uint256 taskId) external;
-    function grantStateAccess(address account) external;
+    function grantStateAccess(uint256 taskId, address account) external;
 
     /* ------------------------------------------------------------------ */
     /*                                 views                               */

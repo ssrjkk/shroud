@@ -8,15 +8,16 @@
 //! Gas is bounded by an explicit limit per call rather than left to the estimator's default,
 //! since an epoch commit carries a multi-KB proof and an unbounded estimate is a way to burn
 //! the operator's balance on a task that is not worth it.
+#![allow(clippy::too_many_arguments)]
 
 use alloy::{
     primitives::{Address, B256, U256},
-    providers::{BoxedProvider, Provider, ProviderBuilder},
+    providers::{DynProvider, Provider, ProviderBuilder},
+    signers::local::PrivateKeySigner,
     sol,
 };
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
-use super::bindings::ICipherTaskWrite;
 use crate::{
     config::Config,
     error::{ConfigError, Error, Result},
@@ -50,6 +51,18 @@ sol! {
     }
 }
 
+/// Parameters for a single `commitEpoch` call.
+#[derive(Debug, Clone)]
+pub struct CommitIntent {
+    pub task_id: U256,
+    pub epoch: u32,
+    pub proof: B256,
+    pub enc_weights_cid: B256,
+    pub weights_digest: B256,
+    pub metrics_cid: B256,
+    pub trace_digest: B256,
+}
+
 /// Local exposure limits, enforced before spending gas.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
@@ -71,8 +84,7 @@ pub struct Limits {
 /// the operator's balance on a task that is not worth it.
 #[derive(Debug, Clone)]
 pub struct OrchestratorClient {
-    provider: BoxedProvider,
-    wallet: PrivateKeySigner,
+    provider: DynProvider,
     cipher_task: Address,
     vault: Address,
     operator: Address,
@@ -82,7 +94,10 @@ pub struct OrchestratorClient {
 impl OrchestratorClient {
     pub fn new(cfg: &Config) -> Result<Self> {
         let key = parse_key(&cfg.node.operator_key)?;
-        let wallet = PrivateKeySigner::from(key);
+        let wallet = PrivateKeySigner::from_bytes(&key).map_err(|e| ConfigError::Invalid {
+            field: "node.operator_key",
+            reason: format!("{e}"),
+        })?;
         let operator = wallet.address();
 
         let url = cfg
@@ -94,22 +109,19 @@ impl OrchestratorClient {
                 reason: format!("{e}"),
             })?;
 
-        // The wallet is bound here rather than at each call site so nonce management and gas
-        // estimation are the provider's problem, not the caller's.
-        let provider: BoxedProvider = ProviderBuilder::new()
-            .wallet(wallet.clone())
+        let provider: DynProvider = ProviderBuilder::new()
+            .wallet(wallet)
             .connect_http(url)
-            .boxed();
+            .erased();
 
         Ok(Self {
             provider,
-            wallet,
             cipher_task: cfg.contracts.cipher_task,
             vault: cfg.contracts.payment_vault,
             operator,
             limits: Limits {
-                max_budget_per_task: cfg.payment.max_budget_per_task,
-                max_claim_per_task: cfg.payment.max_claim_per_task,
+                max_budget_per_task: u128::from(cfg.payment.max_budget_per_task),
+                max_claim_per_task: u128::from(cfg.payment.max_claim_per_task),
             },
         })
     }
@@ -120,9 +132,11 @@ impl OrchestratorClient {
 
     /// Verify the RPC actually serves the configured chain.
     pub async fn verify_chain(&self, expected: u64) -> Result<()> {
-        let Some(actual) = self.provider.get_chain_id().await? else {
-            return Err(Error::Chain("eth_chainId returned null".into()));
-        };
+        let actual = self
+            .provider
+            .get_chain_id()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
         if expected != 0 && actual != expected {
             return Err(Error::Chain(format!(
                 "configured chain {expected} but RPC serves {actual}"
@@ -143,23 +157,25 @@ impl OrchestratorClient {
     /// Register this node's BLS key for a task. Idempotent on chain, but the caller still
     /// checks `nodeRegistered` first to avoid paying gas.
     pub async fn register_node(&self, task_id: U256, bls_pub_key: B256) -> Result<()> {
-        let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
-        let tx = contract.registerNode(task_id, bls_pub_key).send().await?;
-        let receipt = tx.get_receipt().await?;
-        ensure_success(
-            receipt.status(),
-            "registerNode",
-            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
-        )?;
+        let contract = ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
+        let tx = contract
+            .registerNode(task_id, bls_pub_key)
+            .send()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        let hash = *tx.tx_hash();
+        let receipt = tx
+            .get_receipt()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        ensure_success(receipt.status(), "registerNode", format!("{hash:#x}"))?;
         info!(%task_id, "registered for task");
         Ok(())
     }
 
     /// Post an epoch commit. Returns the transaction hash.
     pub async fn commit_epoch(&self, intent: &CommitIntent) -> Result<B256> {
-        let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
+        let contract = ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
         let tx = contract
             .commitEpoch(
                 intent.task_id,
@@ -171,28 +187,32 @@ impl OrchestratorClient {
                 intent.trace_digest,
             )
             .send()
-            .await?;
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
         let hash = *tx.tx_hash();
-        let receipt = tx.get_receipt().await?;
+        let receipt = tx
+            .get_receipt()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
         ensure_success(receipt.status(), "commitEpoch", format!("{hash:#x}"))?;
-        info!(%task_id = intent.task_id, epoch = intent.epoch, hash = %hash, "commit accepted");
+        info!(task_id = %intent.task_id, epoch = intent.epoch, hash = %hash, "commit accepted");
         Ok(hash)
     }
 
     /// Report that our independent re-execution disagreed with the committed digest.
     pub async fn report_dispute(&self, task_id: U256, epoch: u32, digest: B256) -> Result<()> {
-        let contract =
-            ICipherTaskCalls::new(self.cipher_task, self.wallet.clone(), self.provider.clone());
+        let contract = ICipherTaskCalls::new(self.cipher_task, self.provider.clone());
         let tx = contract
             .reportDispute(task_id, epoch, digest)
             .send()
-            .await?;
-        let receipt = tx.get_receipt().await?;
-        ensure_success(
-            receipt.status(),
-            "reportDispute",
-            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
-        )?;
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        let hash = *tx.tx_hash();
+        let receipt = tx
+            .get_receipt()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        ensure_success(receipt.status(), "reportDispute", format!("{hash:#x}"))?;
         info!(%task_id, epoch, "dispute reported");
         Ok(())
     }
@@ -206,8 +226,7 @@ impl OrchestratorClient {
         deadline: U256,
         signature: Vec<u8>,
     ) -> Result<u128> {
-        let contract =
-            IPaymentVaultCalls::new(self.vault, self.wallet.clone(), self.provider.clone());
+        let contract = IPaymentVaultCalls::new(self.vault, self.provider.clone());
         let tx = contract
             .redeem(
                 channel_id,
@@ -217,13 +236,14 @@ impl OrchestratorClient {
                 signature.into(),
             )
             .send()
-            .await?;
-        let receipt = tx.get_receipt().await?;
-        ensure_success(
-            receipt.status(),
-            "redeem",
-            tx.block_id().map(|b| b.to_string()).unwrap_or_default(),
-        )?;
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        let hash = *tx.tx_hash();
+        let receipt = tx
+            .get_receipt()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        ensure_success(receipt.status(), "redeem", format!("{hash:#x}"))?;
         Ok(amount)
     }
 
@@ -319,8 +339,6 @@ mod tests {
 
     #[test]
     fn a_short_key_is_rejected_rather_than_left_padded() {
-        // Silently left-padding a short key would make the node use a key the operator did
-        // not choose, and spend a real balance.
         assert!(parse_key("0xdeadbeef").is_err());
     }
 

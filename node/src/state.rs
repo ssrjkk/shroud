@@ -28,9 +28,10 @@ use crate::{
 /// `TaskStatus` mirrors `ICipherTask.TaskStatus`. Duplicated as a plain enum so the state machine
 /// can be unit-tested without a chain, and so a contract-side reordering surfaces as a
 /// non-exhaustive-match compile error rather than a wrong branch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum TaskStatus {
+    #[default]
     None = 0,
     Opening = 1,
     Collecting = 2,
@@ -47,21 +48,20 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     pub fn from_u8(v: u8) -> Option<Self> {
-        use TaskStatus::*;
         Some(match v {
-            0 => None,
-            1 => Opening,
-            2 => Collecting,
-            3 => Sealed,
-            4 => EpochOpen,
-            5 => EpochCommitting,
-            6 => EpochSettled,
-            7 => Settling,
-            8 => Revealing,
-            9 => Disclosed,
-            10 => Aborted,
-            11 => Paused,
-            _ => return None,
+            0 => TaskStatus::None,
+            1 => TaskStatus::Opening,
+            2 => TaskStatus::Collecting,
+            3 => TaskStatus::Sealed,
+            4 => TaskStatus::EpochOpen,
+            5 => TaskStatus::EpochCommitting,
+            6 => TaskStatus::EpochSettled,
+            7 => TaskStatus::Settling,
+            8 => TaskStatus::Revealing,
+            9 => TaskStatus::Disclosed,
+            10 => TaskStatus::Aborted,
+            11 => TaskStatus::Paused,
+            _ => return Option::None,
         })
     }
 
@@ -113,12 +113,6 @@ pub struct TaskState {
     /// Latest accepted weights, carried across epochs. The optimiser seeds from this.
     pub last_weights: Option<(B256, B256)>,
     pub revealed_message: Option<String>,
-}
-
-impl Default for TaskStatus {
-    fn default() -> Self {
-        TaskStatus::None
-    }
 }
 
 impl TaskState {
@@ -190,7 +184,7 @@ pub struct DisputeAction {
 }
 
 /// Work the scheduler should pick up. Produced by the fold, consumed by the worker loop.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Work {
     /// Fetch the sealed ciphertext set and start epoch 0.
     Execute { task_id: U256, epoch: u32 },
@@ -230,7 +224,7 @@ struct Inner {
 }
 
 /// Handle to the derived state. Cheap to clone; all clones share one state.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NodeState {
     inner: Arc<RwLock<Inner>>,
     /// Work notifications, so the worker loop can `select!` on state changes and RPC traffic.
@@ -324,29 +318,39 @@ impl NodeState {
                 shards,
                 contributors,
             } => {
-                let t = g.tasks.entry(*task_id).or_insert_with(|| TaskState {
-                    task_id: *task_id,
-                    ..Default::default()
-                });
-                if t.status != TaskStatus::None && t.ct_root != B256::ZERO && t.ct_root != *ct_root
-                {
+                let (should_taint, work_item) = {
+                    let t = g.tasks.entry(*task_id).or_insert_with(|| TaskState {
+                        task_id: *task_id,
+                        ..Default::default()
+                    });
+                    let should_taint = t.status != TaskStatus::None
+                        && t.ct_root != B256::ZERO
+                        && t.ct_root != *ct_root;
+                    t.ct_root = *ct_root;
+                    t.shards = *shards;
+                    t.contributors = *contributors;
+                    t.status = TaskStatus::Sealed;
+                    let work_item = if !t.registered {
+                        Some(Work::SkipEpoch {
+                            task_id: *task_id,
+                            epoch: 0,
+                        })
+                    } else if !t.epochs.contains_key(&0) {
+                        Some(Work::Execute {
+                            task_id: *task_id,
+                            epoch: 0,
+                        })
+                    } else {
+                        None
+                    };
+                    (should_taint, work_item)
+                };
+                if should_taint {
                     g.tainted = true;
                     warn!(task = %task_id, "ctRoot changed for an already-seen task; state is tainted");
                 }
-                t.ct_root = *ct_root;
-                t.shards = *shards;
-                t.contributors = *contributors;
-                t.status = TaskStatus::Sealed;
-                if !t.registered {
-                    work.push(Work::SkipEpoch {
-                        task_id: *task_id,
-                        epoch: 0,
-                    });
-                } else if !t.epochs.contains_key(&0) {
-                    work.push(Work::Execute {
-                        task_id: *task_id,
-                        epoch: 0,
-                    });
+                if let Some(w) = work_item {
+                    work.push(w);
                 }
             }
             ChainEvent::EpochOpened {
@@ -360,19 +364,16 @@ impl NodeState {
                     ..Default::default()
                 });
                 t.status = TaskStatus::EpochOpen;
-                t.epochs.entry(*epoch).or_default().opened_at =
-                    t.epochs.get(epoch).map_or(0, |e| e.opened_at);
+                let prev_opened_at = t.epochs.get(epoch).map_or(0, |e| e.opened_at);
                 let e = t.epochs.entry(*epoch).or_default();
+                e.opened_at = prev_opened_at;
                 // The first `EpochOpened` of an epoch carries the seed weights. Later opens of
                 // the *next* epoch carry the previous winner's weights; those go to
                 // `last_weights` so the optimiser can warm-start.
-                if *epoch == 0 || t.epochs.len() == 1 {
-                    e.opened_at = e.opened_at.max(0);
-                    t.last_weights = Some((*enc_weights_cid, *weights_digest));
-                } else {
-                    t.last_weights = Some((*enc_weights_cid, *weights_digest));
-                }
-                if t.registered && !e.commits.is_empty() {
+                t.last_weights = Some((*enc_weights_cid, *weights_digest));
+                // An epoch nobody has committed to yet is still ours to win; that is the same
+                // rule `pending_epochs` uses to decide what a node is behind on.
+                if t.registered && e.commits.is_empty() {
                     work.push(Work::Execute {
                         task_id: *task_id,
                         epoch: *epoch,
@@ -385,19 +386,34 @@ impl NodeState {
                 node,
                 trace_digest,
             } => {
-                let Some(t) = g.tasks.get_mut(task_id) else {
-                    // Commit for an untracked task: the watcher joined late. Nothing to do but
-                    // note that we cannot reason about this task.
-                    return work;
+                let (prev_digest, should_taint) = {
+                    // The watcher can join mid-history, so a commit for a task we never saw
+                    // sealed is normal — and it is exactly what a late node needs in order to
+                    // dispute or settle. Skip it and the task is invisible forever.
+                    let t = g.tasks.entry(*task_id).or_insert_with(|| TaskState {
+                        task_id: *task_id,
+                        ..Default::default()
+                    });
+                    let prev = t
+                        .epochs
+                        .entry(*epoch)
+                        .or_default()
+                        .commits
+                        .get(node)
+                        .map(|c| c.trace_digest);
+                    (prev, prev.is_some_and(|d| d != *trace_digest))
                 };
-                let e = t.epochs.entry(*epoch).or_default();
-                if let Some(prev) = e.commits.get(node) {
-                    if prev.trace_digest != *trace_digest {
+
+                if prev_digest.is_some() {
+                    if should_taint {
                         g.tainted = true;
                         warn!(task = %task_id, epoch, %node, "node committed twice with different digests; the contract should have rejected this");
                     }
                     return work;
                 }
+
+                let t = g.tasks.get_mut(task_id).expect("task was created above");
+                let e = t.epochs.entry(*epoch).or_default();
                 e.commits.insert(
                     *node,
                     CommitRecord {
@@ -412,7 +428,7 @@ impl NodeState {
                 t.status = TaskStatus::EpochCommitting;
                 if let Some(our) = consensus_digest_locked(t) {
                     let claimed = first_digest_locked(t, *epoch);
-                    if claimed.is_some() && our != claimed {
+                    if claimed.is_some_and(|c| c != our) {
                         work.push(Work::FileDispute {
                             task_id: *task_id,
                             epoch: *epoch,
@@ -427,9 +443,10 @@ impl NodeState {
                 node,
                 amount,
             } => {
-                let Some(t) = g.tasks.get_mut(task_id) else {
-                    return work;
-                };
+                let t = g.tasks.entry(*task_id).or_insert_with(|| TaskState {
+                    task_id: *task_id,
+                    ..Default::default()
+                });
                 let e = t.epochs.entry(*epoch).or_default();
                 if e.settled {
                     return work;
@@ -438,7 +455,7 @@ impl NodeState {
                 e.winner = Some(*node);
                 e.settled_amount = *amount;
                 t.status = TaskStatus::EpochSettled;
-                if *node != self_zero_address() {
+                if *node != Address::ZERO {
                     work.push(Work::Settle { task_id: *task_id });
                 }
             }
@@ -456,7 +473,7 @@ impl NodeState {
                     .or_default()
                     .disputes
                     .insert(*reporter, *digest);
-                if *reporter != self_zero_address() {
+                if *reporter != Address::ZERO {
                     work.push(Work::Reexecute {
                         task_id: *task_id,
                         epoch: *epoch,
@@ -507,18 +524,22 @@ impl NodeState {
                 amount,
                 ..
             } => {
-                let Some(c) = g.channels.get_mut(channel_id) else {
-                    return work;
+                let went_backwards = {
+                    let Some(c) = g.channels.get_mut(channel_id) else {
+                        return work;
+                    };
+                    let went_backwards = *cumulative < c.withdrawn;
+                    if !went_backwards {
+                        c.withdrawn = *cumulative;
+                        c.node = *node;
+                    }
+                    went_backwards
                 };
-                if *cumulative < c.withdrawn {
-                    // A redeem that lowers the observed cumulative means our view is stale or
-                    // the chain reorganised under us.
+                if went_backwards {
                     g.tainted = true;
                     warn!(channel = %channel_id, "cumulative went backwards; state is tainted");
                     return work;
                 }
-                c.withdrawn = *cumulative;
-                c.node = *node;
                 let _ = amount;
             }
         }
@@ -531,10 +552,6 @@ impl NodeState {
             let _ = self.tx.send(w.clone());
         }
         work
-    }
-
-    fn self_zero_address(&self) -> Address {
-        Address::ZERO
     }
 
     /// Drain queued work. Used by the worker loop.
@@ -597,17 +614,19 @@ impl NodeState {
     /// Persist the whole derived state. Optional: it is rebuildable, but keeping it makes a
     /// cold start fast and gives an operator something to inspect.
     pub async fn snapshot(&self, dir: &Path) -> Result<()> {
-        let g = self.read();
         #[derive(Serialize)]
-        struct Snapshot<'a> {
-            tasks: &'a HashMap<U256, TaskState>,
-            channels: &'a HashMap<U256, ChannelState>,
-            checkpoint: Option<&'a Checkpoint>,
+        struct SnapshotOwned {
+            tasks: HashMap<U256, TaskState>,
+            channels: HashMap<U256, ChannelState>,
+            checkpoint: Option<Checkpoint>,
         }
-        let snap = Snapshot {
-            tasks: &g.tasks,
-            channels: &g.channels,
-            checkpoint: g.last_checkpoint.as_ref(),
+        let snap = {
+            let g = self.read();
+            SnapshotOwned {
+                tasks: g.tasks.clone(),
+                channels: g.channels.clone(),
+                checkpoint: g.last_checkpoint.clone(),
+            }
         };
         let bytes = serde_json::to_vec_pretty(&snap)?;
         tokio::fs::create_dir_all(dir).await?;
@@ -650,6 +669,12 @@ fn first_digest_locked(t: &TaskState, epoch: u32) -> Option<B256> {
         .get(&epoch)
         .and_then(|e| e.commits.values().next())
         .map(|c| c.trace_digest)
+}
+
+impl Default for NodeState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]

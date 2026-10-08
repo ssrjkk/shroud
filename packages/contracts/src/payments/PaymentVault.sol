@@ -80,7 +80,6 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     uint256 public subBalancesTotal; // Σ taskBalance
     uint256 public channelLocksTotal; // Σ open (maxCumulative - withdrawn)
     uint256 public totalWithdrawn;
-    uint256 public totalReturned;
 
     error InvalidSignature();
     error NotStreamer(address caller);
@@ -88,13 +87,13 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     error NotOwner(address caller);
     error NotTaskManager(address caller);
     error SliceNotMonotonic(uint256 channelId, uint256 provided, uint256 consumed);
+    error SliceIndexOutOfRange(uint256 channelId, uint256 sliceIndex);
     error ExceedsCap(uint256 channelId, uint256 amount, uint256 cap);
     error InsufficientTaskBalance(uint256 taskId, uint256 available, uint256 required);
     error ChannelClosed(uint256 channelId);
     error TooEarly(uint256 channelId, uint64 unlockAt);
     error DeadlineExpired(uint256 deadline);
     error NothingToClaim(address account);
-    error ChannelNotInTask(uint256 channelId, uint256 taskId);
     error ZeroAmount();
     error ZeroAddress();
     error UnsafeSignatureS();
@@ -102,7 +101,6 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     error InvariantViolated(uint256 totalLocked, uint256 accounted);
 
     event TaskFunded(uint256 indexed taskId, address indexed from, uint256 amount, uint256 newBalance);
-    event TaskRefunded(uint256 indexed taskId, address indexed to, uint256 amount);
     event ChannelOpened(
         uint256 indexed channelId,
         uint256 indexed taskId,
@@ -183,15 +181,6 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         emit WithdrawalCredited(account, amount, taskId);
     }
 
-    /// @notice Return `amount` of a task's sub-balance to `to` (refund on abort).
-    function refundFromTask(uint256 taskId, address to, uint256 amount) external onlyTaskManager whenNotPaused nonReentrant {
-        if (amount == 0) return;
-        _debitTask(taskId, amount);
-        _push(to, amount);
-        _assertInvariant();
-        emit TaskRefunded(taskId, to, amount);
-    }
-
     /* ================================================================== */
     /*                     ORCHESTRATOR: CHANNELS OUT                     */
     /* ================================================================== */
@@ -232,27 +221,6 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         emit ChannelOpened(channelId, taskId, node, msg.sender, maxCumulative, unlock);
     }
 
-    /// @notice Close a channel of `taskId` and return the unconsumed lock to the sub-balance.
-    function closeTaskChannel(uint256 taskId, uint256 channelId) external onlyTaskManager whenNotPaused nonReentrant returns (uint128 amount) {
-        Channel storage ch = channels[channelId];
-        if (ch.taskId != taskId) revert ChannelNotInTask(channelId, taskId);
-        if (ch.streamer != msg.sender) revert NotStreamer(msg.sender);
-        if (ch.closed) revert ChannelClosed(channelId);
-
-        ch.closed = true;
-        amount = ch.maxCumulative - ch.withdrawn;
-        unchecked {
-            uint128 freed = ch.maxCumulative;
-            taskBalance[taskId] += amount;
-            subBalancesTotal += amount;
-            taskChannelLocked[taskId] -= freed;
-            channelLocksTotal -= amount;
-        }
-        // `totalLocked` unchanged: channel lock -> sub-balance
-        _assertInvariant();
-        emit ChannelClosedByStreamer(channelId, amount, taskId);
-    }
-
     /// @notice Close every open channel of a task, returning all unconsumed locks to the
     ///         task sub-balance. No funds leave the vault.
     /// @dev Called by the orchestrator at settlement so the sub-balance reflects reality
@@ -280,44 +248,6 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         _assertInvariant();
     }
 
-    /// @notice Close every open channel of a task and refund the recovered total to `to`.
-    /// @dev The natural end-of-task call: any node that did not redeem its slices gets the
-    ///      money back, so an unresponsive node cannot strand the buyer's budget.
-    /// @dev As in `sweepTaskChannels`, channels that are still inside their reward window are
-    ///      left open rather than reclaimed.
-    function unwindTask(uint256 taskId, address to) external onlyTaskManager whenNotPaused nonReentrant returns (uint128 recovered) {
-        uint256[] memory ids = taskChannels[taskId];
-        for (uint256 i = 0; i < ids.length; ++i) {
-            Channel storage ch = channels[ids[i]];
-            if (ch.closed) continue;
-            if (ch.unlockAt > block.timestamp) continue; // still claimable
-            ch.closed = true;
-            uint128 amount = ch.maxCumulative - ch.withdrawn;
-            uint128 freed = ch.maxCumulative;
-            if (amount == 0) {
-                taskChannelLocked[taskId] -= freed;
-                channelLocksTotal -= amount;
-                continue;
-            }
-            taskBalance[taskId] += amount;
-            subBalancesTotal += amount;
-            taskChannelLocked[taskId] -= freed;
-            channelLocksTotal -= amount;
-            recovered += amount;
-        }
-        if (recovered > 0) {
-            uint256 bal = taskBalance[taskId];
-            if (bal < recovered) revert InsufficientTaskBalance(taskId, bal, recovered);
-            unchecked {
-                taskBalance[taskId] = bal - recovered;
-                subBalancesTotal -= recovered;
-            }
-            totalLocked -= recovered; // funds leave the vault
-            _push(to, recovered);
-        }
-        _assertInvariant();
-    }
-
     /* ================================================================== */
     /*                          EARNEER: SLICES                           */
     /* ================================================================== */
@@ -334,6 +264,14 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         bytes calldata signature
     ) external whenNotPaused nonReentrant returns (uint128 paid) {
         if (block.timestamp > deadline) revert DeadlineExpired(deadline);
+
+        // `consumed` is a `uint64`, and `uint64(sliceIndex)` truncates rather than reverting. An
+        // index of `2**64` therefore folded to 0 and set `consumed` back to 1, silently rewinding
+        // the monotonic counter F-14 relies on. No profit follows from it (`withdrawn` only ever
+        // grows, and it is what bounds the money), but the index is the replay guard, so the
+        // counter must never move backwards. Bounding the index here also guarantees the `+ 1`
+        // below cannot overflow.
+        if (sliceIndex >= type(uint64).max) revert SliceIndexOutOfRange(channelId, sliceIndex);
 
         Channel storage ch = channels[channelId];
         if (ch.node == address(0) || ch.node != msg.sender) revert NotNode(msg.sender, channelId);

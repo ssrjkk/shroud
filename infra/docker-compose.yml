@@ -36,11 +36,19 @@ services:
     working_dir: /srv
     volumes:
       - ./shardstore:/srv
+      # Shards are content-addressed files, so a bind-mounted directory is safe and survives a
+      # restart. Without this the store is memory-only and every shard is lost when it restarts.
+      - shardstore-data:/data
     command: ["node", "server.mjs"]
     environment:
       PORT: "8080"
+      # Bound to the compose network only. The service has no authentication, so publishing it on
+      # an untrusted network would hand anyone an unbounded write path.
+      HOST: "0.0.0.0"
+      DATA_DIR: "/data"
+      MAX_OBJECT_BYTES: "67108864" # 64 MiB
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
 
   node-a:
     image: shroud-node:dev
@@ -67,3 +75,6 @@ services:
     environment: *nodeenv
     depends_on: [devnet]
     ports: ["7333:7331"]
+
+volumes:
+  shardstore-data:

@@ -81,7 +81,15 @@ digests is the committed linear map*; the nonlinear optimiser step is verified b
 
 Rule: if the proof exceeds `MAX_STARK_BYTES` (48 KB), the node splits it into `k` proofs over
 `k` trace segments and posts `merkleRootOfProofs`; the contract verifies each segment
-against the segment's public-input range. Implemented in `ProofVerifier.verifySegmented`.
+against the segment's public-input range.
+
+> **Not implemented.** `IProofVerifier.verifyProofSegmented` and a `ProofVerifier` implementation
+> of it exist, but `CipherTask.commitEpoch` calls `verifyProof` and only `verifyProof`, so this path
+> is unreachable from the only entry point that submits proofs. A 32-byte segmented Merkle root
+> submitted through `commitEpoch` would in any case be sent to the single-segment verifier and
+> rejected. There is also no STARK prover in this repo, so there is nothing today that could produce
+> either proof shape. Treat the paragraph above as the design intent, not as shipped behaviour;
+> see `05-honest-limitations.md` and threat model F-33.
 
 ## 4. Dispute / re-execution window (the FHE honesty layer)
 

@@ -14,7 +14,7 @@
 
 use std::sync::Arc;
 
-use alloy::providers::{BoxedProvider, ProviderBuilder};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use clap::Parser;
 use shroud_node::{
     chain::{OrchestratorClient, Watcher},
@@ -79,7 +79,7 @@ async fn run() -> Result<()> {
             field: "chain.rpc_url",
             reason: format!("{e}"),
         })?;
-    let watcher_provider: BoxedProvider = ProviderBuilder::new().connect_http(rpc_url).boxed();
+    let watcher_provider: DynProvider = ProviderBuilder::new().connect_http(rpc_url).erased();
 
     let watcher = Arc::new(Watcher::new(watcher_provider, &cfg, state.clone())?);
 
@@ -102,9 +102,6 @@ async fn run() -> Result<()> {
         }
     }
 
-    // A separate provider for the watcher: the watcher is a long-lived poller and the client
-    // issues bursty writes. Sharing one connection pool means a slow `eth_getLogs` window can
-    // starve a commit that is racing an epoch deadline.
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let watcher_task = {
         let watcher = watcher.clone();

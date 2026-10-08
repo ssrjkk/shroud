@@ -3,11 +3,12 @@
 //! Hand-maintained rather than generated so the reviewer can see exactly which ABI the node
 //! depends on. `just codegen-bindings` regenerates them from `packages/contracts/artifacts`
 //! and the diff is reviewed like any other code.
+#![allow(clippy::too_many_arguments)]
 
 use alloy::sol;
 
 sol! {
-    #[sol(rpc, abigen = false)]
+    #[sol(rpc)]
     interface ICipherTaskView {
         // struct ICipherTask.TaskParams is a tuple; flattened into a struct here for clarity.
         struct TaskParams {
@@ -68,7 +69,7 @@ sol! {
         function pendingPayout(address account) external view returns (uint128);
     }
 
-    #[sol(rpc, abigen = false)]
+    #[sol(rpc)]
     interface ICipherTaskWrite {
         function registerNode(uint256 taskId, bytes32 blsPubKey) external;
         function commitEpoch(
@@ -84,7 +85,7 @@ sol! {
         function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have);
     }
 
-    #[sol(rpc, abigen = false)]
+    #[sol(rpc)]
     interface IPaymentVault {
         struct Channel {
             address node;
@@ -116,7 +117,7 @@ sol! {
         ) external returns (uint128 paid);
     }
 
-    #[sol(rpc, abigen = false)]
+    #[sol(rpc)]
     interface INetworkParams {
         struct Params {
             uint64 chainId;

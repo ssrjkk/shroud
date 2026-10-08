@@ -111,16 +111,42 @@ contract NetworkParams is ReentrancyGuard {
         emit Initialized(current);
     }
 
+    /// @notice Shared validation for a rotating parameter set.
+    /// @dev Applied at *both* ends of the rotation, not just when proposing. `proposeRotation`
+    ///      used to validate its `candidate` argument and then throw it away, storing only the
+    ///      caller-supplied `expectedHash` — which was never checked against `candidate`. The
+    ///      struct that actually reaches `current` is the one handed to `approveRotation` and
+    ///      `executeRotation`, and that one was never validated at all. So a rotation could install
+    ///      `committeeThreshold = 0`, `committeeSize = 0`, `maxProofBytes = 0`, or a `keyVersion`
+    ///      that does not increment — the last being precisely the invariant that exists to stop a
+    ///      replayed or reordered key from being mistaken for a new one.
+    function _validateCandidate(Params memory c) private view {
+        if (c.keyVersion != current.keyVersion + 1) revert InvalidParams("keyVersion must increment by 1");
+        if (c.fhePublicKeyHash == current.fhePublicKeyHash) revert InvalidParams("hash unchanged");
+        if (c.fhePublicKeyHash == bytes32(0)) revert InvalidParams("fhePublicKeyHash");
+        if (c.committeeThreshold == 0 || c.committeeThreshold > c.committeeSize) {
+            revert InvalidParams("threshold");
+        }
+        if (c.committeeSize < 3) revert InvalidParams("committeeSize");
+        if (c.maxProofBytes < 1_024 || c.maxProofBytes > 131_072) revert InvalidParams("maxProofBytes");
+        if (c.maxCiphertextBytes == 0) revert InvalidParams("maxCiphertextBytes");
+        if (c.maxFeatures == 0) revert InvalidParams("maxFeatures");
+    }
+
     /// @notice Propose the next parameter set, effective after `timelock`.
+    /// @dev `expectedHash` must be `keccak256(abi.encode(candidate, chainId, approver))`. Requiring
+    ///      that here — rather than only checking the hash at approval time — is what makes the
+    ///      struct that was *validated* provably the same struct that will be *installed*. The
+    ///      approver is already known (`approver` is state, not chosen per-rotation), so this
+    ///      costs the proposer nothing and removes the possibility of proposing a valid-looking
+    ///      candidate while actually queueing a different one for the approver to sign.
     function proposeRotation(Params calldata candidate, bytes32 expectedHash, uint64 timelock) external onlyOwner returns (uint64 scheduledAt) {
         if (!current.active) revert InvalidParams("not initialized");
         if (pending.scheduledAt != 0 && !pending.executed && !pending.cancelled) revert NoPendingRotation();
-        if (candidate.keyVersion != current.keyVersion + 1) revert InvalidParams("keyVersion must increment by 1");
-        if (candidate.fhePublicKeyHash == current.fhePublicKeyHash) revert InvalidParams("hash unchanged");
-        if (candidate.committeeThreshold == 0 || candidate.committeeThreshold > candidate.committeeSize) {
-            revert InvalidParams("threshold");
-        }
+        _validateCandidate(candidate);
         if (timelock < 7 days) revert InvalidParams("timelock too short");
+        bytes32 h = keccak256(abi.encode(candidate, block.chainid, approver));
+        if (h != expectedHash) revert HashMismatch(expectedHash, h);
 
         scheduledAt = uint64(block.timestamp) + timelock;
         pending = Rotation({
@@ -162,7 +188,10 @@ contract NetworkParams is ReentrancyGuard {
 
         bytes32 h = keccak256(abi.encode(candidate, block.chainid, pending.approver));
         if (h != pending.expectedHash) revert HashMismatch(pending.expectedHash, h);
-        if (candidate.fhePublicKeyHash == current.fhePublicKeyHash) revert InvalidParams("hash unchanged");
+        // Re-validated here even though `proposeRotation` already did it, so that no future change
+        // to the proposal path can weaken what reaches `current`. Clients pin these values to decide
+        // whether a submission is acceptable, so an invalid set installed here would be trusted.
+        _validateCandidate(candidate);
 
         current.keyVersion = candidate.keyVersion;
         current.fhePublicKeyHash = candidate.fhePublicKeyHash;

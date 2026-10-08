@@ -62,7 +62,6 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
     error NotOpen(uint256 taskId);
     error OutputNotRegistered(uint256 taskId, bytes32 weightsCid);
     error PartialAlreadySubmitted(uint256 taskId, address member);
-    error NotEnoughPartials(uint256 taskId, uint256 have, uint256 need);
     error ZeroAddress();
     error InvalidThreshold();
 
@@ -107,6 +106,7 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
         committee = committee_;
         for (uint256 i = 0; i < members.length; ++i) {
             if (members[i] == address(0)) revert ZeroAddress();
+            if (isCommitteeMember[members[i]]) revert InvalidThreshold();
             isCommitteeMember[members[i]] = true;
             emit CommitteeMemberAdded(members[i]);
         }
@@ -179,22 +179,19 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
         }
     }
 
-    /// @notice Check if a task's reveal is ready to be finalized.
-    /// @dev Returns true when the gate is open, the threshold has been reached, and the
-    ///      reveal has not yet been finalized.
-    /// @param taskId The task to check.
-    /// @return True if the reveal can be finalized.
-    function canFinalize(uint256 taskId) external view returns (bool) {
+    /// @notice Whether the threshold has been met and the reveal combined, i.e. whether the
+    ///         committee actually produced a decryption of this task's output.
+    /// @dev `open && combined` is the exact terminal condition: `combined` is only ever set once
+    ///      `threshold` *distinct* members have submitted, so it cannot be reached without the
+    ///      threshold.
+    ///
+    ///      This is the only completion path. An earlier version also had `canFinalize` and a
+    ///      separate `finalizeReveal`, but `submitPartialDecryption` combines the moment the
+    ///      threshold is reached, so both were unreachable and `finalizeReveal` looked like the
+    ///      function that finished a reveal when it never could.
+    function revealCompleted(uint256 taskId) external view returns (bool) {
         TaskGate storage g = gates[taskId];
-        return g.open && !g.combined && g.members.length >= g.required;
-    }
-
-    function finalizeReveal(uint256 taskId) external whenNotPaused nonReentrant {
-        TaskGate storage g = gates[taskId];
-        if (!g.open) revert NotOpen(taskId);
-        if (g.members.length < g.required) revert NotEnoughPartials(taskId, g.members.length, g.required);
-        g.combined = true;
-        emit RevealCompleted(taskId, cipherTask.tasks(taskId).params.buyer, g.members.length);
+        return g.open && g.combined;
     }
 
     /* ------------------------------------------------------------------ */

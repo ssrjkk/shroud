@@ -46,6 +46,13 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     uint32 public constant MAX_EPOCHS = 365;
     uint32 public constant MAX_CONTRIBUTORS = 5_000;
+
+    /// @dev Contributors paid per `settleFrom` call. Sized from measurement (~117k gas per
+    ///      contributor including the vault call): 200 is ~23M gas at the low end and ~30M at the
+    ///      high end, which is why the bound is a constant rather than "whatever fits". A task with
+    ///      5000 contributors needs 25 pages, which is fine because settlement is permissionless and
+    ///      each page is independently callable.
+    uint256 public constant SETTLE_PAGE_SIZE = 200;
     uint32 public constant MAX_SHARDS = 65_535;
     uint32 public constant MAX_FEATURES = 512;
     uint32 public constant MAX_ROWS_PER_SHARD = 100_000;
@@ -109,8 +116,23 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      later epoch of the same task.
     mapping(uint256 => mapping(uint32 => uint256)) private _disputeCount;
     mapping(uint256 => mapping(uint32 => mapping(address => bool))) private _disputeRecorded;
+    mapping(uint256 => mapping(uint32 => address[])) private _epochReporters;
     mapping(uint256 => mapping(uint32 => bytes32)) private _claimedDigest;
     mapping(uint256 => bool) private _settled;
+    /// @dev Settlement progress. `_settleCursor` is the first contributor not yet paid,
+    ///      `_settleDistributed` accumulates amounts already credited so the dust is computed
+    ///      against the whole pool across pages, and `_settleDustRecipient` carries the
+    ///      deterministic dust sink forward so it does not depend on which page is running.
+    mapping(uint256 => uint256) private _settleCursor;
+    mapping(uint256 => uint256) private _settleDistributed;
+    mapping(uint256 => address) private _settleDustRecipient;
+    /// @dev The contributor pool, frozen by the first settlement page and reused by every later
+    ///      one so per-contributor amounts cannot drift between pages.
+    mapping(uint256 => uint128) private _settleUserPool;
+    /// @dev Whether any settlement page has run. Distinguishes "pool not yet computed" from
+    ///      "pool computed as zero", and gates `abort` so a partially settled task cannot be
+    ///      unwound behind the contributors already paid.
+    mapping(uint256 => bool) private _settleStarted;
 
     /// @dev Slices the contract has authorised, keyed by channel then sliceIndex. Consulted by
     ///      `isValidSignature` (ERC-1271) so a node can redeem an epoch reward without any
@@ -127,6 +149,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     event OwnershipTransferred(address indexed from, address indexed to);
     event TreasuryChanged(address indexed from, address indexed to);
     event ShapeProofsRequiredChanged(bool required);
+    event StateAccessGranted(uint256 indexed taskId, address indexed account);
+    /// @dev Emitted for every settlement page that is not the last, so an operator can watch
+    ///      progress and see that it is actually advancing.
+    event SettleProgress(uint256 indexed taskId, uint256 paidUpTo, uint256 total);
 
     /* ------------------------------------------------------------------ */
     /*                                errors                                */
@@ -536,9 +562,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         address incumbent = _epochWinner[taskId][epoch];
         if (incumbent == address(0) || msg.sender < incumbent) {
             _epochWinner[taskId][epoch] = msg.sender;
+            _claimedDigest[taskId][epoch] = traceDigest;
         }
 
-        _claimedDigest[taskId][epoch] = traceDigest;
         _setStatus(taskId, TaskStatus.EpochCommitting);
         emit EpochCommitted(taskId, epoch, msg.sender, traceDigest);
 
@@ -561,6 +587,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
         _disputeRecorded[taskId][epoch][msg.sender] = true;
         _disputeCount[taskId][epoch] += 1;
+        _epochReporters[taskId][epoch].push(msg.sender);
         emit DisputeReported(taskId, epoch, msg.sender, reexecutedDigest);
     }
 
@@ -585,8 +612,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
         if (quorum) {
             // The claimant lied: no node is paid for this epoch, and the lock returns to the
-            // task sub-balance to be refunded at settlement. Reporters are paid out of the
-            // lock so that reporting is rational.
+            // task sub-balance to be refunded at settlement. Reporters are paid out of the lock
+            // so that reporting is rational.
+            _payReporters(taskId, epoch, lock);
             emit TaskAborted(taskId, _REASON_EPOCH_DISPUTED);
         } else if (winner != address(0)) {
                 // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides
@@ -615,7 +643,50 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      claims with their own transaction, which is also how a user with a broken wallet
     ///      integration is handled without stalling everyone else.
     function settle(uint256 taskId) external whenNotPaused nonReentrant {
+        _settleFrom(taskId, 0);
+    }
+
+    /// @notice Settle the next page of contributors.
+    /// @dev `settle` used to distribute the whole contributor pool in a single call, which is O(n)
+    ///      in gas with an external call per contributor. Measured at ~117k gas per contributor, a
+    ///      task at the then-current `MAX_CONTRIBUTORS` of 5000 needed ~584M gas — roughly 19x a
+    ///      30M block limit. Such a task could complete every epoch and then be *permanently
+    ///      un-settleable*: `settle` is the only call that pays contributors, so their funds would
+    ///      sit in the vault with no recourse.
+    ///
+    ///      Settlement is therefore paged. `cursor` is the index of the first contributor this call
+    ///      has not yet paid, and the final page is the one that reaches the end of the list; that
+    ///      page also pays the dust, the committee and the buyer, and only then sets `_settled`.
+    ///      Paging is permissionless because it moves money only to the addresses the task already
+    ///      committed to paying — the amounts come from the frozen escrow and the recorded weights,
+    ///      not from the caller.
+    ///
+    ///      Ordering matters for correctness: `userPool` and `totalWeight` are recomputed from
+    ///      `t.budget` and `_totalWeight`, both of which are immutable once the contribution window
+    ///      closes, so every page computes identical per-contributor amounts and no contributor is
+    ///      paid twice or underpaid by paging.
+    function settleFrom(uint256 taskId, uint256 cursor) external whenNotPaused nonReentrant {
+        _settleFrom(taskId, cursor);
+    }
+
+    /// @notice Index of the first contributor `settleFrom` has not yet paid.
+    function settleCursor(uint256 taskId) external view returns (uint256) {
+        return _settleCursor[taskId];
+    }
+
+    /// @notice The contributor pool frozen by the first settlement page, for monitoring.
+    function settleUserPool(uint256 taskId) external view returns (uint128) {
+        return _settleUserPool[taskId];
+    }
+
+    /// @notice Whether any settlement page has run.
+    function isFullySettled(uint256 taskId) external view returns (bool) {
+        return _settled[taskId];
+    }
+
+    function _settleFrom(uint256 taskId, uint256 cursor) private {
         Task storage t = _tasks[taskId];
+        // A page may only continue an unfinished settlement; `_settled` is set by the last page.
         if (_settled[taskId]) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Settling);
         if (t.status != TaskStatus.EpochSettled) revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochSettled);
         if (t.locked != 0) revert InvalidParams("epoch locked");
@@ -623,23 +694,44 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         // so without this a caller could settle after epoch 0 of 3 and take the whole escrow while
         // two epochs of paid-for work were still owed.
         if (t.nextEpoch < t.params.epochs) revert InvalidParams("epochs remain");
-        _settled[taskId] = true;
+        // Only an orderly continuation: no page may skip ahead and strand the ones before it.
+        if (cursor != _settleCursor[taskId]) revert InvalidParams("settle cursor");
 
         // Return every un-redeemed reward lock to the sub-balance first, so the split below
-        // is computed against the vault's real balance rather than an assumption.
+        // is computed against the vault's real balance rather than an assumption. Idempotent: the
+        // sweep is a no-op once the channels are closed, so repeated pages are safe.
         vault.sweepTaskChannels(taskId);
         uint256 available = vault.taskBalance(taskId);
 
-        uint128 userPool = (t.budget * t.params.userShareBps) / BPS;
+        uint128 userPool;
         uint128 committeePool = (t.budget * t.params.committeeShareBps) / BPS;
-        if (userPool > available) userPool = uint128(available);
+        if (_settleStarted[taskId]) {
+            // Reuse the pool frozen by the first page. Recomputing it here would be wrong: the
+            // `available` clamp below depends on a balance that *shrinks* as pages pay
+            // contributors, so a later page could see a smaller pool and pay its contributors a
+            // smaller share of a smaller pie. That would make amounts page-dependent — the exact
+            // thing the paging invariant forbids — and the drift would land on whichever
+            // contributors happened to be in the later pages.
+            userPool = _settleUserPool[taskId];
+        } else {
+            uint256 available = vault.taskBalance(taskId);
+            userPool = (t.budget * t.params.userShareBps) / BPS;
+            if (userPool > available) userPool = uint128(available);
+            _settleUserPool[taskId] = userPool;
+            _settleStarted[taskId] = true;
+        }
 
-        address[] memory contributors = _contributorList[taskId];
         uint256 totalWeight = _totalWeight[taskId];
-        uint128 distributed;
-        address dustRecipient;
-        for (uint256 i = 0; i < contributors.length; ++i) {
-            address a = contributors[i];
+        uint256 start = cursor;
+        // A page is bounded so the call always fits in a block regardless of how many
+        // contributors a task accumulated.
+        uint256 end = start + SETTLE_PAGE_SIZE;
+        if (end < start || end > _contributorList[taskId].length) end = _contributorList[taskId].length;
+        uint256 distributed = _settleDistributed[taskId];
+        address dustRecipient = _settleDustRecipient[taskId];
+
+        for (uint256 i = start; i < end; ++i) {
+            address a = _contributorList[taskId][i];
             Contribution memory c = _contributions[taskId][a];
             if (!c.accepted || c.slashed) continue;
             uint128 amount = Dividend.shareOf(userPool, c.weightQ16, totalWeight);
@@ -651,7 +743,20 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             if (a > dustRecipient) dustRecipient = a; // deterministic dust sink
         }
 
-        uint128 dust = userPool - distributed;
+        _settleDistributed[taskId] = distributed;
+        _settleDustRecipient[taskId] = dustRecipient;
+
+        // Not the last page: record progress and stop. The escrow legs below must not run yet,
+        // because they are computed against the whole pool being distributed.
+        if (end < _contributorList[taskId].length) {
+            _settleCursor[taskId] = end;
+            emit SettleProgress(taskId, end, _contributorList[taskId].length);
+            return;
+        }
+        _settleCursor[taskId] = end;
+        _settled[taskId] = true;
+
+        uint128 dust = userPool > uint128(distributed) ? uint128(userPool) - uint128(distributed) : 0;
         if (dust > 0 && dustRecipient != address(0)) {
             vault.creditFromTask(taskId, dustRecipient, dust);
             emit Withdrawn(taskId, dustRecipient, dust);
@@ -700,12 +805,18 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @dev The plaintext weights themselves are delivered off-chain (Lagrange combination
     ///      over the members' partials); this call is the on-chain, auditable state transition
     ///      that releases the task to `Disclosed`.
+    /// @dev The gate is consulted because `Disclosed` is the protocol's attestation that the
+    ///      committee actually decrypted this task's output. Checking only `status == Revealing`
+    ///      let the buyer reach `Disclosed` immediately after `requestReveal`, with zero partials
+    ///      submitted, which made the status meaningless as evidence and left no on-chain record
+    ///      that the threshold was ever met.
     function withdraw(uint256 taskId) external nonReentrant returns (uint128 amount) {
         Task storage t = _tasks[taskId];
         if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager && msg.sender != owner) {
             revert NotUpdateManagerOrOwner(taskId, msg.sender);
         }
         if (t.status != TaskStatus.Revealing) revert RevealNotAllowed(taskId, t.status);
+        if (!decryptionGate.revealCompleted(taskId)) revert RevealNotAllowed(taskId, t.status);
 
         uint128 due = pendingPayout(t.params.buyer);
         _setStatus(taskId, TaskStatus.Disclosed);
@@ -730,16 +841,36 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             revert InvalidTaskStatus(taskId, t.status, TaskStatus.Aborted);
         }
         if (_settled[taskId]) revert InvalidParams("settled");
+        // Settlement is a commitment to the contributors, so it cannot be unwound once begun.
+        // Before paging existed this was unreachable because `settle` was atomic; with paging, a
+        // buyer could run one page — paying contributors in list order at their full pro-rata
+        // share — then `abort` and recover everything the remaining contributors were owed.
+        // That turns contributor ordering, which is only submission order, into a selective-payment
+        // lever: pay the addresses you like, claw back the rest.
+        //
+        // Freezing here cannot strand funds. Settlement is permissionless, every page is
+        // independently callable, and the total credited can never exceed the pool frozen by the
+        // first page, so finishing is always possible.
+        if (_settleStarted[taskId]) revert InvalidParams("settlement started");
 
-        uint128 keep;
-        if (t.locked > 0) keep = (t.locked * ABORT_LOCK_BPS) / BPS;
+        // A node that already committed a *verified* epoch did real work, so it keeps a slice of
+        // the open epoch's lock. Everyone else is refunded in full.
+        //
+        // `abort` is terminal, so anything not paid out here is stranded in the vault forever:
+        // no later call can move it. The previous version always withheld `ABORT_LOCK_BPS` of
+        // the lock and then never paid it to anyone, so every abort silently burned 20% of the
+        // epoch lock. Gating the retention on an actual verified commit closes that.
+        address worker = _epochWinner[taskId][t.nextEpoch];
+        uint128 keep = (t.locked > 0 && worker != address(0)) ? (t.locked * ABORT_LOCK_BPS) / BPS : 0;
 
         // Un-redeemed reward locks return to the sub-balance before the refund is computed.
-        uint128 recovered = vault.sweepTaskChannels(taskId);
+        vault.sweepTaskChannels(taskId);
         uint256 available = vault.taskBalance(taskId);
-        uint128 refund = uint128(available > keep ? available - keep : 0);
         t.locked = 0;
 
+        if (keep > 0) _openChannel(taskId, t.nextEpoch, worker, keep);
+
+        uint128 refund = uint128(available > keep ? available - keep : 0);
         if (refund > 0) {
             // Pull-based, like every other payout leg in this contract (see `settle`): the
             // refund is credited to the buyer, who claims it. `PaymentVault.refundFromTask` would
@@ -759,6 +890,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      it only fires once `nextEpoch == epochs`, so it can never take money that a node is
     ///      still going to earn, and it never mutates `budget`, so the share splits recorded in
     ///      `TaskSettled` keep referring to the original escrow.
+    /// @dev Only the unspent node pool is returned. The contributor and committee pools are
+    ///      reserved for `settle`, so a buyer cannot drain funds owed to data contributors by
+    ///      calling this before settlement.
     function reclaimUnspentEpochs(uint256 taskId) external whenNotPaused nonReentrant returns (uint128 amount) {
         Task storage t = _tasks[taskId];
         if (msg.sender != t.params.buyer) revert NotUpdateManagerOrOwner(taskId, msg.sender);
@@ -773,7 +907,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         uint256 available = vault.taskBalance(taskId);
         if (available == 0) return 0;
 
-        amount = uint128(available);
+        uint128 userPool = (t.budget * t.params.userShareBps) / BPS;
+        uint128 committeePool = (t.budget * t.params.committeeShareBps) / BPS;
+        uint256 reserved = uint256(userPool) + uint256(committeePool);
+        if (available <= reserved) return 0;
+
+        amount = uint128(available - reserved);
         // Pull-based, consistent with `settle` and `abort`.
         vault.creditFromTask(taskId, t.params.buyer, amount);
         emit Withdrawn(taskId, t.params.buyer, amount);
@@ -869,11 +1008,28 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     /// @notice Grant `account` the right to decrypt the shared orchestration state.
-    function grantStateAccess(address account) external whenNotPaused {
+    /// @dev Restricted to the parties already ACL'd by `_grant32`/`_grant64` — the buyer, the
+    ///      update manager, and nodes registered for this task. This was previously callable by
+    ///      anyone with an arbitrary `account`, which handed a third party a decryption grant on
+    ///      `_encState`: the buyer's encrypted loss curve, remaining noise budget and epoch
+    ///      checkpoint. That is not the model weights and not any user's rows, but it is a buyer
+    ///      telemetry leak reachable by an unprivileged caller, so the grant is now bounded to the
+    ///      set of parties the protocol already trusts with these handles.
+    function grantStateAccess(uint256 taskId, address account) external whenNotPaused {
+        Task storage t = _tasks[taskId];
+        if (t.status == TaskStatus.None) revert InvalidParams("unknown");
+        // Checked before the role test: the zero address is not a buyer, manager, owner or node,
+        // so testing the role first would make `ZeroAddress` unreachable for the only input it
+        // exists to reject.
+        if (account == address(0)) revert ZeroAddress();
+        if (account != t.params.buyer && account != t.params.updateManager && account != owner) {
+            if (!_nodeRegistered[taskId][account]) revert InvalidParams("not a task party");
+        }
         FHE.allow(_liveEpoch, account);
         FHE.allow(_sealFlag, account);
         FHE.allow(_verifiedNodes, account);
         FHE.allow(_encState, account);
+        emit StateAccessGranted(taskId, account);
     }
 
     /// @notice ACL a fresh `euint32` handle to the three parties that must be able to read it.
@@ -1011,12 +1167,46 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @dev Open the winner's reward channel and authorise its first slice. The contract is
     ///      the streamer, so the node can redeem without any off-chain signer.
     function _payNode(uint256 taskId, uint32 epoch, address node, uint128 reward) private {
-        if (reward == 0) return;
+        uint256 channelId = _openChannel(taskId, epoch, node, reward);
+        if (channelId != 0) _epochChannel[taskId][epoch] = channelId;
+    }
+
+    /// @dev Open a reward channel without recording it as the epoch's headline channel. Used for
+    ///      reporter bounties, which must not overwrite `_epochChannel[epoch]` — that slot is the
+    ///      winner's, and an indexer reading it would otherwise conclude a bounty recipient won
+    ///      the epoch it just disputed.
+    function _openChannel(uint256 taskId, uint32 epoch, address node, uint128 reward) private returns (uint256 channelId) {
+        if (reward == 0) return 0;
         uint64 unlockAt = uint64(block.timestamp) + rewardChannelWindow();
-        uint256 channelId = vault.openTaskChannel(taskId, node, reward, unlockAt);
-        _epochChannel[taskId][epoch] = channelId;
+        channelId = vault.openTaskChannel(taskId, node, reward, unlockAt);
         _authorizedSlice[channelId][0] = reward;
         emit NodeRewardChannelOpened(taskId, epoch, node, channelId, reward, unlockAt, reward);
+    }
+
+    /// @dev Pay the nodes that re-executed and disagreed with the claimed digest.
+    ///
+    ///      The docstring on `finalizeEpoch` promises reporters are paid out of the disputed
+    ///      lock; without this they would spend real gas and re-execution compute for nothing,
+    ///      and the only rational strategy would be to accept every claim unchallenged. The
+    ///      bounty is `reexecutionBps` of the lock split equally, with the division remainder to
+    ///      the first reporter so the whole bounty is always paid out and nothing is stranded in
+    ///      the sub-balance. The remainder of the lock is *not* paid here: it stays in the task
+    ///      sub-balance and is refunded to the buyer at settlement.
+    function _payReporters(uint256 taskId, uint32 epoch, uint128 lock) private {
+        address[] memory reporters = _epochReporters[taskId][epoch];
+        uint256 n = reporters.length;
+        if (n == 0 || lock == 0) return;
+        uint128 bounty = (uint128(lock) * _tasks[taskId].params.reexecutionBps) / BPS;
+        if (bounty == 0) return;
+        uint128 each = bounty / uint128(uint256(n));
+        if (each == 0) return;
+        uint128 total = each * uint128(uint256(n));
+        for (uint256 i = 0; i < n; ++i) {
+            _openChannel(taskId, epoch, reporters[i], each);
+        }
+        if (total < bounty) {
+            _openChannel(taskId, epoch, reporters[0], bounty - total);
+        }
     }
 
     function _setStatus(uint256 taskId, TaskStatus to) private {

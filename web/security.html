@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Security status — Shroud</title>
+<meta name="description" content="What Shroud enforces on chain today, and what it does not. 35 threat-model findings, in full." />
+<link rel="stylesheet" href="./assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305070a'/%3E%3Cpath d='M9 21c4-9 10-9 14 0' stroke='%2334e0c8' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='13' r='2.6' fill='%238b5cf6'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<div class="grain" aria-hidden="true"></div>
+<canvas id="mesh" class="mesh" aria-hidden="true"></canvas>
+
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="nav-in">
+    <a class="brand" href="./index.html">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="26" height="26"><path d="M6 22c5-11 15-11 20 0" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><circle cx="16" cy="11" r="2.8" fill="#8b5cf6"/></svg>
+      </span>
+      <span class="brand-name">Shroud</span>
+    </a>
+    <nav class="links">
+      <a href="./index.html">Home</a>
+      <a href="https://github.com/ssrjkk/shroud" class="btn btn-ghost">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <section class="hero hero-tight">
+    <p class="eyebrow">security status</p>
+    <h1 class="hero-h">What is enforced.<br /><span class="grad">And what is not.</span></h1>
+    <p class="lede">
+      This protocol moves funds. Anyone can write a security section that is all green, and it
+      would be worthless. So this page lists the rows that <em>fail</em>, with the same prominence
+      as the ones that pass. If you are deciding whether to trust this with value, read the red
+      section first.
+    </p>
+    <div class="hero-note">
+      <span class="dot" aria-hidden="true"></span>
+      Not externally audited. Do not deploy with real value.
+    </div>
+  </section>
+
+  <section class="sect">
+    <div class="tally">
+      <div class="tally-item good"><b>14</b><span>enforced &amp; tested</span></div>
+      <div class="tally-item warn"><b>4</b><span>documented, not implemented</span></div>
+      <div class="tally-item bad"><b>4</b><span>known gaps</span></div>
+    </div>
+
+    <h2 class="sect-h" id="not-enforced">Not enforced</h2>
+    <p class="sect-lede">These are the ones that would bite you.</p>
+
+    <div class="rows">
+      <article class="row bad">
+        <div class="row-h"><span class="pill pill-bad">not enforced</span><h3>The dispute quorum is not Sybil-resistant</h3></div>
+        <p><code>registerNode</code> is permissionless and takes no stake. The quorum is a flat count of three distinct registered addresses, so three cheap addresses can deny a node its reward for an epoch. It cannot steal the reward, and it cannot accept a dishonest one — only refuse an honest node.</p>
+        <p class="ref">Threat model F-01, F-19 · limitations §2a</p>
+      </article>
+
+      <article class="row bad">
+        <div class="row-h"><span class="pill pill-bad">not enforced</span><h3>Participants cannot detect a substituted FHE public key</h3></div>
+        <p><code>NetworkParams</code> pins the key correctly on chain, but nothing reads it. The SDK has no reference to <code>s_pub</code>, and the node's <code>enforce_key_pin</code> flag is dead code. A malicious sequencer can swap the key and harvest ciphertexts undetectably. The on-chain history does allow forensic detection afterwards.</p>
+        <p class="ref">Threat model F-08</p>
+      </article>
+
+      <article class="row bad">
+        <div class="row-h"><span class="pill pill-bad">not implemented</span><h3>No slashable contribution bond</h3></div>
+        <p>Fake-row farming is mitigated only by <code>sqrt(rows)</code> weighting plus one shard per address. There is no bond anywhere in the tree. An earlier version of the threat model claimed otherwise and has been corrected — a claim in a security doc that the code does not support is worse than no claim.</p>
+        <p class="ref">Threat model F-01 · limitations §2</p>
+      </article>
+
+      <article class="row bad">
+        <div class="row-h"><span class="pill pill-bad">not implemented</span><h3>The chain does not fully verify the STARK</h3></div>
+        <p>Verification is sampled on chain and completed off-chain. On-chain sampling bounds cost, not trust: a prover that passes sampling still owes the network an off-chain check.</p>
+        <p class="ref">limitations §3</p>
+      </article>
+
+      <article class="row warnrow">
+        <div class="row-h"><span class="pill pill-warn">residual, by design</span><h3>A committee majority can decrypt user rows</h3></div>
+        <p>This is a property of the threshold scheme rather than a bug. A majority of the decryption committee can reconstruct the plaintext; the scheme protects against a minority, not against collusion.</p>
+        <p class="ref">Threat model F-10</p>
+      </article>
+    </div>
+
+    <h2 class="sect-h" id="enforced">Enforced and tested</h2>
+    <p class="sect-lede">Each of these has a test that fails without the fix.</p>
+
+    <ul class="props">
+      <li><span class="tick" aria-hidden="true"></span><div><h4>Escrow accounting is internally consistent</h4><p><code>PaymentVault</code> asserts <code>totalLocked == subBalancesTotal + channelLocksTotal</code> on every balance movement, and the check is O(1).</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>A reentrancy guard covers the money path</h4><p>Tested with a hostile token that calls back mid-<code>transferFrom</code>.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>Buyers cannot take funds owed to others</h4><p><code>settle</code> and <code>reclaimUnspentEpochs</code> draw from disjoint pools, and reclaim reserves the contributor and committee shares.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>Nothing is stranded by <code>abort</code></h4><p>The work-in-progress slice is only withheld when a node actually verified an epoch, and it is paid as a redeemable channel rather than burned.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>The winner's digest is the dispute target</h4><p>A losing committer cannot redirect the dispute and get an honest epoch rejected for free.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>Re-executors are paid</h4><p><code>reexecutionBps</code> of the disputed lock is split between the reporters, so disputing is rational rather than free.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4><code>Disclosed</code> means the committee decrypted</h4><p><code>withdraw</code> requires the gate to have reached <code>threshold</code>; the buyer cannot shortcut the ceremony.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>The SDK cannot upload cleartext by omission</h4><p><code>Encryptor.providesConfidentiality</code> is required, and the <code>NoopEncryptor</code> default is refused unless <code>allowUnencrypted</code> is set explicitly.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>The DA client treats CIDs as hostile</h4><p>CIDs come from on-chain data any contributor controls, so they are validated before entering a request path; responses are size-capped and timed out, and <code>getVerified</code> re-hashes bytes against the on-chain <code>ctDigest</code>.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>Parameter rotation installs exactly what it validated</h4><p>The candidate is bound to its hash at proposal time and re-validated at execution, so the struct that was checked is the struct that lands.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>The payout-gating verifier cannot be swapped instantly</h4><p>Propose → 7-day timelock → execute, with permissionless execution so a queued rotation cannot be frozen by a compromised owner.</p></div></li>
+      <li><span class="tick" aria-hidden="true"></span><div><h4>The surface does not imply guarantees that don't exist</h4><p>Unreachable declarations that implied missing mechanisms — a slashable bond, a rejected-contribution event, a finalize step that never ran — were removed rather than left to be misread.</p></div></li>
+    </ul>
+
+    <h2 class="sect-h" id="known-issues">Known issues worth knowing</h2>
+
+    <div class="rows">
+      <article class="row warnrow">
+        <div class="row-h"><span class="pill pill-warn">known issue</span><h3>The devnet deployment is broken with the pinned plugin</h3></div>
+        <p><code>hardhat run</code> does not install the FHE mock coprocessor, so <code>CipherTask</code>'s constructor reverts with no reason; and the plugin refuses to deploy to a standalone <code>hardhat node</code> (<code>Provider type mismatch</code>). <code>deploy.ts</code> detects both and prints the diagnosis instead of a bare revert. The contracts are still fully exercised by the test suite.</p>
+        <p class="ref">Threat model F-31</p>
+      </article>
+
+      <article class="row warnrow">
+        <div class="row-h"><span class="pill pill-warn">deferred</span><h3>Segmented proofs are documented as reachable but are not</h3></div>
+        <p>No segmented proof implementation exists in the tree. The docs now say so rather than describing a mechanism that is not there.</p>
+        <p class="ref">Threat model F-33</p>
+      </article>
+
+      <article class="row warnrow">
+        <div class="row-h"><span class="pill pill-warn">protocol change needed</span><h3>Immature channels shrink the contributor pool at settlement</h3></div>
+        <p>Contributors that never redeem are reclaimed only at settlement, so a task at its contributor cap can end each epoch with too few contributors to settle. This needs a protocol change, not a patch.</p>
+        <p class="ref">Threat model F-22</p>
+      </article>
+    </div>
+
+    <p class="more">
+      The full analysis is in <code>docs/04-threat-model.md</code> (35 findings) and
+      <code>docs/05-honest-limitations.md</code>.
+      <a href="https://github.com/ssrjkk/shroud/tree/main/docs">Read the docs →</a>
+    </p>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p>MIT licensed. Built as a reference implementation of private compute.</p>
+    <p class="foot-links">
+      <a href="./index.html">Home</a>
+      <a href="https://github.com/ssrjkk/shroud">Source</a>
+      <a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md">Report a vulnerability</a>
+    </p>
+  </div>
+</footer>
+
+<script src="./assets/app.js"></script>
+</body>
+</html>

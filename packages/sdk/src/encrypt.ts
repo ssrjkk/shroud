@@ -5,12 +5,18 @@
  * plaintext never leaves the client. The SDK only ever ships the opaque ciphertext bytes.
  *
  * `NoopEncryptor` exists so the orchestration path is runnable end-to-end in tests without a
- * coprocessor; it must not be used with real data.
+ * coprocessor. It is NOT encryption: it serialises the plaintext. It declares
+ * `providesConfidentiality = false` so `ShroudSdk` will refuse to submit its output unless the
+ * caller explicitly opts in, which is the only thing standing between a forgotten config and a
+ * cleartext upload.
  */
 import { ethers } from "ethers";
 import type { Encryptor } from "./types.js";
 
 export class NoopEncryptor implements Encryptor {
+  // Loud, not silent: this is the flag `ShroudSdk` checks before it will submit a shard.
+  readonly providesConfidentiality = false;
+
   async encryptRows(data: Float64Array | number[], features: number): Promise<Uint8Array> {
     const arr = data instanceof Float64Array ? data : new Float64Array(data);
     const n = arr.length / features;

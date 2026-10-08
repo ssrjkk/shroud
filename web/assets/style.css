@@ -1,0 +1,554 @@
+/* ==========================================================================
+   Shroud — site styles
+   --------------------------------------------------------------------------
+   Palette rationale: a privacy protocol should look like it is protecting
+   something, so the base is almost black with a single cyan "cipher" accent and
+   a violet used *only* for the FHE/encrypted side of every diagram. Amber and
+   red are reserved for the honest-limits section, so a reader learns that
+   those two colours always mean "this is not true yet".
+   ========================================================================== */
+
+:root {
+  --bg: #05070a;
+  --bg-2: #080b11;
+  --panel: #0c111a;
+  --panel-2: #101825;
+  --line: #1b2534;
+  --line-2: #24344a;
+
+  --ink: #e8eef7;
+  --ink-2: #9dabc0;
+  --ink-3: #6b7a90;
+
+  --cipher: #34e0c8;
+  --cipher-dim: #1a8a7b;
+  --fhe: #8b5cf6;
+  --warn: #f0b429;
+  --bad: #f2545b;
+  --good: #3ddc97;
+
+  --mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  --r: 14px;
+  --max: 1140px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16.5px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* --- atmosphere ---------------------------------------------------------- */
+
+/* Peer mesh, drawn by app.js as a node graph with traffic pulses.
+   is reduced or the canvas is unsupported. Opacity is high enough to actually
+   read — the point of the effect is that the page looks like it is sitting on a
+   field of encrypted bytes, and at 0.5 it read as a flat black void. */
+.mesh {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+/* A very fine film of noise, so large flat panels do not look like a
+   screenshot of a template. */
+.grain {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+main, .nav, .foot { position: relative; z-index: 2; }
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--cipher);
+  color: #04120f;
+  padding: 0.6rem 1rem;
+  border-radius: 0 0 8px 0;
+  z-index: 50;
+  font-weight: 600;
+}
+.skip:focus { left: 0; }
+
+/* --- nav ----------------------------------------------------------------- */
+
+.nav {
+  position: sticky;
+  top: 0;
+  backdrop-filter: blur(14px);
+  background: rgba(5, 7, 10, 0.72);
+  border-bottom: 1px solid var(--line);
+}
+
+.nav-in {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 0.85rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--ink);
+  text-decoration: none;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.brand-mark { color: var(--cipher); display: inline-flex; }
+
+.links {
+  display: flex;
+  align-items: center;
+  gap: 1.4rem;
+  font-size: 0.94rem;
+}
+.links a { color: var(--ink-2); text-decoration: none; }
+.links a:hover { color: var(--ink); }
+
+/* --- buttons ------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.62rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: linear-gradient(180deg, var(--cipher), #21b9a4);
+  color: #04120f;
+  font-weight: 620;
+  font-size: 0.95rem;
+  text-decoration: none;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+.btn:hover { transform: translateY(-1px); filter: brightness(1.06); }
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+.btn-ghost:hover { border-color: var(--cipher-dim); background: rgba(52, 224, 200, 0.06); }
+.btn em { font-style: normal; color: var(--warn); }
+
+/* --- hero ---------------------------------------------------------------- */
+
+.hero {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: clamp(3rem, 7vw, 5.5rem) 1.25rem clamp(2rem, 4vw, 3rem);
+  position: relative;
+}
+
+/* Two soft pools of light behind the hero — cyan where a node is doing the
+   work, violet where the data is still encrypted. It gives the headline
+   something to sit on; without it the hero is a large empty black rectangle,
+   which is exactly how the first render of this page looked. */
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: -12% -20% auto -20%;
+  height: 620px;
+  pointer-events: none;
+  background:
+    radial-gradient(620px 340px at 22% 22%, rgba(52, 224, 200, 0.16), transparent 68%),
+    radial-gradient(700px 420px at 78% 8%, rgba(139, 92, 246, 0.15), transparent 70%);
+  filter: blur(8px);
+}
+.hero > * { position: relative; }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--cipher-dim);
+  margin: 0 0 1.4rem;
+}
+
+.hero-h {
+  margin: 0 0 1.5rem;
+  font-size: clamp(2.2rem, 6.2vw, 4.05rem);
+  line-height: 1.06;
+  letter-spacing: -0.035em;
+  font-weight: 680;
+}
+.grad {
+  background: linear-gradient(100deg, var(--cipher) 8%, var(--fhe) 92%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.lede {
+  max-width: 58ch;
+  font-size: clamp(1.02rem, 1.6vw, 1.16rem);
+  color: var(--ink-2);
+  margin: 0 0 2rem;
+}
+
+.cta { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-bottom: 2.4rem; }
+
+.hero-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  max-width: 62ch;
+  padding: 0.8rem 1rem;
+  border: 1px solid rgba(240, 180, 41, 0.28);
+  background: rgba(240, 180, 41, 0.06);
+  border-radius: var(--r);
+  font-size: 0.92rem;
+  color: #f4d99a;
+}
+.hero-note a { color: var(--warn); }
+.hero-note strong { color: #ffdf9e; }
+
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 4px rgba(240, 180, 41, 0.16);
+  flex: none;
+}
+
+/* --- sections ------------------------------------------------------------ */
+
+.sect {
+  max-width: var(--max);
+  margin: 0 auto;
+  /* Tightened from clamp(3rem, 7vw, 5.5rem): the first render left large dead
+     bands between sections, because the vertical rhythm was scaled for a
+     marketing page rather than for a document people actually read. */
+  padding: clamp(2.4rem, 4.6vw, 3.4rem) 1.25rem;
+}
+.sect.alt {
+  max-width: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent);
+}
+.sect.alt > * { max-width: calc(var(--max) - 2.5rem); margin-left: auto; margin-right: auto; }
+
+.sect-h {
+  margin: 0 0 0.8rem;
+  font-size: clamp(1.6rem, 3.4vw, 2.2rem);
+  letter-spacing: -0.025em;
+  font-weight: 660;
+}
+
+.sect-lede {
+  max-width: 60ch;
+  color: var(--ink-2);
+  margin: 0 0 2.4rem;
+}
+
+/* --- pipeline diagram ---------------------------------------------------- */
+
+.flow {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background:
+    radial-gradient(900px 300px at 12% -10%, rgba(52, 224, 200, 0.07), transparent 70%),
+    var(--panel);
+  padding: clamp(1.3rem, 3vw, 2.1rem);
+  margin-bottom: 2.4rem;
+}
+
+.flow-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.flow-box {
+  border: 1px solid var(--line-2);
+  background: var(--panel-2);
+  border-radius: 12px;
+  padding: 1rem 1.2rem;
+  min-width: 11rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.fb-t { font-weight: 620; font-size: 1rem; }
+.fb-s { font-size: 0.8rem; color: var(--ink-3); font-family: var(--mono); }
+
+/* Colour by where the data *is*: violet while still encrypted, cyan once a
+   node is working with it under the network key. */
+.flow-box.plain { border-color: #3a2f52; }
+.flow-box.plain .fb-t { color: #cbd5e1; }
+.flow-box.enc { border-color: #4b3a7a; }
+.flow-box.enc .fb-t { color: #c4b5fd; }
+.flow-box.ct { border-color: #6d4fd6; background: rgba(139, 92, 246, 0.08); }
+.flow-box.ct .fb-t { color: #ddd6fe; }
+.flow-box.da { border-color: var(--line-2); }
+.flow-box.node { border-color: var(--cipher-dim); background: rgba(52, 224, 200, 0.07); }
+.flow-box.node .fb-t { color: var(--cipher); }
+.flow-box.proof { border-color: var(--cipher-dim); }
+.flow-box.proof .fb-t { color: var(--cipher); }
+
+.arw {
+  width: 34px; height: 1.5px;
+  background: linear-gradient(90deg, transparent, var(--line-2));
+  position: relative;
+  flex: none;
+}
+.arw::after {
+  content: "";
+  position: absolute; right: 0; top: 50%;
+  width: 6px; height: 6px;
+  border-top: 1.5px solid var(--line-2);
+  border-right: 1.5px solid var(--line-2);
+  transform: translateY(-50%) rotate(45deg);
+}
+.arw.down { width: 1.5px; height: 22px; background: linear-gradient(180deg, transparent, var(--line-2)); margin: 0.35rem 0; }
+.arw.down::after { right: auto; left: 50%; top: auto; bottom: 0; transform: translateX(-50%) rotate(135deg); }
+
+.flow-foot {
+  margin-top: 1.4rem;
+  padding-top: 1.1rem;
+  border-top: 1px dashed var(--line-2);
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.85rem;
+}
+.flow-foot code { font-family: var(--mono); color: var(--ink-2); }
+
+/* --- cards --------------------------------------------------------------- */
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(255px, 1fr));
+  gap: 1rem;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.022), transparent), var(--panel);
+  border-radius: var(--r);
+  padding: 1.25rem 1.3rem;
+}
+.card h3 { margin: 0 0 0.5rem; font-size: 1.03rem; letter-spacing: -0.012em; font-weight: 640; }
+.card p { margin: 0; color: var(--ink-2); font-size: 0.945rem; }
+
+.card.warn { border-color: rgba(240, 180, 41, 0.24); background: linear-gradient(180deg, rgba(240, 180, 41, 0.045), transparent), var(--panel); }
+
+.card.link { display: block; color: inherit; text-decoration: none; transition: border-color 0.15s ease, transform 0.15s ease; }
+.card.link:hover { border-color: var(--cipher-dim); transform: translateY(-2px); }
+
+.pill {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  margin-bottom: 0.7rem;
+}
+.pill-bad { background: rgba(242, 84, 91, 0.14); color: #ff9a9e; border: 1px solid rgba(242, 84, 91, 0.34); }
+
+/* --- property list ------------------------------------------------------- */
+
+.props { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
+
+.props li {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.05rem 1.2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.props h4 { margin: 0 0 0.25rem; font-size: 0.99rem; font-weight: 640; }
+.props p { margin: 0; color: var(--ink-2); font-size: 0.94rem; }
+
+.tick {
+  flex: none;
+  width: 20px; height: 20px;
+  margin-top: 0.18rem;
+  border-radius: 50%;
+  background: rgba(61, 220, 151, 0.12);
+  border: 1px solid rgba(61, 220, 151, 0.4);
+  position: relative;
+}
+.tick::after {
+  content: "";
+  position: absolute; left: 5.5px; top: 3px;
+  width: 5px; height: 9px;
+  border-right: 2px solid var(--good);
+  border-bottom: 2px solid var(--good);
+  transform: rotate(40deg);
+}
+
+.more { margin: 1.8rem 0 0; }
+.more a { color: var(--cipher); text-decoration: none; font-weight: 560; }
+.more a:hover { text-decoration: underline; }
+
+/* --- security page -------------------------------------------------------- */
+
+.hero-tight { padding-bottom: clamp(2rem, 4vw, 3rem); }
+
+.tally {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+  margin-bottom: 3rem;
+}
+.tally-item {
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--panel);
+  padding: 1.1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.tally-item b { font-size: 1.9rem; letter-spacing: -0.03em; line-height: 1.1; }
+.tally-item span { font-size: 0.83rem; color: var(--ink-3); font-family: var(--mono); }
+.tally-item.good { border-color: rgba(61, 220, 151, 0.3); }
+.tally-item.good b { color: var(--good); }
+.tally-item.warn { border-color: rgba(240, 180, 41, 0.3); }
+.tally-item.warn b { color: var(--warn); }
+.tally-item.bad { border-color: rgba(242, 84, 91, 0.3); }
+.tally-item.bad b { color: var(--bad); }
+
+/* A "row" is one claim with its verdict. Rows that fail are given a coloured
+   left edge, so a reader scanning the page finds the failures first. */
+.rows { display: grid; gap: 0.9rem; margin-bottom: 3rem; }
+
+.row {
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-2);
+  border-radius: var(--r);
+  background: var(--panel);
+  padding: 1.2rem 1.35rem;
+}
+.row.bad { border-left-color: var(--bad); }
+.row.warnrow { border-left-color: var(--warn); }
+
+.row-h {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.55rem;
+}
+.row-h .pill { margin-bottom: 0; }
+.row-h h3 { margin: 0; font-size: 1.02rem; font-weight: 640; letter-spacing: -0.012em; }
+
+.row p { margin: 0 0 0.6rem; color: var(--ink-2); font-size: 0.945rem; }
+.row p:last-child { margin-bottom: 0; }
+
+.ref {
+  font-family: var(--mono);
+  font-size: 0.78rem !important;
+  color: var(--ink-3) !important;
+}
+
+.pill-warn {
+  background: rgba(240, 180, 41, 0.13);
+  color: #ffd98a;
+  border: 1px solid rgba(240, 180, 41, 0.34);
+}
+
+.copy {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  color: var(--ink-2);
+  cursor: pointer;
+  padding: 0.1rem 0.45rem;
+}
+.copy.copied { color: var(--good); border-color: rgba(61, 220, 151, 0.4); }
+
+/* --- code ---------------------------------------------------------------- */
+
+code {
+  font-family: var(--mono);
+  font-size: 0.87em;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.08em 0.36em;
+  color: #b8e9df;
+  word-break: break-word;
+}
+
+a { color: var(--cipher); }
+
+/* --- footer -------------------------------------------------------------- */
+
+.foot { border-top: 1px solid var(--line); margin-top: 2rem; }
+.foot-in {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 2rem 1.25rem 3rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  color: var(--ink-3);
+  font-size: 0.88rem;
+}
+.foot-in p { margin: 0; }
+.foot-links { display: flex; gap: 1.2rem; }
+.foot-links a { color: var(--ink-2); text-decoration: none; }
+.foot-links a:hover { color: var(--ink); }
+
+/* --- responsive ---------------------------------------------------------- */
+
+@media (max-width: 640px) {
+  .links { gap: 0.9rem; font-size: 0.88rem; }
+  .links a[href="https://github.com/ssrjkk/shroud"] { display: none; }
+  .flow-box { min-width: 7rem; padding: 0.65rem 0.75rem; }
+  .props li { padding: 0.9rem 1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  /* The canvas stays: reduced-motion stops the animation, not the texture.
+     Hiding it produced a flat black page, which reads as broken rather than
+     as accessible. app.js paints exactly one frame in this mode. */
+  .mesh { opacity: 0.55; }
+  .btn { transition: none; }
+}

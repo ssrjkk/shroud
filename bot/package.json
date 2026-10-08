@@ -1,0 +1,19 @@
+{
+  "name": "@shroud/tgbot",
+  "version": "0.1.0",
+  "description": "Shroud operations bot: task pool, dispute and key-rotation alerts over Telegram.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "main": "./src/index.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}

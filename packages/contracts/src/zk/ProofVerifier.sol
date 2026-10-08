@@ -26,14 +26,26 @@ contract ProofVerifier is IProofVerifier {
     uint256 public immutable MAX_PROOF_BYTES;
     bytes32 public immutable protocolDomain;
 
+    /// @dev Delay a verifier rotation must sit in the queue before it can be executed. Seven days
+    ///      matches `NetworkParams`' rotation timelock so both halves of the protocol's trust
+    ///      surface move on the same schedule.
+    uint256 public constant ROTATION_TIMELOCK = 7 days;
+
+    address public pendingVerifier;
+    uint64 public pendingVerifierAt;
+
     bool public paused;
 
     event ProofVerified(bytes32 indexed transcriptHash, uint32 indexed epoch, bool ok);
     event VerifierRotated(address indexed from, address indexed to);
+    event VerifierRotationProposed(address indexed from, address indexed to, uint64 executableAt);
+    event VerifierRotationCancelled(address indexed verifier);
     event PausedChanged(bool paused);
 
     error NotOwner(address caller);
     error ZeroAddress();
+    error NoPendingRotation();
+    error TooEarly(uint64 executableAt);
 
     constructor(address starkVerifier_, uint256 maxProofBytes_, bytes32 protocolDomain_) {
         if (starkVerifier_ == address(0)) revert ZeroAddress();
@@ -79,11 +91,49 @@ contract ProofVerifier is IProofVerifier {
     }
 
     /// @notice Point at a different verifier implementation.
-    /// @dev Deploy behind a timelock + multisig in production (threat model F-11).
-    function rotate(address to) external onlyOwner {
+/// @dev Behind a mandatory timelock, because this contract gates every payout in the protocol: a
+///      verifier that accepts anything is a verifier that pays fraudsters. This used to be a
+///      single-call `onlyOwner` swap, so a compromised owner key could install a permissive
+///      verifier in one transaction with no window for anyone to notice. The window is the
+///      mitigation, and it has to be enforced on-chain to be worth anything — an off-chain
+///      promise in a runbook is not. `NetworkParams` already does this for key rotation; the two
+///      should not have had different strength.
+function proposeRotation(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        emit VerifierRotated(starkVerifier, to);
+        pendingVerifier = to;
+        pendingVerifierAt = uint64(block.timestamp + ROTATION_TIMELOCK);
+        emit VerifierRotationProposed(starkVerifier, to, pendingVerifierAt);
+    }
+
+    /// @notice Cancel a queued rotation. Owner-only: the owner must be able to stop a rotation it
+    ///         no longer wants, including one queued by a compromised key before the timelock
+    ///         elapses. This is the owner's only lever once a rotation is queued.
+    function cancelRotation() external onlyOwner {
+        if (pendingVerifier == address(0)) revert NoPendingRotation();
+        emit VerifierRotationCancelled(pendingVerifier);
+        pendingVerifier = address(0);
+        pendingVerifierAt = 0;
+    }
+
+    /// @notice Install the queued verifier once its timelock has elapsed.
+    /// @dev Permissionless on purpose. If only the owner could execute, then "the owner is
+    ///      compromised" would also mean "the rotation can be frozen forever" — the owner could
+    ///      simply never call this. Letting anyone execute means a queued rotation either happens
+    ///      at or after the announced time or gets cancelled, and an observer can rely on that.
+    function executeRotation() external {
+        if (pendingVerifier == address(0)) revert NoPendingRotation();
+        if (block.timestamp < pendingVerifierAt) revert TooEarly(pendingVerifierAt);
+        address from = starkVerifier;
+        address to = pendingVerifier;
+        pendingVerifier = address(0);
+        pendingVerifierAt = 0;
         starkVerifier = to;
+        emit VerifierRotated(from, to);
+    }
+
+    /// @notice The rotation queued for execution, if any.
+    function pendingRotation() external view returns (address verifier, uint64 executableAt) {
+        return (pendingVerifier, pendingVerifierAt);
     }
 
     modifier onlyOwner() {

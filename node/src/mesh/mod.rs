@@ -41,7 +41,7 @@ impl std::str::FromStr for DecimalU256 {
         }
         U256::from_str_radix(s, 10)
             .map(DecimalU256)
-            .map_err(ParseIdError::Overflow)
+            .map_err(|e| ParseIdError::Overflow(e.to_string()))
     }
 }
 

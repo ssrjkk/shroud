@@ -49,10 +49,34 @@ export interface PreparedShard {
 export interface ShardStore {
   /** PUT `payload`, returning the content-address (CID) of the object. */
   put(payload: Uint8Array): Promise<{ cid: Hex; digest: Hex }>;
+  /**
+   * GET the bytes for `cid`.
+   *
+   * Part of the interface rather than an optional extra because a re-executing node cannot do its
+   * job without it: it has to fetch the committed ciphertext to recompute the epoch and compare
+   * digests. It was previously missing from the interface entirely, so the typed API could not
+   * express the one operation the protocol exists to support.
+   *
+   * Throws if the object is absent. `digest` is always the locally computed keccak256 of the
+   * payload, which is the value committed on chain — never a digest echoed by the store.
+   */
+  get(cid: Hex): Promise<Uint8Array>;
 }
 
 /** The local FHE encryption abstraction (FHEWasm / relayer in production). */
 export interface Encryptor {
+  /**
+   * Whether this encryptor actually produces ciphertext.
+   *
+   * Required rather than optional on purpose. `NoopEncryptor` writes the plaintext `f64`s into
+   * the payload, which is fine for tests and catastrophic for real data: nothing in the payload
+   * marks it as unencrypted, so a client that forgot to pass an encryptor would upload a
+   * contributor's rows in cleartext and the chain would record a perfectly normal-looking
+   * ciphertext CID for it. Making every implementer state this explicitly lets the SDK refuse the
+   * dangerous combination instead of trusting a default.
+   */
+  readonly providesConfidentiality: boolean;
+
   /**
    * Encrypt `rows` of `features` floats into an on-chain-representable ciphertext blob.
    *

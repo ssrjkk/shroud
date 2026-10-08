@@ -9,7 +9,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use alloy::primitives::{Address, B256};
 use clap::Parser;
 use figment::{
-    providers::{Env, Format, Toml},
+    providers::{Env, Format, Serialized, Toml},
     Figment,
 };
 use serde::{Deserialize, Serialize};
@@ -221,9 +221,12 @@ pub struct PaymentConfig {
     /// Wait this long after `EpochSettled` before redeeming, to survive short RPC outages.
     pub redeem_delay: Duration,
     /// Max USDC (6 dp) a single node will claim from one task.
-    pub max_claim_per_task: u128,
+    ///
+    /// `u64` rather than `u128`: figment implements no `deserialize_u128`, so a `u128` key is
+    /// unreadable from a file, the environment, or the defaults layer.
+    pub max_claim_per_task: u64,
     /// Refuse to bid for a task whose budget exceeds this, to bound exposure.
-    pub max_budget_per_task: u128,
+    pub max_budget_per_task: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -332,13 +335,12 @@ impl Config {
     /// `default_value_t` would always look passed, so they are read through
     /// `ArgMatches::value_source` instead — see `cli_overrides`.)
     pub fn load(cli: &Cli) -> Result<Self> {
-        let figment = Figment::new()
+        let figment = Figment::from(Serialized::defaults(Config::default()))
             .merge(Toml::file(&cli.config))
             .merge(Env::prefixed("CM_").split("__"))
-            .merge(cli_overrides(cli))
-            .select();
+            .merge(cli_overrides(cli));
 
-        let mut cfg: Config = figment
+        let cfg: Config = figment
             .extract()
             .map_err(|e| ConfigError::Load(e.to_string()))?;
         cfg.validate()?;
@@ -444,7 +446,7 @@ impl Config {
 /// figment and the lower-precedence layers (file, env) keep their value. This is why the
 /// structs below exist instead of reusing `Cli`: clap's `default_value_t` fields would always
 /// look "set" and would clobber the file.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 struct CliOverrides {
     chain: ChainOverride,
     contracts: ContractsOverride,
@@ -481,7 +483,7 @@ struct NodeOverride {
     task_filter: Option<B256>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 struct MeshOverride {
     listen: SocketAddr,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -520,13 +522,13 @@ fn cli_overrides(cli: &Cli) -> figment::providers::Serialized<CliOverrides> {
             digest_only: cli.dispute_only.then_some(true),
         },
     };
-    figment::providers::Serialized::from(ov)
+    figment::providers::Serialized::defaults(ov)
 }
 
 /// Test-only helper: build a config from TOML text.
 #[cfg(test)]
 pub fn from_toml_str(src: &str) -> Result<Config> {
-    let figment = Figment::new().merge(Toml::string(src)).select();
+    let figment = Figment::from(Serialized::defaults(Config::default())).merge(Toml::string(src));
     let cfg: Config = figment
         .extract()
         .map_err(|e| ConfigError::Load(e.to_string()))?;
@@ -537,11 +539,13 @@ pub fn from_toml_str(src: &str) -> Result<Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
 
     const MINIMAL: &str = r#"
         [contracts]
         cipher_task = "0x1111111111111111111111111111111111111111"
         payment_vault = "0x2222222222222222222222222222222222222222"
+        network_params = "0x3333333333333333333333333333333333333333"
 
         [node]
         operator_key = "0xdeadbeef"
@@ -565,6 +569,7 @@ mod tests {
             [contracts]
             cipher_task = "0x1111111111111111111111111111111111111111"
             payment_vault = "0x2222222222222222222222222222222222222222"
+            network_params = "0x3333333333333333333333333333333333333333"
 
             [node]
             operator_key = "0xdeadbeef"
@@ -581,6 +586,7 @@ mod tests {
             [contracts]
             cipher_task = "0x0000000000000000000000000000000000000000"
             payment_vault = "0x2222222222222222222222222222222222222222"
+            network_params = "0x3333333333333333333333333333333333333333"
 
             [node]
             operator_key = "0xdeadbeef"
@@ -603,6 +609,7 @@ mod tests {
             [contracts]
             cipher_task = "0x1111111111111111111111111111111111111111"
             payment_vault = "0x2222222222222222222222222222222222222222"
+            network_params = "0x3333333333333333333333333333333333333333"
             "#,
         )
         .expect_err("missing operator key must be rejected");
@@ -678,17 +685,13 @@ mod tests {
             operator_key: Some("0xabcd".into()),
             ..Cli::parse_from(["shroud-node"])
         };
-        let out = cli_overrides(&cli).data().expect("provider yields a map");
-        let contracts = out.get("contracts").expect("contracts table present");
-        assert_eq!(
-            contracts
-                .get("cipher_task")
-                .and_then(|v| v.to_string().ok())
-                .map(|s| s.trim_matches('"').to_string()),
-            Some(format!("{:#x}", Address::repeat_byte(0x33)))
-        );
-        let node = out.get("node").expect("node table present");
-        assert!(node.get("operator_key").is_some());
+        let cfg: Config = Figment::from(Serialized::defaults(Config::default()))
+            .merge(cli_overrides(&cli))
+            .extract()
+            .expect("extract succeeds");
+        assert_eq!(cfg.contracts.cipher_task, Address::repeat_byte(0x33));
+        assert_eq!(cfg.contracts.payment_vault, Address::repeat_byte(0x44));
+        assert!(!cfg.node.operator_key.is_empty());
     }
 
     #[test]
@@ -696,24 +699,31 @@ mod tests {
         // The `chain` table is present but empty, which figment merges as a no-op. What
         // matters is that no key inside it can overwrite the file's value.
         let cli = Cli::parse_from(["shroud-node"]);
-        let out = cli_overrides(&cli).data().expect("provider yields a map");
-        let chain = out.get("chain").expect("chain table present");
-        assert!(
-            chain.is_empty(),
-            "an unset --rpc-url must not shadow the TOML file, got {chain:?}"
-        );
+        let toml = r#"
+            [chain]
+            rpc_url = "http://from-file:8545"
+            [contracts]
+            cipher_task = "0x0000000000000000000000000000000000000001"
+            payment_vault = "0x0000000000000000000000000000000000000002"
+            network_params = "0x0000000000000000000000000000000000000003"
+            [node]
+            operator_key = "0xdeadbeef"
+        "#;
+        let cfg: Config = Figment::from(Serialized::defaults(Config::default()))
+            .merge(Toml::string(toml))
+            .merge(cli_overrides(&cli))
+            .extract()
+            .expect("extract succeeds");
+        assert_eq!(cfg.chain.rpc_url, "http://from-file:8545");
     }
 
     #[test]
     fn dispute_only_maps_onto_stark_digest_only() {
         let cli = Cli::parse_from(["shroud-node", "--dispute-only"]);
-        let out = cli_overrides(&cli).data().expect("provider yields a map");
-        assert_eq!(
-            out.get("stark")
-                .and_then(|s| s.get("digest_only"))
-                .and_then(|v| v.to_string().ok())
-                .as_deref(),
-            Some("true")
-        );
+        let cfg: Config = Figment::from(Serialized::defaults(Config::default()))
+            .merge(cli_overrides(&cli))
+            .extract()
+            .expect("extract succeeds");
+        assert!(cfg.stark.digest_only);
     }
 }

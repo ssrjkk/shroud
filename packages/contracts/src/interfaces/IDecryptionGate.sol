@@ -15,5 +15,8 @@ interface IBLS {
 interface IDecryptionGate {
     function requestReveal(uint256 taskId, bytes32 weightsCid, bytes calldata blsAggregateSig) external;
     function submitPartialDecryption(uint256 taskId, bytes32 partialDecryption) external;
-    function canDecrypt(uint256 taskId) external view returns (bool);
+    /// @notice Whether `threshold` distinct members have submitted and the reveal has been
+    ///         combined. `CipherTask.withdraw` requires this, so `Disclosed` attests that the
+    ///         committee really decrypted the output rather than merely that a reveal was opened.
+    function revealCompleted(uint256 taskId) external view returns (bool);
 }

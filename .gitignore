@@ -32,3 +32,16 @@ Thumbs.db
 # --- Logs / temp ---
 *.log
 npm-debug.log*
+
+# --- ShardStore (DA) ---
+# Content-addressed objects are hex-named files with no extension. Anything that lands next to
+# server.mjs is shard data from a misconfigured DATA_DIR, not source, and committing it would put
+# encrypted payloads in git history where they cannot be revoked.
+infra/shardstore/0x*
+infra/shardstore-data/
+
+# --- Shroud ops bot -------------------------------------------------------
+# The bot's token and the operator's Telegram id are secrets; never commit them.
+bot/.env
+bot/node_modules/
+bot/state/

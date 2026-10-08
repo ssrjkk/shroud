@@ -28,7 +28,9 @@ package shroud.mesh.v1;
 
 service Mesh {
   // Long-lived bidirectional gossip stream. Both ends announce shards and trace digests.
-  rpc Connect(stream Envelope) returns (stream Envelope);
+  // Named `Gossip` rather than `Connect` because tonic generates a `connect<D>` method on every
+  // service, and a same-name RPC collides with it at the type level.
+  rpc Gossip(stream Envelope) returns (stream Envelope);
 
   // Unary pull used for range fetches during epoch execution.
   rpc FetchShard(ShardRequest) returns (ShardResponse);

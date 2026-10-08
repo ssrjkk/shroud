@@ -15,6 +15,9 @@ pub enum Error {
     #[error("chain rpc: {0}")]
     Chain(String),
 
+    #[error("alloy: {0}")]
+    Alloy(String),
+
     #[error("contract call {method} reverted: {reason}")]
     ContractCall {
         method: &'static str,
@@ -64,6 +67,12 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<alloy::transports::RpcError<alloy::transports::TransportErrorKind>> for Error {
+    fn from(e: alloy::transports::RpcError<alloy::transports::TransportErrorKind>) -> Self {
+        Error::Alloy(format!("{e}"))
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
