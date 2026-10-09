@@ -169,3 +169,18 @@ What is actually enforced on chain today, and what is not:
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+## Installation
+
+```bash
+git clone https://github.com/ssrjkk/shroud.git
+cd shroud
+pip install -r requirements.txt
+```
+
+## Usage
+
+```bash
+python main.py
+```
