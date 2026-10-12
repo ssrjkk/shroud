@@ -37,9 +37,6 @@ contract NetworkParams is ReentrancyGuard {
         bool cancelled;
     }
 
-    bytes32 public constant NETWORK_TYPEHASH =
-        keccak256("Params(uint64 keyVersion,bytes32 fhePublicKeyHash,bytes32 committeeAggregateKey,uint16 committeeThreshold,uint16 committeeSize,uint32 maxProofBytes,uint32 maxCiphertextBytes,uint32 maxFeatures)");
-
     address public owner;
     address public pendingOwner;
     address public approver;
@@ -86,14 +83,13 @@ contract NetworkParams is ReentrancyGuard {
 
     /// @notice One-shot initialisation. Retrying with different values is deliberately blocked:
     ///         a mutable genesis would let an attacker negotiate a key they control.
+    /// @dev Validated by `_validateCandidate`, the same rules every rotation passes through, so
+    ///      genesis cannot install a set that a later rotation would refuse. It used to carry its
+    ///      own shorter list, which let a task's very first parameters pin `committeeAggregateKey`
+    ///      to zero or `maxCiphertextBytes` to zero while a rotation with the same values reverted.
     function initialize(Params calldata p) external onlyOwner {
         if (current.active) revert InvalidParams("already initialized");
-        if (p.keyVersion != 1) revert InvalidParams("genesis keyVersion must be 1");
-        if (p.fhePublicKeyHash == bytes32(0)) revert InvalidParams("fhePublicKeyHash");
-        if (p.committeeThreshold == 0 || p.committeeThreshold > p.committeeSize) revert InvalidParams("threshold");
-        if (p.committeeSize < 3) revert InvalidParams("committeeSize");
-        if (p.maxProofBytes < 1_024 || p.maxProofBytes > 131_072) revert InvalidParams("maxProofBytes");
-        if (p.maxFeatures == 0) revert InvalidParams("maxFeatures");
+        _validateCandidate(p);
 
         current = Params({
             chainId: uint64(block.chainid),
@@ -124,6 +120,10 @@ contract NetworkParams is ReentrancyGuard {
         if (c.keyVersion != current.keyVersion + 1) revert InvalidParams("keyVersion must increment by 1");
         if (c.fhePublicKeyHash == current.fhePublicKeyHash) revert InvalidParams("hash unchanged");
         if (c.fhePublicKeyHash == bytes32(0)) revert InvalidParams("fhePublicKeyHash");
+        // The aggregate key is what every participant checks the reveal BLS signature against, and
+        // this contract pins it, so a zero value is not "absent" but "the committee is nobody":
+        // clients that trust this pin would validate a reveal against the zero key.
+        if (c.committeeAggregateKey == bytes32(0)) revert InvalidParams("committeeAggregateKey");
         if (c.committeeThreshold == 0 || c.committeeThreshold > c.committeeSize) {
             revert InvalidParams("threshold");
         }
@@ -172,9 +172,10 @@ contract NetworkParams is ReentrancyGuard {
 
     function cancelRotation() external onlyOwner {
         if (pending.scheduledAt == 0) revert NoPendingRotation();
+        uint64 scheduled = pending.scheduledAt;
         pending.cancelled = true;
         pending.scheduledAt = 0;
-        emit RotationCancelledEvent(uint64(block.timestamp));
+        emit RotationCancelledEvent(scheduled);
     }
 
     /// @notice Execute an approved rotation whose timelock has elapsed.
@@ -220,10 +221,25 @@ contract NetworkParams is ReentrancyGuard {
         pendingOwner = address(0);
     }
 
+    /// @notice Rotate the approving key.
+    /// @dev An unapproved rotation is dropped as well. Its `expectedHash` commits to the approver
+    ///      who held the role when it was proposed (`keccak256(abi.encode(candidate, chainid,
+    ///      approver))`), so after a rotation of the role no candidate the new approver can present
+    ///      will ever hash to the stored value: the queue would sit there unapprovable and
+    ///      unrecoverable until the owner cancelled it by hand. A rotation that has already been
+    ///      approved is left alone, because its hash is bound to `pending.approver` and it remains
+    ///      executable exactly as announced.
     function setApprover(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        emit ApproverChanged(approver, to);
+        address from = approver;
         approver = to;
+        if (pending.scheduledAt != 0 && !pending.executed && !pending.cancelled && pending.approver == address(0)) {
+            uint64 scheduled = pending.scheduledAt;
+            pending.cancelled = true;
+            pending.scheduledAt = 0;
+            emit RotationCancelledEvent(scheduled);
+        }
+        emit ApproverChanged(from, to);
     }
 
     /* ------------------------------------------------------------------ */

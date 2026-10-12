@@ -8,9 +8,11 @@ import {IBLS} from "../interfaces/IDecryptionGate.sol";
 /// @dev The real verifier is a Winterfell-wasm / Stone-prover service addressed in
 ///      `NetworkParams`. This mock accepts any proof that starts with the magic prefix, so
 ///      the orchestration logic (escrow, epochs, disputes, channels, settlement) can be
-///      tested end to end without a proving system in the loop. Integration tests that
-///      exercise the real AIR live in `test/ProofVerifier.spec.ts` and must run against a
-///      deployed verifier.
+///      tested end to end without a proving system in the loop. It is *not* a verification
+///      test: nothing here exercises a real AIR, and this repository has no such test. The
+///      proof-checking path is covered only as far as "the orchestrator calls the verifier and
+///      reacts to its answer"; the soundness of the proofs themselves is the proving service's
+///      problem and is listed as unimplemented in `docs/05-honest-limitations.md`.
 contract MockStarkVerifier is IProofVerifier {
     bytes4 internal constant MAGIC = 0x53544152; // "STAR"
     uint256 public immutable maxProofBytes;

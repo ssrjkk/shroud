@@ -10,6 +10,7 @@
  * with a KMS back end.
  */
 import { ethers, network } from "hardhat";
+import { deployLinked } from "./libraries";
 import { writeFileSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
 
@@ -86,7 +87,7 @@ async function main() {
   const committee = [committeeA.address, committeeB.address, committeeC.address];
   const gate = await ethers.deployContract("DecryptionGate", [await bls.getAddress(), h("bls-agg"), 2]);
   const net = await ethers.deployContract("NetworkParams", [owner.address]);
-  const task = await ethers.deployContract("CipherTask", [
+  const task = await deployLinked("CipherTask", [
     await token.getAddress(),
     await vault.getAddress(),
     await verifier.getAddress(),

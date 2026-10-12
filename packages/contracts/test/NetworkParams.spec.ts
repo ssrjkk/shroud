@@ -181,4 +181,59 @@ describe("NetworkParams rotation", () => {
     await expect(net.connect(owner).proposeRotation(b, await hashOf(net, b), TIMELOCK_U64))
       .to.be.revertedWithCustomError(net, "NoPendingRotation");
   });
+  it("applies the rotation rules at genesis too", async () => {
+    // `initialize` used to run a shorter list than `_validateCandidate`, so the very first parameter
+    // set of the network could pin `committeeAggregateKey` to zero or `maxCiphertextBytes` to zero:
+    // values a rotation is refused for. Every client pins whatever genesis installs.
+    const [owner] = await ethers.getSigners();
+    const net: NetworkParams = await ethers.deployContract("NetworkParams", [owner.address]);
+
+    for (const [label, bad] of [
+      ["committeeAggregateKey", candidate({ keyVersion: 1, committeeAggregateKey: ethers.ZeroHash })],
+      ["maxCiphertextBytes", candidate({ keyVersion: 1, maxCiphertextBytes: 0 })],
+      ["fhePublicKeyHash", candidate({ keyVersion: 1, fhePublicKeyHash: ethers.ZeroHash })],
+      ["maxProofBytes", candidate({ keyVersion: 1, maxProofBytes: 512 })],
+      ["threshold above size", candidate({ keyVersion: 1, committeeThreshold: 8, committeeSize: 7 })],
+      ["committeeSize", candidate({ keyVersion: 1, committeeSize: 2, committeeThreshold: 1 })],
+      ["keyVersion must start at 1", candidate({ keyVersion: 2 })]
+    ] as [string, ParamsStruct][]) {
+      await expect(net.initialize(await withChainId(bad)), label).to.be.revertedWithCustomError(net, "InvalidParams");
+    }
+
+    // Nothing partial was installed by the rejected attempts.
+    expect((await net.current()).active).to.equal(false);
+
+    await expect(net.initialize(await withChainId(candidate({ keyVersion: 1, fhePublicKeyHash: bytes32Of("s_pub-v1") })))).to.emit(net, "Initialized");
+    expect(await net.isCurrentKey(bytes32Of("s_pub-v1"))).to.equal(true);
+
+    // Genesis is a one-shot: re-initializing would replace the pin every client already trusts.
+    await expect(net.initialize(await withChainId(candidate()))).to.be.revertedWithCustomError(net, "InvalidParams");
+  });
+
+  it("voids an unapproved rotation when the approver changes, and keeps an approved one", async () => {
+    // `approveRotation` binds the stored hash to the approver that signed it, so replacing the
+    // approver has two different consequences depending on whether anyone had approved yet. It used
+    // to leave a proposal queued against an approver that no longer holds the role, which then
+    // reverted forever in `executeRotation`: one owner call could wedge the rotation path.
+    const { net, owner, approver, outsider } = await deploy();
+
+    // (a) Proposed, never approved: changing the approver voids it.
+    const unapproved = await withChainId(candidate({ fhePublicKeyHash: bytes32Of("s_pub-v2") }));
+    await net.connect(owner).proposeRotation(unapproved, await hashOf(net, unapproved), TIMELOCK_U64);
+    await expect(net.connect(owner).setApprover(outsider.address)).to.emit(net, "RotationCancelledEvent");
+    await time.increase(TIMELOCK);
+    await expect(net.executeRotation(unapproved)).to.be.revertedWithCustomError(net, "NoPendingRotation");
+    expect((await net.current()).fhePublicKeyHash).to.equal(bytes32Of("s_pub-v1"));
+
+    // (b) Approved by the old approver: the rotation is owed, and changing the key afterwards cannot
+    // un-sign a decision the approver already made.
+    await net.connect(owner).setApprover(approver.address);
+    const approved = await withChainId(candidate({ fhePublicKeyHash: bytes32Of("s_pub-v3") }));
+    await net.connect(owner).proposeRotation(approved, await hashOf(net, approved), TIMELOCK_U64);
+    await net.connect(approver).approveRotation(approved);
+    await net.connect(owner).setApprover(outsider.address);
+    await time.increase(TIMELOCK);
+    await expect(net.executeRotation(approved)).to.emit(net, "RotationExecuted");
+    expect(await net.isCurrentKey(bytes32Of("s_pub-v3"))).to.equal(true);
+  });
 });

@@ -22,6 +22,7 @@ contract ProofVerifier is IProofVerifier {
     error Paused();
 
     address public owner;
+    address public pendingOwner;
     address public starkVerifier; // storage (rotatable), not immutable
     uint256 public immutable MAX_PROOF_BYTES;
     bytes32 public immutable protocolDomain;
@@ -41,6 +42,8 @@ contract ProofVerifier is IProofVerifier {
     event VerifierRotationProposed(address indexed from, address indexed to, uint64 executableAt);
     event VerifierRotationCancelled(address indexed verifier);
     event PausedChanged(bool paused);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
+    event OwnershipTransferred(address indexed from, address indexed to);
 
     error NotOwner(address caller);
     error ZeroAddress();
@@ -90,15 +93,33 @@ contract ProofVerifier is IProofVerifier {
         emit PausedChanged(v);
     }
 
+    /// @notice Begin a two-step ownership handover.
+    /// @dev There was no way to move this owner at all, so a lost key meant the verifier could
+    ///      never be rotated again while `setPaused` could never be lifted: both levers were
+    ///      frozen with the address that held them. Two-step because transferring to an address
+    ///      that cannot sign is the same dead end, reached by one transaction.
+    function transferOwnership(address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        emit OwnershipTransferStarted(owner, to);
+        pendingOwner = to;
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotOwner(msg.sender);
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
+    }
+
     /// @notice Point at a different verifier implementation.
-/// @dev Behind a mandatory timelock, because this contract gates every payout in the protocol: a
-///      verifier that accepts anything is a verifier that pays fraudsters. This used to be a
-///      single-call `onlyOwner` swap, so a compromised owner key could install a permissive
-///      verifier in one transaction with no window for anyone to notice. The window is the
-///      mitigation, and it has to be enforced on-chain to be worth anything — an off-chain
-///      promise in a runbook is not. `NetworkParams` already does this for key rotation; the two
-///      should not have had different strength.
-function proposeRotation(address to) external onlyOwner {
+    /// @dev Behind a mandatory timelock, because this contract gates every payout in the protocol: a
+    ///      verifier that accepts anything is a verifier that pays fraudsters. This used to be a
+    ///      single-call `onlyOwner` swap, so a compromised owner key could install a permissive
+    ///      verifier in one transaction with no window for anyone to notice. The window is the
+    ///      mitigation, and it has to be enforced on-chain to be worth anything — an off-chain
+    ///      promise in a runbook is not. `NetworkParams` already does this for key rotation; the two
+    ///      should not have had different strength.
+    function proposeRotation(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
         pendingVerifier = to;
         pendingVerifierAt = uint64(block.timestamp + ROTATION_TIMELOCK);

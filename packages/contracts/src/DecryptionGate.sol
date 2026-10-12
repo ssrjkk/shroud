@@ -8,23 +8,37 @@ import {ReentrancyGuard, Pausable} from "./libraries/Guard.sol";
 /// @title DecryptionGate
 /// @notice Threshold (t-of-n) decryption of *task outputs only*, contract-restricted.
 ///
-/// @dev This contract is the *only* place where anything leaves the ciphertext world, and it
-///      can only be asked to do so for a task that has fully settled. Concretely it enforces:
+/// @dev This contract is the *only* place where the protocol records that a task's output has been
+///      decrypted by the committee, and it can only be asked to do so for a task that has fully
+///      settled. Concretely it enforces:
 ///
-///      1. **Output allowlist.** `submitPartialDecryption` carries the output CID. The gate
-///         rejects any CID that is not the settled task's committed `encWeights_Cid`. A
-///         committee member therefore *cannot* be socially engineered — even collectively —
-///         into decrypting an individual user shard, because the contract will not accept
-///         the resulting partial decryptions. (Threat model F-09.)
+///      1. **Output pinning.** A reveal only opens for the CID the task actually registered:
+///         `requestReveal` rejects any `weightsCid` that is not the settled task's
+///         `encWeights_Cid`, and the status gate (`Settling`/`Revealing`) means no later epoch can
+///         re-pin `acceptedWeights` underneath an open window. `submitPartialDecryption` then
+///         records the registered CID alongside each partial, so the on-chain log ties every
+///         partial to one specific output ciphertext.
+///
+///         What this does *not* do, and what no contract here can do, is check that a submitted
+///         `bytes32` is the hash of a genuine Shamir partial of that ciphertext. The gate accepts
+///         a *commitment* to the partial; verifying the partial itself would mean doing the
+///         decryption on-chain. So a committee member can submit a partial it derived from
+///         something else, and the defence against that is off-chain: the combiner holds each
+///         member's published partial, re-derives the hash, and the threshold is only declared met
+///         when the reconstructed plaintext matches the pinned CID. The contract guarantees
+///         *who* committed, *how many* distinct members, and *against which output* — not that
+///         any of them behaved. (Threat model F-09 covers the shard-decryption case: the committee
+///         is never handed a user shard by this contract, and per-task ACLs in `CipherTask` keep
+///         the encrypted state of one task unreadable from another.)
 ///
 ///      2. **t-of-n.** Members hold Shamir shares of the network secret key. The contract
-///         requires `threshold` distinct members before it will combine, and it counts
-///         *distinct committee members*, not signatures.
+///         requires `threshold` distinct members before it declares a reveal combined, and it
+///         counts *distinct committee members*, not signatures: `hasSubmitted` makes a member's
+///         second submission revert, so `members.length` cannot be inflated by one address.
 ///
-///      3. **BLS gating.** A reveal only opens when a valid aggregate signature from the
-///         committee accompanies it. This is what makes the reveal request publicly
-///         auditable: the entire committee signed off on this exact task, this exact
-///         epoch and this exact ciphertext.
+///      3. **BLS gating.** A reveal only opens when a valid aggregate signature from the committee
+///         accompanies it. This is what makes the reveal request publicly auditable: the aggregate
+///         key commits the committee to this exact task and this exact output ciphertext.
 ///
 ///      Residual: a coalition of `>= t` members can still compute a decryption of anything
 ///      under `s_pub` off-chain, without ever calling this contract. That is F-10 in the
@@ -44,6 +58,7 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
 
     uint16 public immutable threshold;
     address public owner;
+    address public pendingOwner;
     address public committee;
     bool public initialized;
 
@@ -68,8 +83,10 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
     event CommitteeInitialized(address indexed committee, uint16 threshold, bytes32 aggregateKey, uint16 members);
     event CommitteeMemberAdded(address indexed member);
     event CipherTaskSet(address indexed cipherTask);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
+    event OwnershipTransferred(address indexed from, address indexed to);
     event RevealRequested(uint256 indexed taskId, bytes32 weightsCid, address indexed requester, uint256 required);
-    event PartialDecryptionSubmitted(uint256 indexed taskId, address indexed member, bytes32 partialDecryption);
+    event PartialDecryptionSubmitted(uint256 indexed taskId, address indexed member, bytes32 indexed weightsCid, bytes32 partialDecryption);
     event RevealCompleted(uint256 indexed taskId, address indexed buyer, uint256 members);
 
     modifier onlyOwner() {
@@ -116,6 +133,23 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
 
     function setPaused(bool v) external onlyOwner {
         _setPaused(v);
+    }
+
+    /// @notice Begin a two-step ownership handover.
+    /// @dev This owner is the only address that can bind the orchestrator and bootstrap the
+    ///      committee, both of which are one-shot, so a misdirected single-step transfer would
+    ///      permanently freeze the gate with no key left to fix it. The recipient accepts.
+    function transferOwnership(address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        emit OwnershipTransferStarted(owner, to);
+        pendingOwner = to;
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotOwner(msg.sender);
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     /* ------------------------------------------------------------------ */
@@ -171,7 +205,10 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
 
         g.hasSubmitted[msg.sender] = true;
         g.members.push(msg.sender);
-        emit PartialDecryptionSubmitted(taskId, msg.sender, partialDecryption);
+        // The CID is logged with the partial so an auditor can tie each commitment to the one
+        // output ciphertext it purports to decrypt, and detect a reveal combined over a different
+        // output than the one the committee BLS-signed at `requestReveal`.
+        emit PartialDecryptionSubmitted(taskId, msg.sender, registeredCid, partialDecryption);
 
         if (g.members.length >= g.required) {
             g.combined = true;

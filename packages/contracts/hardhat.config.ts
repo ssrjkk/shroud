@@ -29,7 +29,9 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
-      allowUnlimitedContractSize: true,
+      // `allowUnlimitedContractSize` is deliberately absent. With it set, an over-sized contract
+      // compiles with a warning and deploys in tests, then fails on any real chain at the
+      // 24,576-byte Spurious Dragon limit; without it, the test suite *is* the deployability check.
       blockGasLimit: 300_000_000,
       chainId: 31_337
     },

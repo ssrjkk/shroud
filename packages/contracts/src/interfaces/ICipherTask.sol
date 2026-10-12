@@ -23,8 +23,7 @@ interface ICipherTask {
         Settling, // all epochs done, escrow distributed
         Revealing, // threshold decryption in flight
         Disclosed, // buyer withdrew plaintext weights
-        Aborted, // refunded / slashed to zero
-        Paused // admin pause
+        Aborted // refunded / unwound
     }
 
     enum UpdateMode {
@@ -81,6 +80,12 @@ interface ICipherTask {
         bytes32 ciphertextCid; // DA object
         bytes32 ctDigest; // keccak(ciphertext bytes) — pinned
         bytes32 shapeProof; // keccak(Groth16 shape proof bytes); the proof itself lives in the DA
+        /// @dev Commitment to the contributor's row Merkle root. Required at submission and read
+        ///      back by a re-execution, which decrypts the shard, rebuilds the row root and
+        ///      compares. Without it the `shapeProof` digest would pin the existence of a proof
+        ///      without pinning what it proves, so a submission could pair any proof with any
+        ///      ciphertext.
+        bytes32 rowCommitment;
         uint32 rows;
         uint32 leafIndex;
         uint64 submittedAt;
@@ -124,9 +129,15 @@ interface ICipherTask {
     event EpochVerified(uint256 indexed taskId, uint32 indexed epoch, address indexed node, bool ok);
     event DisputeReported(uint256 indexed taskId, uint32 indexed epoch, address indexed reporter, bytes32 digest);
     event EpochSettled(uint256 indexed taskId, uint32 indexed epoch, address indexed node, uint128 amount);
+    /// @notice The dispute quorum was reached for `epoch`: its claimant is not paid and the epoch
+    ///         is skipped. Emitted instead of `TaskAborted`, because the task keeps running.
+    event EpochRejected(uint256 indexed taskId, uint32 indexed epoch, uint256 reporters);
     event TaskSettled(uint256 indexed taskId, uint128 userPool, uint128 nodePool, uint128 treasury);
-    event RevealRequested(uint256 indexed taskId, bytes32 weightsCid, bytes32 blsAggregateSig);
-    event PartialDecryptionSubmitted(uint256 indexed taskId, address indexed member, bytes32 partialDecryption);
+    /// @param blsAggregateSigDigest `keccak256` of the aggregate signature that authorised the
+    ///        reveal. The 96-byte signature itself does not fit a `bytes32` topic-free field, and
+    ///        an empty placeholder would make the event worthless to an auditor: a digest is
+    ///        what lets a committee member prove which signature the chain accepted.
+    event RevealRequested(uint256 indexed taskId, bytes32 weightsCid, bytes32 blsAggregateSigDigest);
     event RevealCompleted(uint256 indexed taskId, address indexed buyer);
     event Withdrawn(uint256 indexed taskId, address indexed who, uint128 amount);
     event TaskAborted(uint256 indexed taskId, bytes4 reason);
@@ -136,42 +147,85 @@ interface ICipherTask {
     /*                                 errors                              */
     /* ------------------------------------------------------------------ */
 
-    error NotTaskUpdateManager(uint256 taskId, address caller);
+    /// @dev Every condition this contract rejects has its own error. A shared
+    ///      `InvalidParams(string)` was both ambiguous for an SDK (two different "window"
+    ///      reverts mean opposite things) and expensive: each call site had to ABI-encode a
+    ///      dynamic string into memory, and those sites were the single largest line item in
+    ///      `CipherTask`'s deployed size. The field name is in the selector instead, so the
+    ///      arguments are only carried where they are already on the stack.
     error InvalidTaskStatus(uint256 taskId, TaskStatus current, TaskStatus expected);
-    error InvalidParams(string reason);
+    error BuyerMustBeCaller(address expected, address actual);
+    error ZeroContribution();
+
+    /* ---------------------------- createTask: parameters ---------------------------- */
+
+    error EpochCountInvalid();
+    error ContributorBoundsInvalid();
+    error ContributorCapExceeded();
+    error RowsPerShardInvalid();
+    error FeatureCountInvalid();
+    error LabelBitsInvalid();
+    error ContributionWindowInvalid();
+    error EpochDurationInvalid();
+    error DisputeWindowInvalid();
+    error ReexecutionBpsInvalid();
+    error ModelSpecMissing();
+    error ShapeRootMissing();
+    error InvalidShares(uint16 user, uint16 node, uint16 committee);
+
+    /* ---------------------------- contributions ---------------------------- */
+
     error BudgetTooSmall(uint256 minimum, uint128 provided);
     error ContributionWindowClosed(uint256 taskId);
     error AlreadyContributed(uint256 taskId, address contributor);
     error ShardTooSmall(uint32 rows, uint32 minimum);
     error ShardTooLarge(uint32 rows, uint32 maximum);
     error CapReached(uint256 taskId, uint32 cap);
+    error BelowMinContributors(uint256 taskId, uint32 minimum, uint32 have);
     error ShapeProofInvalid(uint256 taskId, address contributor);
-    error CiphertextPinMismatch(uint256 taskId, bytes32 expected, bytes32 provided);
     error RowCommitmentInvalid(uint256 taskId, address contributor);
-    error ProofTooLarge(uint256 proofLength, uint256 max);
+    error NoContributions(uint256 taskId);
 
-    /// @dev The 32-byte proof reference a node committed was zero, i.e. absent.
+    /* ---------------------------- epochs ---------------------------- */
+
+    error UnknownTask(uint256 taskId);
+    error AlreadyTerminal(uint256 taskId, TaskStatus status);
+    error EpochStillLive(uint256 taskId, uint64 deadline);
+    error NotUpdateManagerOrOwner(uint256 taskId, address caller);
+    error NodeNotRegistered(uint256 taskId, address node);
     error ProofReferenceMissing(uint256 taskId, uint32 epoch, address node);
     error ProofRejected(uint256 taskId, uint32 epoch, bytes4 reason);
     error DuplicateCommit(uint256 taskId, uint32 epoch, address node);
-    error DisputeAlreadyClosed(uint256 taskId, uint32 epoch);
+    error EpochLocked(uint256 taskId);
+    error AllEpochsRun(uint256 taskId, uint32 epoch);
+    error EpochOutOfOrder(uint256 taskId, uint32 provided);
+    error CommitWindowExpired(uint256 taskId, uint64 deadline);
     error DisputeBelowQuorum(uint256 taskId, uint32 epoch, uint256 have, uint256 need);
+    error DisputeAgreesWithClaim(uint256 taskId, uint32 epoch, address reporter);
+    error DisputeWithoutVerifiedCommit(uint256 taskId, uint32 epoch, address reporter);
+    error DisputeDigestMismatch(uint256 taskId, uint32 epoch, address reporter, bytes32 committed, bytes32 reported);
+
+    /* ---------------------------- settlement ---------------------------- */
+
     error EscrowMismatch(uint256 taskId, uint128 expected);
+    error BudgetExhausted(uint256 taskId, uint128 available, uint128 required);
     error WeightPinMismatch(uint256 taskId, bytes32 expected, bytes32 provided);
     error RevealNotAllowed(uint256 taskId, TaskStatus status);
-    error AlreadyDisclosed(uint256 taskId);
-    error NothingToWithdraw(address account);
-    error NotCommitteeMember(address caller);
-    error OutputNotRegistered(uint256 taskId, bytes32 weightsCid);
+    error EpochsRemain(uint256 taskId);
+    error AlreadySettled(uint256 taskId);
+    error SettlementBegun(uint256 taskId);
+    error SettleCursorMismatch(uint256 taskId, uint256 provided);
+    error NotTaskParty(uint256 taskId, address account);
+    error ZeroAddress();
 
     /* ------------------------------------------------------------------ */
     /*                                 actions                             */
     /* ------------------------------------------------------------------ */
 
-        /// @param budget the exact amount (base units) escrowed for the task; the buyer must have
-        ///        approved at least this much to the vault. Nothing more is pulled.
-        /// @param p     the task parameters
-        function createTask(uint128 budget, TaskParams calldata p) external returns (uint256 taskId);
+    /// @param budget the exact amount (base units) escrowed for the task; the buyer must have
+    ///        approved at least this much to the vault. Nothing more is pulled.
+    /// @param p     the task parameters
+    function createTask(uint128 budget, TaskParams calldata p) external returns (uint256 taskId);
     function submitContribution(
         uint256 taskId,
         bytes32 ciphertextCid,
@@ -206,7 +260,7 @@ interface ICipherTask {
     function isFullySettled(uint256 taskId) external view returns (bool);
     function requestReveal(uint256 taskId, bytes calldata blsAggregateSig) external;
     function submitPartialDecryption(uint256 taskId, bytes32 partialDecryption) external;
-    function withdraw(uint256 taskId) external returns (uint128 amount);
+    function withdraw(uint256 taskId) external;
     function reclaimUnspentEpochs(uint256 taskId) external returns (uint128 amount);
     function abort(uint256 taskId, bytes4 reason) external;
     function emergencyUnwind(uint256 taskId) external;
@@ -219,10 +273,27 @@ interface ICipherTask {
     function tasks(uint256 taskId) external view returns (Task memory);
     function contributions(uint256 taskId, address contributor) external view returns (Contribution memory);
     function contributionOf(uint256 taskId, uint256 leafIndex) external view returns (address);
+    function contributorsOf(uint256 taskId) external view returns (address[] memory);
     function commits(uint256 taskId, uint32 epoch, address node) external view returns (EpochCommit memory);
     function acceptedWeights(uint256 taskId) external view returns (bytes32 encWeightsCid, bytes32 weightsDigest);
     function pendingPayout(address account) external view returns (uint128 amount);
     function divisorFor(uint256 taskId) external view returns (uint128);
     function escrowToken() external view returns (address);
     function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have);
+    function statusOf(uint256 taskId) external view returns (TaskStatus);
+    function nodeRegistered(uint256 taskId, address node) external view returns (bool);
+    function epochWinner(uint256 taskId, uint32 epoch) external view returns (address);
+    function epochChannel(uint256 taskId, uint32 epoch) external view returns (uint256);
+    function ctRootOf(uint256 taskId) external view returns (bytes32);
+    function nodePoolOf(uint256 taskId) external view returns (uint128);
+    function rewardChannelWindow() external view returns (uint64);
+    function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest) external view returns (bytes32);
+    function settleUserPool(uint256 taskId) external view returns (uint128);
+
+    /// @dev A channel's slice is authorised by this contract, so a node redeems with an
+    ///      ERC-1271 signature that is really an ABI-packed `(channelId, sliceIndex, amount,
+    ///      padding)` — see `PaymentVault.redeem`. The digest the vault checks is
+    ///      `PaymentVault.redeemDigest`, which is the single definition clients use; this contract
+    ///      does not republish it.
+    function isValidSignature(bytes32 digest, bytes calldata signature) external view returns (bytes4);
 }

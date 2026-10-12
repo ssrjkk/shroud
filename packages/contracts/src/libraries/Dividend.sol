@@ -10,21 +10,26 @@ pragma solidity ^0.8.24;
 ///      i.e. 20x more. The weight is computed and frozen in Q16.16 at submission time
 ///      (see `Contribution.weightQ16`) so settlement is a single pass and liveness cannot be
 ///      gamed by ordering.
+///
+///      The three entry points are `external` so their bodies link out of `CipherTask`: they are
+///      stateless pure math, and `shareOf` runs once per contributor inside a paged settlement
+///      loop, so inlining it bought `CipherTask` bytecode it does not need. `Hardhat`'s
+///      `deployContract` resolves the links; see `scripts/deploy.ts`.
 library Dividend {
-    uint256 internal constant Q16 = 1 << 16;
+    uint256 public constant Q16 = 1 << 16;
 
     /// @notice Contribution weight: `sqrt(rows) * liveness`, in Q16.16.
     /// @param rows number of accepted rows in the contribution
     /// @param livenessQ16 Q16.16 factor in (0, 1]; 1.0 == contributed at task creation,
     ///        0.25 == contributed at/after the window deadline.
-    function weight(uint32 rows, uint256 livenessQ16) internal pure returns (uint256) {
+    function weight(uint32 rows, uint256 livenessQ16) external pure returns (uint256) {
         if (rows == 0) return 0;
         return (_isqrt(uint256(rows) << 32) * livenessQ16) >> 16;
     }
 
     /// @notice Liveness multiplier: linear decay from 1.0 to 0.25 across the contribution
     ///         window. Rewards early commitment (capital lock) and damps end-of-window spam.
-    function liveness(uint64 createdAt, uint64 windowEnd, uint64 submittedAt) internal pure returns (uint256) {
+    function liveness(uint64 createdAt, uint64 windowEnd, uint64 submittedAt) external pure returns (uint256) {
         if (windowEnd <= createdAt) return Q16; // degenerate window: no penalty
         if (submittedAt <= createdAt) return Q16;
         if (submittedAt >= windowEnd) return Q16 / 4;
@@ -34,7 +39,7 @@ library Dividend {
     }
 
     /// @notice Pro-rata payout of `pool` for `weightQ16` out of `totalWeightQ16`.
-    function shareOf(uint128 pool, uint96 weightQ16, uint256 totalWeightQ16) internal pure returns (uint128) {
+    function shareOf(uint128 pool, uint96 weightQ16, uint256 totalWeightQ16) external pure returns (uint128) {
         if (totalWeightQ16 == 0) return 0;
         return uint128((uint256(pool) * uint256(weightQ16)) / totalWeightQ16);
     }

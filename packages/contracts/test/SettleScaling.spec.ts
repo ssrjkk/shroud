@@ -6,6 +6,7 @@ import { ethers } from "hardhat";
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, PaymentVault, TestToken } from "../typechain-types";
 import { bytes32Of, externalUint64, params, proofRef } from "./helpers";
+import { deployLinked } from "../scripts/libraries";
 
 /**
  * `settle` cost as a function of contributor count.
@@ -37,7 +38,7 @@ describe("settlement scalability", () => {
     const verifier: MockStarkVerifier = await ethers.deployContract("MockStarkVerifier", [48_576]);
     const bls: MockBLS = await ethers.deployContract("MockBLS");
     const gate: DecryptionGate = await ethers.deployContract("DecryptionGate", [await bls.getAddress(), bytes32Of("agg"), 2]);
-    const task: CipherTask = await ethers.deployContract("CipherTask", [
+    const task: CipherTask = await deployLinked("CipherTask", [
       await token.getAddress(),
       await vault.getAddress(),
       await verifier.getAddress(),
@@ -120,8 +121,8 @@ describe("settlement scalability", () => {
     expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
 
     // A second call is refused: nobody can be paid twice, and the legs cannot run again.
-    await expect(task.settle(id)).to.be.revertedWithCustomError(task, "InvalidTaskStatus");
-    await expect(task.settleFrom(id, 0n)).to.be.revertedWithCustomError(task, "InvalidTaskStatus");
+    await expect(task.settle(id)).to.be.revertedWithCustomError(task, "AlreadySettled");
+    await expect(task.settleFrom(id, 0n)).to.be.revertedWithCustomError(task, "AlreadySettled");
   });
 
   it("refuses a page that skips ahead of the cursor", async () => {
@@ -129,9 +130,7 @@ describe("settlement scalability", () => {
     // stranding everyone before it. Without this check a caller could set `_settled` while
     // contributors were still unpaid.
     const { task, id } = await build(8);
-    await expect(task.settleFrom(id, 5n)).to.be.revertedWithCustomError(task, "InvalidParams").withArgs(
-      "settle cursor"
-    );
+    await expect(task.settleFrom(id, 5n)).to.be.revertedWithCustomError(task, "SettleCursorMismatch");
     // The documented entry point starts from where the task actually is.
     await task.settle(id);
     expect(await task.isFullySettled(id)).to.equal(true);
@@ -156,7 +155,7 @@ describe("settlement scalability", () => {
     const { task, id } = await build(8);
     await task.settle(id);
     expect(await task.isFullySettled(id)).to.equal(true);
-    await expect(task.abort(id, "0x00000000")).to.be.revertedWithCustomError(task, "InvalidParams");
+    await expect(task.abort(id, "0x00000000")).to.be.revertedWithCustomError(task, "AlreadySettled");
   });
 
   it("abort still works before settlement begins", async () => {

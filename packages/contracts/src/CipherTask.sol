@@ -12,7 +12,10 @@ import {IProofVerifier} from "./zk/ProofVerifier.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {PaymentVault} from "./payments/PaymentVault.sol";
 import {Dividend} from "./libraries/Dividend.sol";
+import {TaskParamsLib} from "./libraries/TaskParamsLib.sol";
 import {ReentrancyGuard, Pausable} from "./libraries/Guard.sol";
+import {StateAcl} from "./libraries/StateAcl.sol";
+import {SettlementLib} from "./libraries/SettlementLib.sol";
 
 /// @title CipherTask — Shroud FHE training orchestrator
 /// @notice Escrows a buyer's budget, admits client-side-encrypted contributions, orchestrates
@@ -23,20 +26,20 @@ import {ReentrancyGuard, Pausable} from "./libraries/Guard.sol";
 ///
 ///      The heavy ciphertext work happens off-chain in the Rust compute node: bootstrapping a
 ///      33-lane dot product on-chain is neither cheap nor necessary. What the coprocessor is
-///      used for in *this* contract is the orchestration state — exactly the data that must not
-///      be public but does not need to be computed on encrypted data:
+///      used for in *this* contract is one thing: the buyer's encrypted model state, stored
+///      **per task** (`TaskFheState`), not as a contract singleton.
 ///
-///        - `euint32 _liveEpoch`     encrypted epoch counter, so a buyer can follow progress
-///                                   without learning who contributed what, and when;
-///        - `euint32 _sealFlag`      encrypted "dataset sealed" bit for cheap SDK polling;
-///        - `euint32 _verifiedNodes` encrypted count of nodes with a valid STARK;
-///        - `einput _encState`       the buyer's encrypted accumulator (loss, noise budget,
-///                                   epoch checkpoint) attached to `openEpoch`. Nodes decrypt
-///                                   it locally with their committee share, branch on it and
-///                                   re-encrypt the result. The chain relays it opaquely.
+///        - `euint64 encState` the buyer's encrypted accumulator attached to `openEpoch`. Nodes
+///          decrypt it locally with their committee share, branch on it and re-encrypt the
+///          result. The chain relays it opaquely and never decrypts it.
 ///
-///      None of these are decrypted by the protocol. They exist so the orchestration layer
-///      inherits fhEVM confidentiality without a coprocessor call per row.
+///      Three further handles (`liveEpoch`, `sealFlag`, `verifiedCommits`) used to mirror
+///      orchestration progress into encrypted counters. They are gone: no caller ever read them,
+///      nothing in the protocol decrypts them, and each one was a coprocessor round trip plus an
+///      ACL grant on every epoch transition. The same three quantities are public and indexed off
+///      `EpochOpened`, `EpochCommitted`, `TaskSealed` and the `tasks()` view, so the encrypted
+///      copies only obscured data the protocol already discloses. Removing them is also what
+///      brought `CipherTask` back under the 24 576-byte deployment limit.
 ///
 ///      All money is plain ERC-20. FHE is used for data confidentiality, not for payments.
 contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
@@ -44,8 +47,13 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /*                               bounds                                */
     /* ------------------------------------------------------------------ */
 
-    uint32 public constant MAX_EPOCHS = 365;
-    uint32 public constant MAX_CONTRIBUTORS = 5_000;
+    /// @dev Re-exported from `TaskParamsLib` so the ABI an SDK reads is unchanged while the
+    ///      checks themselves link out of this contract.
+    uint32 public constant MAX_EPOCHS = TaskParamsLib.MAX_EPOCHS;
+    uint32 public constant MAX_CONTRIBUTORS = TaskParamsLib.MAX_CONTRIBUTORS;
+    uint32 public constant MAX_FEATURES = TaskParamsLib.MAX_FEATURES;
+    uint32 public constant MAX_ROWS_PER_SHARD = TaskParamsLib.MAX_ROWS_PER_SHARD;
+    uint16 public constant BPS = TaskParamsLib.BPS;
 
     /// @dev Contributors paid per `settleFrom` call. Sized from measurement (~117k gas per
     ///      contributor including the vault call): 200 is ~23M gas at the low end and ~30M at the
@@ -54,9 +62,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      each page is independently callable.
     uint256 public constant SETTLE_PAGE_SIZE = 200;
     uint32 public constant MAX_SHARDS = 65_535;
-    uint32 public constant MAX_FEATURES = 512;
-    uint32 public constant MAX_ROWS_PER_SHARD = 100_000;
-    uint16 public constant BPS = 10_000;
 
     /// @dev Fraction of the open epoch's lock retained on abort, so a node that already
     ///      produced work stays solvent.
@@ -72,7 +77,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @dev 4-byte reason codes for `TaskAborted`. Fixed on-chain so an abort is machine-readable
     ///      without trusting the caller's string.
     bytes4 private constant _REASON_EMERGENCY_UNWIND = 0x656d556e; // "emUn"
-    bytes4 private constant _REASON_EPOCH_DISPUTED = 0x65706364; // "epcd"
     bytes4 private constant _REASON_STARK_REJECTED = 0x73746172; // "star"
 
     /* ------------------------------------------------------------------ */
@@ -84,17 +88,26 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     IProofVerifier public immutable proofVerifier;
     IDecryptionGate public immutable decryptionGate;
 
-    /// @dev Encrypted orchestration state. Allocated in the constructor, never re-encrypted.
-    euint32 private _liveEpoch;
-    euint32 private _sealFlag;
-    euint32 private _verifiedNodes;
-    euint64 private _encState;
+    /// @dev The buyer's encrypted accumulator, **one per task**. This was a contract-level singleton
+    ///      before, which broke two ways: `openEpoch` on task B overwrote the accumulator that task
+    ///      A's nodes were reading, and `grantStateAccess(taskId, node)` extended the ACL of
+    ///      *every* task's state to any address registered for *any* task. A task's buyer, update
+    ///      manager and nodes must not be able to read another buyer's encrypted loss curve, so the
+    ///      handle lives in the task's own slot.
+    struct TaskFheState {
+        euint64 encState;
+    }
+
+    /// @dev FHE coprocessor calls are only worth making in the places that need a fresh handle;
+    ///      `createTask` allocates the handle once and every later mutation re-grants it.
+    mapping(uint256 => TaskFheState) private _fhe;
 
     /* ------------------------------------------------------------------ */
     /*                              storage                                */
     /* ------------------------------------------------------------------ */
 
     address public owner;
+    address public pendingOwner;
     address public treasury;
     bool public shapeProofsRequired;
 
@@ -118,21 +131,14 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => mapping(uint32 => mapping(address => bool))) private _disputeRecorded;
     mapping(uint256 => mapping(uint32 => address[])) private _epochReporters;
     mapping(uint256 => mapping(uint32 => bytes32)) private _claimedDigest;
-    mapping(uint256 => bool) private _settled;
-    /// @dev Settlement progress. `_settleCursor` is the first contributor not yet paid,
-    ///      `_settleDistributed` accumulates amounts already credited so the dust is computed
-    ///      against the whole pool across pages, and `_settleDustRecipient` carries the
-    ///      deterministic dust sink forward so it does not depend on which page is running.
-    mapping(uint256 => uint256) private _settleCursor;
-    mapping(uint256 => uint256) private _settleDistributed;
-    mapping(uint256 => address) private _settleDustRecipient;
-    /// @dev The contributor pool, frozen by the first settlement page and reused by every later
-    ///      one so per-contributor amounts cannot drift between pages.
-    mapping(uint256 => uint128) private _settleUserPool;
-    /// @dev Whether any settlement page has run. Distinguishes "pool not yet computed" from
-    ///      "pool computed as zero", and gates `abort` so a partially settled task cannot be
-    ///      unwound behind the contributors already paid.
-    mapping(uint256 => bool) private _settleStarted;
+    /// @dev Settlement progress, keyed by task: the first contributor not yet paid, the amounts
+    ///      credited so far (so the dust is computed against the whole pool across pages), the
+    ///      dust sink carried forward so it does not depend on which page is running, the pool
+    ///      frozen by the first page, and whether settlement has begun.
+    ///
+    ///      The type lives with the code that moves this state (`SettlementLib`), which keeps the
+    ///      two from drifting apart; `CipherTask` owns one instance and passes it by pointer.
+    SettlementLib.State private _settlement;
 
     /// @dev Slices the contract has authorised, keyed by channel then sliceIndex. Consulted by
     ///      `isValidSignature` (ERC-1271) so a node can redeem an epoch reward without any
@@ -146,6 +152,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     event NodeRegistered(uint256 indexed taskId, address indexed node, bytes32 blsPubKey);
     event NodeRewardChannelOpened(uint256 indexed taskId, uint32 indexed epoch, address indexed node, uint256 channelId, uint128 maxCumulative, uint64 unlockAt, uint128 firstSlice);
     event EscrowSettled(uint256 indexed taskId, uint128 contributorsPool, uint128 committeePool, uint128 refunded);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
     event TreasuryChanged(address indexed from, address indexed to);
     event ShapeProofsRequiredChanged(bool required);
@@ -159,16 +166,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /* ------------------------------------------------------------------ */
 
     error NotOwner(address caller);
-    error NotUpdateManagerOrOwner(uint256 taskId, address caller);
-    error BuyerMustBeCaller(address expected, address actual);
-    error InvalidShares(uint16 user, uint16 node, uint16 committee);
     error NodeAlreadyRegistered(uint256 taskId, address node);
-    error NodeNotRegistered(uint256 taskId, address node);
-    error ZeroAddress();
-    error ZeroContribution();
     error NarrowCast(address from);
     error NarrowCastId(uint256 id);
-    error SliceNotAuthorized(uint256 channelId, uint256 sliceIndex);
     error SliceFieldsMismatch();
 
     modifier onlyOwner() {
@@ -208,19 +208,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         CoprocessorConfig memory fhevmConfig = ZamaConfig.getEthereumCoprocessorConfig();
         FHE.setCoprocessor(fhevmConfig);
 
-        _liveEpoch = FHE.asEuint32(0);
-        _sealFlag = FHE.asEuint32(0);
-        _verifiedNodes = FHE.asEuint32(0);
-        _encState = FHE.asEuint64(0);
-
-        // Every handle this contract owns must be ACL'd to `address(this)` before it can be
-        // used as an operand again. `FHE.*` checks the ACL against the *calling* contract, so
-        // without these the first `FHE.add` reverts with `ACLNotAllowed`.
-        FHE.allow(_liveEpoch, address(this));
-        FHE.allow(_sealFlag, address(this));
-        FHE.allow(_verifiedNodes, address(this));
-        FHE.allow(_encState, address(this));
-
         emit TreasuryChanged(address(0), treasury_);
         emit ShapeProofsRequiredChanged(shapeProofsRequired_);
     }
@@ -229,10 +216,23 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /*                            governance                               */
     /* ------------------------------------------------------------------ */
 
+    /// @notice Begin a two-step ownership handover.
+    /// @dev Two-step because a single-step transfer to a wrong or incapable address is both silent
+    ///      and unrecoverable: the previous owner stops being able to act, and no key remains that
+    ///      can undo it. This owner can pause the protocol, abort and unwind tasks, and set the
+    ///      treasury that receives the committee leg, so losing it is not a cosmetic problem. The
+    ///      recipient has to accept, which proves it can sign.
     function transferOwnership(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, to);
-        owner = to;
+        emit OwnershipTransferStarted(owner, to);
+        pendingOwner = to;
+    }
+
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotOwner(msg.sender);
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     function setTreasury(address to) external onlyOwner {
@@ -253,13 +253,17 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @notice Kick a genuinely stuck task out of its epoch so funds can be recovered.
     /// @dev Deliberately narrow: the task must be past its epoch deadline *and* past the
     ///      dispute window, so the owner cannot use this to censor a live task.
+    /// @dev Unwinds through the same path as `abort`, which is what actually recovers the money.
+    ///      It used to only set the status: `Aborted` then blocked `abort` (terminal-status guard),
+    ///      `settle` (requires `EpochSettled`) and `reclaimUnspentEpochs` (requires every epoch to
+    ///      have run), so the owner's emergency lever permanently stranded the whole escrow in the
+    ///      vault with no call left that could move it.
     function emergencyUnwind(uint256 taskId) external onlyOwner nonReentrant {
         Task storage t = _tasks[taskId];
-        if (t.status == TaskStatus.None) revert InvalidParams("unknown");
-        if (t.status == TaskStatus.Disclosed || t.status == TaskStatus.Aborted) revert InvalidParams("terminal");
-        if (block.timestamp < t.epochDeadline + t.params.disputeWindow) revert InvalidParams("stale epoch");
-        _setStatus(taskId, TaskStatus.Aborted);
-        emit TaskAborted(taskId, _REASON_EMERGENCY_UNWIND);
+        if (t.status == TaskStatus.None) revert UnknownTask(taskId);
+        if (t.status == TaskStatus.Disclosed || t.status == TaskStatus.Aborted) revert AlreadyTerminal(taskId, t.status);
+        if (block.timestamp < t.epochDeadline + t.params.disputeWindow) revert EpochStillLive(taskId, t.epochDeadline);
+        _unwind(taskId, _REASON_EMERGENCY_UNWIND);
     }
 
     /* ================================================================== */
@@ -276,13 +280,15 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      bookkeeping and guarantees a node is always solvent for work it delivered.
     function createTask(uint128 budget, TaskParams calldata p) external whenNotPaused nonReentrant returns (uint256 taskId) {
         if (p.buyer != msg.sender) revert BuyerMustBeCaller(msg.sender, p.buyer);
-        TaskParams memory pm = p;
-        if (pm.updateManager == address(0)) pm.updateManager = msg.sender;
 
-        _validateParams(pm);
-        _requireShares(pm.userShareBps, pm.nodeShareBps, pm.committeeShareBps);
+        TaskParamsLib.validate(p);
+        TaskParamsLib.requireShares(p.userShareBps, p.nodeShareBps, p.committeeShareBps);
 
         if (budget == 0) revert BudgetTooSmall(1, 0);
+
+        TaskParams memory pm = p;
+        // An absent update manager means the buyer runs the epochs themselves.
+        if (pm.updateManager == address(0)) pm.updateManager = msg.sender;
 
         taskId = ++taskCount;
         vault.fundTask(taskId, budget, msg.sender);
@@ -309,27 +315,16 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
         emit TaskCreated(taskId, pm.buyer, escrowed, pm.epochs);
         _setStatus(taskId, TaskStatus.Opening);
+        _initFheState(taskId, pm);
     }
 
-    function _validateParams(TaskParams memory p) private pure {
-        if (p.updateManager == address(0)) revert InvalidParams("manager");
-        if (p.epochs == 0 || p.epochs > MAX_EPOCHS) revert InvalidParams("epochs");
-        if (p.minContributors == 0 || p.maxContributors < p.minContributors) revert InvalidParams("contributors");
-        if (p.maxContributors > MAX_CONTRIBUTORS) revert InvalidParams("contrib cap");
-        if (p.minRowsPerShard == 0 || p.minRowsPerShard > MAX_ROWS_PER_SHARD) revert InvalidParams("rows");
-        if (p.features == 0 || p.features > MAX_FEATURES) revert InvalidParams("features");
-        if (p.labelBits != 8 && p.labelBits != 16) revert InvalidParams("labelBits");
-        if (p.contributionWindow < 1 hours || p.contributionWindow > 30 days) revert InvalidParams("window");
-        if (p.epochDuration < 5 minutes || p.epochDuration > 1 days) revert InvalidParams("epochDur");
-        if (p.disputeWindow < 1 minutes || p.disputeWindow > 1 hours) revert InvalidParams("disputeWindow");
-        if (p.reexecutionBps > 5_000) revert InvalidParams("reexec");
-        if (p.modelSpecCid == bytes32(0)) revert InvalidParams("modelSpecCid");
-        if (p.shapeRoot == bytes32(0)) revert InvalidParams("shapeRoot");
-    }
-
-    function _requireShares(uint16 user, uint16 node, uint16 committee) private pure {
-        if (user == 0) revert InvalidShares(user, node, committee);
-        if (uint256(user) + uint256(node) + uint256(committee) != BPS) revert InvalidShares(user, node, committee);
+    /// @dev Allocate this task's encrypted state handle and ACL it to the parties that must read
+    ///      it. Called from `createTask` only: a handle cannot be re-typed, and `grantStateAccess`
+    ///      must have a valid handle to grant even for a task that has not run its first epoch.
+    function _initFheState(uint256 taskId, TaskParams memory pm) private {
+        TaskFheState storage s = _fhe[taskId];
+        s.encState = FHE.asEuint64(0);
+        StateAcl.grant64(s.encState, pm.buyer, pm.updateManager, address(this));
     }
 
     /* ================================================================== */
@@ -379,6 +374,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             ciphertextCid: ciphertextCid,
             ctDigest: ctDigest,
             shapeProof: shapeProofDigest,
+            rowCommitment: rowCommitment,
             rows: rows,
             leafIndex: leafIndex,
             submittedAt: uint64(block.timestamp),
@@ -398,11 +394,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             t.contributors += 1;
         }
 
-        // One batched encrypted counter, so a buyer's dashboard can show collection progress
-        // without any per-contribution metadata becoming public on-chain.
-        _verifiedNodes = FHE.add(_verifiedNodes, FHE.asEuint32(1));
-        _grant32(_verifiedNodes, t);
-
         if (t.status == TaskStatus.Opening) _setStatus(taskId, TaskStatus.Collecting);
 
         emit ContributionSubmitted(taskId, msg.sender, leafIndex, ciphertextCid, rows);
@@ -413,8 +404,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function sealTask(uint256 taskId) external whenNotPaused nonReentrant {
         Task storage t = _tasks[taskId];
         if (t.isSealed) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Sealed);
-        if (t.contributors == 0) revert InvalidParams("no shards");
-        if (t.contributors < t.params.minContributors) revert CapReached(taskId, t.params.minContributors);
+        if (t.contributors == 0) revert NoContributions(taskId);
+        if (t.contributors < t.params.minContributors) {
+            revert BelowMinContributors(taskId, t.params.minContributors, t.contributors);
+        }
 
         if (block.timestamp < t.windowEnd) {
             // Before the deadline only the buyer/update manager may force a seal.
@@ -428,9 +421,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         t.ctRoot = _ctAcc[taskId];
         t.epochDeadline = 0;
 
-        _sealFlag = FHE.asEuint32(1);
-        _grant32(_sealFlag, t);
-
         _setStatus(taskId, TaskStatus.Sealed);
         emit TaskSealed(taskId, t.ctRoot, t.shards, t.contributors);
     }
@@ -441,7 +431,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     /// @notice Compute nodes register once per task before the first epoch opens.
     function registerNode(uint256 taskId, bytes32 blsPubKey) external whenNotPaused {
-        if (_tasks[taskId].status == TaskStatus.None) revert InvalidParams("unknown");
+        if (_tasks[taskId].status == TaskStatus.None) revert UnknownTask(taskId);
         if (_nodeRegistered[taskId][msg.sender]) revert NodeAlreadyRegistered(taskId, msg.sender);
         _nodeRegistered[taskId][msg.sender] = true;
         emit NodeRegistered(taskId, msg.sender, blsPubKey);
@@ -463,10 +453,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         bytes calldata encStateProof
     ) external whenNotPaused nonReentrant {
         Task storage t = _tasks[taskId];
-        // The "epoch locked" case is checked before the status guard: a task
-        // waiting on `finalizeEpoch` sits in `EpochOpen`, and `InvalidParams("previous epoch not
-        // finalized")` tells the caller far more than a bare status mismatch would.
-        if (t.locked != 0) revert InvalidParams("epoch locked");
+        // The "epoch locked" case is checked before the status guard: a task waiting on
+        // `finalizeEpoch` sits in `EpochOpen`, and `EpochLocked(taskId)` tells the caller far more
+        // than a bare status mismatch would.
+        if (t.locked != 0) revert EpochLocked(taskId);
         if (t.status != TaskStatus.Sealed && t.status != TaskStatus.EpochSettled) {
             revert InvalidTaskStatus(taskId, t.status, TaskStatus.Sealed);
         }
@@ -478,25 +468,23 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         }
 
         uint32 epoch = t.nextEpoch;
-        if (epoch >= t.params.epochs) revert InvalidParams("epochs done");
+        if (epoch >= t.params.epochs) revert AllEpochsRun(taskId, epoch);
 
         uint128 epochLock = _epochLock(t);
-        if (t.budget - t.locked < epochLock) revert EscrowMismatch(taskId, t.budget - t.locked);
+        if (t.budget - t.locked < epochLock) revert BudgetExhausted(taskId, uint128(t.budget - t.locked), epochLock);
 
         t.locked = epochLock;
         t.lastWeightsCid = encWeightsCid;
         t.lastWeightsDigest = weightsDigest;
         t.epochDeadline = uint64(block.timestamp) + t.params.epochDuration;
 
-        _liveEpoch = FHE.asEuint32(epoch);
-        _grant32(_liveEpoch, t);
-
-        _encState = FHE.fromExternal(encStateExternal, encStateProof);
-        _grant64(_encState, t);
+        TaskFheState storage s = _fhe[taskId];
+        s.encState = FHE.fromExternal(encStateExternal, encStateProof);
+        StateAcl.grant64(s.encState, t.params.buyer, t.params.updateManager, address(this));
 
         _setStatus(taskId, TaskStatus.EpochOpen);
         emit EpochOpened(taskId, epoch, encWeightsCid, weightsDigest);
-        emit FheStateCheckpoint(taskId, FHE.toBytes32(_encState));
+        emit FheStateCheckpoint(taskId, FHE.toBytes32(s.encState));
     }
 
     /// @notice Submit a ZK-STARK proof of compute for epoch `epoch` plus the encrypted weights
@@ -518,8 +506,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochOpen);
         }
         if (!_nodeRegistered[taskId][msg.sender]) revert NodeNotRegistered(taskId, msg.sender);
-        if (epoch != t.nextEpoch) revert InvalidParams("epoch order");
-        if (block.timestamp > t.epochDeadline) revert InvalidParams("window expired");
+        if (epoch != t.nextEpoch) revert EpochOutOfOrder(taskId, epoch);
+        if (block.timestamp > t.epochDeadline) revert CommitWindowExpired(taskId, t.epochDeadline);
         if (encWeightsCid == bytes32(0) || weightsDigest == bytes32(0) || traceDigest == bytes32(0)) {
             revert WeightPinMismatch(taskId, weightsDigest, encWeightsCid);
         }
@@ -567,23 +555,33 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
         _setStatus(taskId, TaskStatus.EpochCommitting);
         emit EpochCommitted(taskId, epoch, msg.sender, traceDigest);
-
-        // The new handle must be ACL'd to this contract as well as the reader: the *next*
-        // `commitEpoch` is an FHE operand on `_verifiedNodes`, and without the self-grant the
-        // second epoch reverts with `ACLNotAllowed`. Mirrors the grant in `registerNode`.
-        _verifiedNodes = FHE.add(_verifiedNodes, FHE.asEuint32(1));
-        _grant32(_verifiedNodes, t);
     }
 
     /// @notice Re-execute epoch `epoch` and report the digest you independently obtain.
     /// @dev Deterministic given the public inputs, so an honest reporter necessarily
     ///      disagrees with a lying claimant. Reaching quorum rejects the epoch.
+    ///
+    ///      A report is only counted from an address that *itself* holds a verified commit for
+    ///      that epoch whose `traceDigest` is the digest it reports. Without that requirement a
+    ///      dispute costs nothing but two transactions — `registerNode` is permissionless and
+    ///      unbonded — while `_payReporters` pays `reexecutionBps` of the epoch lock out of the
+    ///      buyer's escrow to whoever reports. Three cheap addresses could then reject every epoch
+    ///      of every task and collect the bounty each time: not a denial of reward but a
+    ///      transfer, and the previous wording of the docs ("it cannot *steal* the payout")
+    ///      understated it. Re-execution now has to produce a proof that verifies, which is the
+    ///      work the bounty is meant to pay for.
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external whenNotPaused {
         if (!_nodeRegistered[taskId][msg.sender]) revert NodeNotRegistered(taskId, msg.sender);
         Task storage t = _tasks[taskId];
         if (t.status != TaskStatus.EpochCommitting) revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochCommitting);
         if (_disputeRecorded[taskId][epoch][msg.sender]) revert DuplicateCommit(taskId, epoch, msg.sender);
-        if (reexecutedDigest == _claimedDigest[taskId][epoch]) revert InvalidParams("digest=claim");
+        if (reexecutedDigest == _claimedDigest[taskId][epoch]) revert DisputeAgreesWithClaim(taskId, epoch, msg.sender);
+
+        EpochCommit storage mine = _commits[taskId][epoch][msg.sender];
+        if (!mine.verified) revert DisputeWithoutVerifiedCommit(taskId, epoch, msg.sender);
+        if (mine.traceDigest != reexecutedDigest) {
+            revert DisputeDigestMismatch(taskId, epoch, msg.sender, mine.traceDigest, reexecutedDigest);
+        }
 
         _disputeRecorded[taskId][epoch][msg.sender] = true;
         _disputeCount[taskId][epoch] += 1;
@@ -596,7 +594,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function finalizeEpoch(uint256 taskId, uint32 epoch) external whenNotPaused nonReentrant {
         Task storage t = _tasks[taskId];
         if (t.status != TaskStatus.EpochCommitting) revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochCommitting);
-        if (epoch != t.nextEpoch) revert InvalidParams("epoch order");
+        if (epoch != t.nextEpoch) revert EpochOutOfOrder(taskId, epoch);
 
         bool quorum = _disputeCount[taskId][epoch] >= DISPUTE_QUORUM;
         if (!quorum && block.timestamp < t.epochDeadline + t.params.disputeWindow) {
@@ -611,25 +609,26 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         }
 
         if (quorum) {
-            // The claimant lied: no node is paid for this epoch, and the lock returns to the
-            // task sub-balance to be refunded at settlement. Reporters are paid out of the lock
-            // so that reporting is rational.
+            // The claimant is contradicted by `DISPUTE_QUORUM` independently verified competing
+            // proofs: no node is paid for this epoch, and the lock returns to the task sub-balance
+            // to be refunded at settlement. Reporters are paid out of the lock so that reporting
+            // is rational.
+            //
+            // `EpochRejected`, not `TaskAborted`: the task continues with the next epoch, and an
+            // abort is terminal. Emitting the terminal event for a recoverable one made every
+            // indexer watching `TaskAborted` treat a live task as dead.
             _payReporters(taskId, epoch, lock);
-            emit TaskAborted(taskId, _REASON_EPOCH_DISPUTED);
+            emit EpochRejected(taskId, epoch, _epochReporters[taskId][epoch].length);
         } else if (winner != address(0)) {
-                // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides
-                // `budget * nodeShareBps` across the epochs), so the node share must not be taken
-                // a second time here. Re-applying `nodeShareBps` would hand the winner 15% of
-                // their own pool and quietly refund the other 85% to the buyer at settlement.
-                uint128 reward = lock;
-                if (reward > 0) _payNode(taskId, epoch, winner, reward);
-                emit EpochSettled(taskId, epoch, winner, reward);
-            }
+            // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides
+            // `budget * nodeShareBps` across the epochs), so the node share must not be taken
+            // a second time here. Re-applying `nodeShareBps` would hand the winner 15% of
+            // their own pool and quietly refund the other 85% to the buyer at settlement.
+            uint128 reward = lock;
+            if (reward > 0) _payNode(taskId, epoch, winner, reward);
+            emit EpochSettled(taskId, epoch, winner, reward);
+        }
 
-        _liveEpoch = FHE.asEuint32(t.nextEpoch);
-        // Grant this contract too: without it, any FHE operation on the fresh handle before the
-        // next `openEpoch` would revert with `ACLNotAllowed`.
-        _grant32(_liveEpoch, t);
         _setStatus(taskId, TaskStatus.EpochSettled);
     }
 
@@ -671,117 +670,52 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     /// @notice Index of the first contributor `settleFrom` has not yet paid.
     function settleCursor(uint256 taskId) external view returns (uint256) {
-        return _settleCursor[taskId];
+        return _settlement.cursor[taskId];
     }
 
     /// @notice The contributor pool frozen by the first settlement page, for monitoring.
     function settleUserPool(uint256 taskId) external view returns (uint128) {
-        return _settleUserPool[taskId];
+        return _settlement.userPool[taskId];
     }
 
     /// @notice Whether any settlement page has run.
     function isFullySettled(uint256 taskId) external view returns (bool) {
-        return _settled[taskId];
+        return _settlement.settled[taskId];
     }
 
     function _settleFrom(uint256 taskId, uint256 cursor) private {
         Task storage t = _tasks[taskId];
-        // A page may only continue an unfinished settlement; `_settled` is set by the last page.
-        if (_settled[taskId]) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Settling);
+        // A page may only continue an unfinished settlement; `settled` is set by the last page.
+        if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
         if (t.status != TaskStatus.EpochSettled) revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochSettled);
-        if (t.locked != 0) revert InvalidParams("epoch locked");
+        if (t.locked != 0) revert EpochLocked(taskId);
         // `finalizeEpoch` leaves the task in `EpochSettled` with `locked == 0` after *each* epoch,
         // so without this a caller could settle after epoch 0 of 3 and take the whole escrow while
         // two epochs of paid-for work were still owed.
-        if (t.nextEpoch < t.params.epochs) revert InvalidParams("epochs remain");
+        if (t.nextEpoch < t.params.epochs) revert EpochsRemain(taskId);
         // Only an orderly continuation: no page may skip ahead and strand the ones before it.
-        if (cursor != _settleCursor[taskId]) revert InvalidParams("settle cursor");
+        if (cursor != _settlement.cursor[taskId]) revert SettleCursorMismatch(taskId, cursor);
 
-        // Return every un-redeemed reward lock to the sub-balance first, so the split below
-        // is computed against the vault's real balance rather than an assumption. Idempotent: the
-        // sweep is a no-op once the channels are closed, so repeated pages are safe.
-        vault.sweepTaskChannels(taskId);
-        uint256 available = vault.taskBalance(taskId);
+        // The distribution itself is `SettlementLib`, which runs here by `DELEGATECALL`: the vault
+        // still sees this contract as its task manager, the state it writes is the state above, and
+        // the events it emits are emitted from this address.
+        SettlementLib.Outcome memory o = SettlementLib.payPage(
+            vault,
+            taskId,
+            t,
+            _contributorList[taskId],
+            _contributions[taskId],
+            _totalWeight,
+            _settlement,
+            treasury,
+            SETTLE_PAGE_SIZE
+        );
+        if (!o.finished) return;
 
-        uint128 userPool;
-        uint128 committeePool = (t.budget * t.params.committeeShareBps) / BPS;
-        if (_settleStarted[taskId]) {
-            // Reuse the pool frozen by the first page. Recomputing it here would be wrong: the
-            // `available` clamp below depends on a balance that *shrinks* as pages pay
-            // contributors, so a later page could see a smaller pool and pay its contributors a
-            // smaller share of a smaller pie. That would make amounts page-dependent — the exact
-            // thing the paging invariant forbids — and the drift would land on whichever
-            // contributors happened to be in the later pages.
-            userPool = _settleUserPool[taskId];
-        } else {
-            uint256 available = vault.taskBalance(taskId);
-            userPool = (t.budget * t.params.userShareBps) / BPS;
-            if (userPool > available) userPool = uint128(available);
-            _settleUserPool[taskId] = userPool;
-            _settleStarted[taskId] = true;
-        }
-
-        uint256 totalWeight = _totalWeight[taskId];
-        uint256 start = cursor;
-        // A page is bounded so the call always fits in a block regardless of how many
-        // contributors a task accumulated.
-        uint256 end = start + SETTLE_PAGE_SIZE;
-        if (end < start || end > _contributorList[taskId].length) end = _contributorList[taskId].length;
-        uint256 distributed = _settleDistributed[taskId];
-        address dustRecipient = _settleDustRecipient[taskId];
-
-        for (uint256 i = start; i < end; ++i) {
-            address a = _contributorList[taskId][i];
-            Contribution memory c = _contributions[taskId][a];
-            if (!c.accepted || c.slashed) continue;
-            uint128 amount = Dividend.shareOf(userPool, c.weightQ16, totalWeight);
-            if (amount > 0) {
-                distributed += amount;
-                vault.creditFromTask(taskId, a, amount);
-                emit Withdrawn(taskId, a, amount);
-            }
-            if (a > dustRecipient) dustRecipient = a; // deterministic dust sink
-        }
-
-        _settleDistributed[taskId] = distributed;
-        _settleDustRecipient[taskId] = dustRecipient;
-
-        // Not the last page: record progress and stop. The escrow legs below must not run yet,
-        // because they are computed against the whole pool being distributed.
-        if (end < _contributorList[taskId].length) {
-            _settleCursor[taskId] = end;
-            emit SettleProgress(taskId, end, _contributorList[taskId].length);
-            return;
-        }
-        _settleCursor[taskId] = end;
-        _settled[taskId] = true;
-
-        uint128 dust = userPool > uint128(distributed) ? uint128(userPool) - uint128(distributed) : 0;
-        if (dust > 0 && dustRecipient != address(0)) {
-            vault.creditFromTask(taskId, dustRecipient, dust);
-            emit Withdrawn(taskId, dustRecipient, dust);
-        }
-
-        if (committeePool > 0) {
-            uint256 left = vault.taskBalance(taskId);
-            uint128 cpool = committeePool > left ? uint128(left) : committeePool;
-            if (cpool > 0) {
-                vault.creditFromTask(taskId, treasury, cpool);
-                emit Withdrawn(taskId, treasury, cpool);
-            }
-        }
-
-        // Everything still in the sub-balance (node pool for unopened/disputed epochs, plus
-        // integer-division dust) goes back to the buyer.
-        uint256 finalBalance = vault.taskBalance(taskId);
-        if (finalBalance > 0) {
-            vault.creditFromTask(taskId, t.params.buyer, finalBalance);
-            emit Withdrawn(taskId, t.params.buyer, uint128(finalBalance));
-        }
-
-        emit EscrowSettled(taskId, userPool, committeePool, uint128(finalBalance));
+        // The transition is the orchestrator's own, and `TaskSettled` reports the node pool from the
+        // task's parameters, so neither belongs in the library.
         _setStatus(taskId, TaskStatus.Settling);
-        emit TaskSettled(taskId, userPool, nodePoolOf(taskId), committeePool);
+        emit TaskSettled(taskId, o.userPool, nodePoolOf(taskId), o.committeePool);
     }
 
     /// @notice Buyer requests the final weights be revealed. Gated by a valid BLS aggregate
@@ -794,7 +728,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status != TaskStatus.Settling) revert RevealNotAllowed(taskId, t.status);
         _setStatus(taskId, TaskStatus.Revealing);
         decryptionGate.requestReveal(taskId, t.lastWeightsCid, blsAggregateSig);
-        emit RevealRequested(taskId, t.lastWeightsCid, bytes32(0));
+        emit RevealRequested(taskId, t.lastWeightsCid, keccak256(blsAggregateSig));
     }
 
     function submitPartialDecryption(uint256 taskId, bytes32 partialDecryption) external nonReentrant {
@@ -810,7 +744,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      let the buyer reach `Disclosed` immediately after `requestReveal`, with zero partials
     ///      submitted, which made the status meaningless as evidence and left no on-chain record
     ///      that the threshold was ever met.
-    function withdraw(uint256 taskId) external nonReentrant returns (uint128 amount) {
+    /// @dev This moves no money and emits no `Withdrawn`: settlement already credited the buyer's
+    ///      refund to `PaymentVault`, and `PaymentVault.claim` is the call that pays it. Returning
+    ///      a pending balance here — or emitting a withdrawal event for it — described money as
+    ///      paid when it had only been accounted.
+    function withdraw(uint256 taskId) external nonReentrant {
         Task storage t = _tasks[taskId];
         if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager && msg.sender != owner) {
             revert NotUpdateManagerOrOwner(taskId, msg.sender);
@@ -818,10 +756,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status != TaskStatus.Revealing) revert RevealNotAllowed(taskId, t.status);
         if (!decryptionGate.revealCompleted(taskId)) revert RevealNotAllowed(taskId, t.status);
 
-        uint128 due = pendingPayout(t.params.buyer);
         _setStatus(taskId, TaskStatus.Disclosed);
-        amount = due;
-        if (due > 0) emit Withdrawn(taskId, t.params.buyer, due);
         emit RevealCompleted(taskId, msg.sender);
     }
 
@@ -830,17 +765,30 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /* ------------------------------------------------------------------ */
 
     /// @notice Unwind an unfinished task and refund the buyer, net of committed epochs.
-    /// @dev Callable by the buyer/update manager while the task is not yet settled. The open
-    ///      epoch's lock is retained so a node that already produced work stays solvent.
+    /// @dev Callable by the buyer/update manager while the task is not yet settled. A node holding
+    ///      a verified commit for the open epoch keeps a slice of that epoch's lock.
     function abort(uint256 taskId, bytes4 reason) external nonReentrant {
         Task storage t = _tasks[taskId];
         if (msg.sender != t.params.buyer && msg.sender != owner && msg.sender != t.params.updateManager) {
             revert NotUpdateManagerOrOwner(taskId, msg.sender);
         }
         if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
-            revert InvalidTaskStatus(taskId, t.status, TaskStatus.Aborted);
+            revert AlreadyTerminal(taskId, t.status);
         }
-        if (_settled[taskId]) revert InvalidParams("settled");
+        _unwind(taskId, reason);
+    }
+
+    /// @dev The refund half of both terminal paths, shared so the two cannot disagree about what a
+    ///      buyer is owed.
+    ///
+    ///      A node that already produced a *verified* commit did real work, so it keeps a slice of
+    ///      the open epoch's lock; everyone else is refunded in full. `abort` is terminal, so
+    ///      anything not paid out here is stranded in the vault forever: the previous version
+    ///      withheld `ABORT_LOCK_BPS` of the lock unconditionally and then paid it to nobody, so
+    ///      every abort silently burned 20% of the epoch lock even when no node had committed
+    ///      anything. Gating retention on an actual winner closes that.
+    function _unwind(uint256 taskId, bytes4 reason) private {
+        Task storage t = _tasks[taskId];
         // Settlement is a commitment to the contributors, so it cannot be unwound once begun.
         // Before paging existed this was unreachable because `settle` was atomic; with paging, a
         // buyer could run one page — paying contributors in list order at their full pro-rata
@@ -851,15 +799,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         // Freezing here cannot strand funds. Settlement is permissionless, every page is
         // independently callable, and the total credited can never exceed the pool frozen by the
         // first page, so finishing is always possible.
-        if (_settleStarted[taskId]) revert InvalidParams("settlement started");
+        if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
+        if (_settlement.started[taskId]) revert SettlementBegun(taskId);
 
-        // A node that already committed a *verified* epoch did real work, so it keeps a slice of
-        // the open epoch's lock. Everyone else is refunded in full.
-        //
-        // `abort` is terminal, so anything not paid out here is stranded in the vault forever:
-        // no later call can move it. The previous version always withheld `ABORT_LOCK_BPS` of
-        // the lock and then never paid it to anyone, so every abort silently burned 20% of the
-        // epoch lock. Gating the retention on an actual verified commit closes that.
         address worker = _epochWinner[taskId][t.nextEpoch];
         uint128 keep = (t.locked > 0 && worker != address(0)) ? (t.locked * ABORT_LOCK_BPS) / BPS : 0;
 
@@ -896,26 +838,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reclaimUnspentEpochs(uint256 taskId) external whenNotPaused nonReentrant returns (uint128 amount) {
         Task storage t = _tasks[taskId];
         if (msg.sender != t.params.buyer) revert NotUpdateManagerOrOwner(taskId, msg.sender);
-        if (t.status == TaskStatus.None) revert InvalidParams("unknown");
-        if (_settled[taskId]) revert InvalidParams("settled");
-        if (t.locked != 0) revert InvalidParams("epoch locked");
-        if (t.nextEpoch < t.params.epochs) revert InvalidParams("epochs remain");
-
-        // Un-redeemed reward locks return to the sub-balance before the refund is computed.
-        vault.sweepTaskChannels(taskId);
-
-        uint256 available = vault.taskBalance(taskId);
-        if (available == 0) return 0;
-
-        uint128 userPool = (t.budget * t.params.userShareBps) / BPS;
-        uint128 committeePool = (t.budget * t.params.committeeShareBps) / BPS;
-        uint256 reserved = uint256(userPool) + uint256(committeePool);
-        if (available <= reserved) return 0;
-
-        amount = uint128(available - reserved);
-        // Pull-based, consistent with `settle` and `abort`.
-        vault.creditFromTask(taskId, t.params.buyer, amount);
-        emit Withdrawn(taskId, t.params.buyer, amount);
+        if (t.status == TaskStatus.None) revert UnknownTask(taskId);
+        if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
+        if (t.locked != 0) revert EpochLocked(taskId);
+        if (t.nextEpoch < t.params.epochs) revert EpochsRemain(taskId);
+        return SettlementLib.reclaim(vault, taskId, t);
     }
 
     /* ------------------------------------------------------------------ */
@@ -924,7 +851,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     /// @notice ERC-1271 signature validation for node reward slices.
     /// @dev The contract is the channel's streamer, so it authorises slices itself. A node
-    ///      presents `abi.encode(channelId, sliceIndex, amount, deadline)` as the "signature"
+    ///      presents `abi.encode(channelId, sliceIndex, amount, padding)` as the "signature"
     ///      and the vault checks it against the EIP-712 digest of those same fields. Only
     ///      slices recorded by `finalizeEpoch` can ever be authorised, so there is no signer
     ///      to phish and no off-chain key that could sign a payout for a non-existent epoch.
@@ -933,14 +860,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      `REDEEM_TYPEHASH` struct, so a mismatch is impossible as long as the vault's
     ///      `domainSeparator` is used, which `PaymentVault.redeem` guarantees.
     function isValidSignature(bytes32 digest, bytes calldata signature) external view returns (bytes4) {
-        return _isValidSignature(digest, signature);
-    }
-
-    function isValidSignatureNow(bytes32 digest, bytes calldata signature) external view returns (bytes4) {
-        return _isValidSignature(digest, signature);
-    }
-
-    function _isValidSignature(bytes32 digest, bytes calldata signature) internal view returns (bytes4) {
         if (signature.length != 96) return 0xffffffff;
         (uint256 channelId, uint256 sliceIndex, uint128 amount) = _decodeSlice(signature);
         uint128 authorized = _authorizedSlice[channelId][sliceIndex];
@@ -949,26 +868,17 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         return _1271_MAGIC;
     }
 
-    function sliceDigest(uint256 channelId, address streamer, address node, uint128 maxCumulative, uint64 unlockAt, uint256 deadline)
-        external
-        view
-        returns (bytes32)
-    {
-        return vault.redeemDigest(channelId, streamer, node, maxCumulative, unlockAt, deadline);
-    }
-
-    function _decodeSlice(bytes calldata s) private pure returns (uint256 channelId, uint256 sliceIndex, uint128 amount) {
-        (channelId, sliceIndex, amount,) = _decodeSliceFull(s);
-    }
-
     /// @notice Digest the vault will check for a slice. Mirrors `PaymentVault.redeemDigest`,
     ///         reading the channel parameters from the vault so the two can never drift.
     function _sliceDigest(bytes calldata signature) private view returns (bytes32) {
-        if (signature.length != 96) return bytes32(0);
         (uint256 channelId,,, uint256 deadline) = _decodeSliceFull(signature);
         PaymentVault.Channel memory ch = vault.channelInfo(channelId);
         if (ch.node == address(0)) return bytes32(0);
         return vault.redeemDigest(channelId, address(this), ch.node, ch.maxCumulative, ch.unlockAt, deadline);
+    }
+
+    function _decodeSlice(bytes calldata s) private pure returns (uint256 channelId, uint256 sliceIndex, uint128 amount) {
+        (channelId, sliceIndex, amount,) = _decodeSliceFull(s);
     }
 
     function _decodeSliceFull(bytes calldata s) private pure returns (uint256 channelId, uint256 sliceIndex, uint128 amount, uint256 deadline) {
@@ -987,66 +897,36 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /*                        FHE decryption handles                      */
     /* ------------------------------------------------------------------ */
 
-    function liveEpochHandle() external view returns (euint32) {
-        return _liveEpoch;
-    }
-
-    function sealFlagHandle() external view returns (euint32) {
-        return _sealFlag;
-    }
-
-    function verifiedNodesHandle() external view returns (euint32) {
-        return _verifiedNodes;
-    }
-
-    /// @notice The buyer's encrypted state accumulator, as a raw fhEVM handle. Callers that
+    /// @notice The task's encrypted state accumulator, as a raw fhEVM handle. Callers that
     ///         already hold an input proof (the buyer, the update manager, a registered node)
     ///         must re-verify it with `FHE.fromExternal` before use; the raw handle alone grants
     ///         nothing, because the ACL is not extended to arbitrary readers.
-    function encStateHandle() external view returns (externalEuint64) {
-        return externalEuint64.wrap(FHE.toBytes32(_encState));
+    function encStateHandle(uint256 taskId) external view returns (externalEuint64) {
+        return externalEuint64.wrap(FHE.toBytes32(_fhe[taskId].encState));
     }
 
-    /// @notice Grant `account` the right to decrypt the shared orchestration state.
-    /// @dev Restricted to the parties already ACL'd by `_grant32`/`_grant64` — the buyer, the
+    /// @notice Grant `account` the right to decrypt *this task's* encrypted state.
+    /// @dev Restricted to the parties already ACL'd by `StateAcl.grant64` — the buyer, the
     ///      update manager, and nodes registered for this task. This was previously callable by
     ///      anyone with an arbitrary `account`, which handed a third party a decryption grant on
-    ///      `_encState`: the buyer's encrypted loss curve, remaining noise budget and epoch
-    ///      checkpoint. That is not the model weights and not any user's rows, but it is a buyer
-    ///      telemetry leak reachable by an unprivileged caller, so the grant is now bounded to the
-    ///      set of parties the protocol already trusts with these handles.
+    ///      the buyer's encrypted loss curve, remaining noise budget and epoch checkpoint. That is
+    ///      not the model weights and not any user's rows, but it is a buyer telemetry leak
+    ///      reachable by an unprivileged caller, so the grant is now bounded to the set of parties
+    ///      the protocol already trusts with this handle.
+    /// @dev Handles, not contract singletons: with a single shared accumulator, registering as a
+    ///      node on any task granted read access to every buyer's encrypted state.
     function grantStateAccess(uint256 taskId, address account) external whenNotPaused {
         Task storage t = _tasks[taskId];
-        if (t.status == TaskStatus.None) revert InvalidParams("unknown");
+        if (t.status == TaskStatus.None) revert UnknownTask(taskId);
         // Checked before the role test: the zero address is not a buyer, manager, owner or node,
         // so testing the role first would make `ZeroAddress` unreachable for the only input it
         // exists to reject.
         if (account == address(0)) revert ZeroAddress();
         if (account != t.params.buyer && account != t.params.updateManager && account != owner) {
-            if (!_nodeRegistered[taskId][account]) revert InvalidParams("not a task party");
+            if (!_nodeRegistered[taskId][account]) revert NotTaskParty(taskId, account);
         }
-        FHE.allow(_liveEpoch, account);
-        FHE.allow(_sealFlag, account);
-        FHE.allow(_verifiedNodes, account);
-        FHE.allow(_encState, account);
+        StateAcl.allow64(_fhe[taskId].encState, account);
         emit StateAccessGranted(taskId, account);
-    }
-
-    /// @notice ACL a fresh `euint32` handle to the three parties that must be able to read it.
-    ///         Every handle is re-created on mutation, and each `FHE.allow` inlines library code,
-    ///         so consolidating the repeated triple-grant here keeps bytecode and ACL semantics in
-    ///         one place (granting `address(this)` is what lets the *next* operation use it).
-    function _grant32(euint32 h, Task storage t) private {
-        FHE.allow(h, t.params.buyer);
-        FHE.allow(h, t.params.updateManager);
-        FHE.allow(h, address(this));
-    }
-
-    /// @notice Same as `_grant32` for the `euint64` state accumulator.
-    function _grant64(euint64 h, Task storage t) private {
-        FHE.allow(h, t.params.buyer);
-        FHE.allow(h, t.params.updateManager);
-        FHE.allow(h, address(this));
     }
 
     /* ================================================================== */
@@ -1115,10 +995,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     function statusOf(uint256 taskId) external view returns (TaskStatus) {
         return _tasks[taskId].status;
-    }
-
-    function isSettled(uint256 taskId) external view returns (bool) {
-        return _settled[taskId];
     }
 
     function nodeRegistered(uint256 taskId, address node) external view returns (bool) {
@@ -1217,7 +1093,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         emit TaskStatusChanged(taskId, from, to);
     }
 
-    /// @dev `keccak(prev ‖ leafIndex ‖ ciphertextCid)`, byte-identical to
+    /// @dev `keccak(prev – leafIndex – ciphertextCid)`, byte-identical to
     ///      `node/src/fhe/dataset.rs::ct_root_step`. Keeping the two implementations
     ///      byte-for-byte equal is what makes `ctRoot` usable as a STARK public input, so the
     ///      encoding is spelled out here rather than left to a struct hash.

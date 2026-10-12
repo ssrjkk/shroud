@@ -31,9 +31,15 @@ interface IERC1271 {
 ///
 ///      This is deliberately **not** an off-chain signer: the streamer is the contract, so the
 ///      signature is only produced after on-chain proof verification, and the byte-for-byte
-///      equivalence of the Solidity and Rust encodings is directly auditable. `ERC-1271` is
-///      supported in `redeem` so an EOA streamer (a buyer running their own epoch loop) works
-///      through exactly the same code path.
+///      equivalence of the Solidity and Rust encodings is directly auditable.
+///
+///      A channel's `streamer` is always `msg.sender` of `openTaskChannel`, i.e. the task
+///      manager. In the standard deployment that is `CipherTask`, so `redeem` validates the slice
+///      through ERC-1271. An EOA task manager (a private instance running its own epoch loop,
+///      which `setTaskManager` permits) is supported by the same function through the ECDSA
+///      branch, and `closeChannel` is that configuration's recovery path: an EOA manager can
+///      close its own channels and return the remainder to the task, which a contract manager
+///      does through `sweepTaskChannels` instead.
 contract PaymentVault is ReentrancyGuard, Pausable {
     struct Channel {
         address node; // earner
@@ -63,11 +69,23 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     bytes32 public immutable domainSeparator;
 
     address public owner;
+    address public pendingOwner;
     address public taskManager; // CipherTask.sol — the only address allowed to move escrow
+
+    /// @dev How long a task-manager rotation must be visible before it takes effect.
+    uint64 public constant TASK_MANAGER_DELAY = 7 days;
+    address public proposedTaskManager;
+    uint64 public taskManagerEta;
 
     uint256 public channelNonce;
     mapping(uint256 => Channel) public channels;
     mapping(address => uint256) public pendingWithdrawal;
+
+    /// @notice Sum of all `pendingWithdrawal` balances, maintained incrementally.
+    /// @dev Needed by `rescueStrayTokens`: credited-but-unclaimed amounts are no longer part of
+    ///      `totalLocked` (the debit already happened) yet their tokens are still inside the
+    ///      vault, so they must be excluded from what counts as stray.
+    uint256 public pendingTotal;
 
     /// @notice Escrow funded for, and still owned by, a task.
     mapping(uint256 => uint256) public taskBalance;
@@ -96,9 +114,13 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     error NothingToClaim(address account);
     error ZeroAmount();
     error ZeroAddress();
-    error UnsafeSignatureS();
     error TransferFailed(address token, address to, uint256 amount);
     error InvariantViolated(uint256 totalLocked, uint256 accounted);
+    error TaskManagerAlreadySet();
+    error NoPendingTaskManager();
+    error TaskManagerUnchanged(address proposed);
+    error TaskManagerNotReady(uint64 eta);
+    error NothingToRescue();
 
     event TaskFunded(uint256 indexed taskId, address indexed from, uint256 amount, uint256 newBalance);
     event ChannelOpened(
@@ -115,7 +137,11 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     event WithdrawalCredited(address indexed account, uint256 amount, uint256 indexed taskId);
     event WithdrawalClaimed(address indexed account, uint256 amount);
     event TaskManagerChanged(address indexed from, address indexed to);
+    event TaskManagerProposed(address indexed to, uint64 indexed eta);
+    event TaskManagerRotationCancelled(address indexed proposed);
+    event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
+    event StrayTokensRescued(address indexed to, uint256 amount);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner(msg.sender);
@@ -134,23 +160,80 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         domainSeparator = keccak256(
             abi.encode(_DOMAIN_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(version)), block.chainid, address(this))
         );
+        emit OwnershipTransferred(address(0), msg.sender);
     }
 
     /* ------------------------------------------------------------------ */
     /*                              governance                             */
     /* ------------------------------------------------------------------ */
 
+    /// @notice Begin a two-step ownership handover.
+    /// @dev Two-step because a single-step transfer to a wrong or incapable address is
+    ///      unrecoverable *and* silent: the old owner simply stops being able to act, and there is
+    ///      no remaining key that can undo it. `pendingOwner` must accept.
     function transferOwnership(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        emit OwnershipTransferred(owner, to);
-        owner = to;
+        emit OwnershipTransferStarted(owner, to);
+        pendingOwner = to;
     }
 
-    /// @notice Grant escrow-management rights to the orchestrator. Timelock in production.
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotOwner(msg.sender);
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
+    }
+
+    /// @notice Install the orchestrator, once.
+    /// @dev Only usable while `taskManager` is unset. This function used to repoint the manager at
+    ///      any time, and `taskManager` is the single address allowed to move every task's
+    ///      escrow: `creditFromTask`, `openTaskChannel` and `sweepTaskChannels` together transfer
+    ///      the whole vault to whoever holds the slot. One owner transaction was therefore enough
+    ///      to take everyone's funds, with no notice and no window for anyone else to react. The
+    ///      bootstrap stays immediate (no funds exist yet) and every later change goes through the
+    ///      timelock below.
     function setTaskManager(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
+        if (taskManager != address(0)) revert TaskManagerAlreadySet();
         emit TaskManagerChanged(taskManager, to);
         taskManager = to;
+    }
+
+    /// @notice Queue a task-manager rotation, effective `TASK_MANAGER_DELAY` after it is proposed.
+    /// @dev The delay is what makes a hostile rotation useless: escrow only moves through
+    ///      `onlyTaskManager` calls, and anyone watching `TaskManagerProposed` has a week to
+    ///      `setPaused(true)`, which blocks `fundTask`, `creditFromTask`, `openTaskChannel` and
+    ///      `sweepTaskChannels` — every path that could drain anything — before the new manager is
+    ///      installed. A malicious manager installed behind a pause can move no funds.
+    /// @dev Re-proposing overwrites the live rotation, including its `eta`. That is the owner's
+    ///      prerogative and cannot lengthen or shorten the delay for a *given* candidate: the
+    ///      earliest any candidate can take effect is `now + TASK_MANAGER_DELAY`.
+    function proposeTaskManager(address to) external onlyOwner {
+        if (to == address(0)) revert ZeroAddress();
+        if (to == taskManager) revert TaskManagerUnchanged(to);
+        proposedTaskManager = to;
+        taskManagerEta = uint64(block.timestamp) + TASK_MANAGER_DELAY;
+        emit TaskManagerProposed(to, taskManagerEta);
+    }
+
+    /// @notice Execute the queued rotation. Callable by anyone once the delay has elapsed, so a
+    ///         rotated-in manager is not hostage to a lost owner key.
+    function executeTaskManager() external {
+        address to = proposedTaskManager;
+        if (to == address(0)) revert NoPendingTaskManager();
+        if (block.timestamp < taskManagerEta) revert TaskManagerNotReady(taskManagerEta);
+        emit TaskManagerChanged(taskManager, to);
+        taskManager = to;
+        proposedTaskManager = address(0);
+        taskManagerEta = 0;
+    }
+
+    function cancelTaskManager() external onlyOwner {
+        address dropped = proposedTaskManager;
+        if (dropped == address(0)) revert NoPendingTaskManager();
+        proposedTaskManager = address(0);
+        taskManagerEta = 0;
+        emit TaskManagerRotationCancelled(dropped);
     }
 
     function setPaused(bool v) external onlyOwner {
@@ -177,6 +260,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         if (amount == 0) revert ZeroAmount();
         _debitTask(taskId, amount);
         pendingWithdrawal[account] += amount;
+        pendingTotal += amount;
         _assertInvariant();
         emit WithdrawalCredited(account, amount, taskId);
     }
@@ -281,17 +365,20 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         // out slice 0 forever, because the counter starts at 0.
         if (sliceIndex < ch.consumed) revert SliceNotMonotonic(channelId, sliceIndex, ch.consumed);
         if (amount > ch.maxCumulative) revert ExceedsCap(channelId, amount, ch.maxCumulative);
-        if (amount <= ch.withdrawn) {
-            // Nothing new to pay. Still consume the index so a later, larger slice remains
-            // redeemable and the signature cannot be replayed for a different amount.
-            ch.consumed = uint64(sliceIndex) + 1;
-            return 0;
-        }
-
         bytes32 structHash =
             keccak256(abi.encode(REDEEM_TYPEHASH, channelId, ch.streamer, ch.node, ch.maxCumulative, ch.unlockAt, deadline));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         if (!_authorize(digest, signature, ch.streamer)) revert InvalidSignature();
+
+        if (amount <= ch.withdrawn) {
+            // Nothing new to pay. The index is still consumed, so the same signature cannot later
+            // be replayed against a different amount, and a larger slice stays redeemable. The
+            // consumption happens *after* `_authorize` rather than before it: `consumed` is the
+            // replay guard, and a path that mutates it without authenticating the caller first is
+            // a path where the guard stops being evidence that the streamer signed something.
+            ch.consumed = uint64(sliceIndex) + 1;
+            return 0;
+        }
 
         ch.consumed = uint64(sliceIndex) + 1;
         paid = amount - ch.withdrawn;
@@ -300,6 +387,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         totalLocked -= paid;
         channelLocksTotal -= paid;
         totalWithdrawn += paid;
+        _assertInvariant();
         _push(msg.sender, paid);
         emit SliceRedeemed(channelId, msg.sender, amount, paid, sliceIndex);
     }
@@ -352,8 +440,27 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         amount = pendingWithdrawal[msg.sender];
         if (amount == 0) revert NothingToClaim(msg.sender);
         pendingWithdrawal[msg.sender] = 0;
+        pendingTotal -= amount;
         _push(msg.sender, amount);
         emit WithdrawalClaimed(msg.sender, amount);
+    }
+
+    /// @notice Send tokens that are in the vault but owed to nobody back to the owner.
+    /// @dev ERC-20 transfers arrive from *anyone*, including users who skip `fundTask` and send
+    ///      USDC straight to the vault address. Such a transfer is invisible to the accounting
+    ///      model — it joins neither a task sub-balance nor a channel — so before this existed it
+    ///      simply sat here forever with no function anywhere in the contract able to move it.
+    /// @dev What is *not* stray is precisely what the vault owes: `totalLocked` (task sub-balances
+    ///      and channel locks) plus `pendingTotal` (credited and awaiting `claim`). Both are
+    ///      maintained on every movement, so the subtraction cannot be talked into releasing
+    ///      escrowed funds; a mistaken deposit is recoverable, an escrowed one never is.
+    function rescueStrayTokens() external onlyOwner nonReentrant returns (uint256 amount) {
+        uint256 owed = totalLocked + pendingTotal;
+        uint256 balance = token.balanceOf(address(this));
+        if (balance <= owed) revert NothingToRescue();
+        amount = balance - owed;
+        _push(owner, amount);
+        emit StrayTokensRescued(owner, amount);
     }
 
     /* ------------------------------------------------------------------ */

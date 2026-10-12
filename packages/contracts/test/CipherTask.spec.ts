@@ -1,11 +1,12 @@
 import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { expect } from "chai";
-import type { Signer } from "ethers";
+import type { BaseContract, Signer } from "ethers";
 import { ethers } from "hardhat";
 
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, NetworkParams, PaymentVault, TestToken } from "../typechain-types";
 import { bytes32Of, externalUint64, params, proofFor, proofRef, reason4, redeemDigest, sliceDomain } from "./helpers";
+import { deployLinked } from "../scripts/libraries";
 
 /**
  * End-to-end lifecycle test of the Shroud orchestrator.
@@ -31,7 +32,9 @@ describe("CipherTask", () => {
       1
     ]);
 
-    const task: CipherTask = await ethers.deployContract("CipherTask", [
+    // `CipherTask` links against `external` libraries, so it cannot go through
+    // `ethers.deployContract` � see `scripts/libraries.ts`.
+    const task: CipherTask = await deployLinked("CipherTask", [
       await token.getAddress(),
       await vault.getAddress(),
       await verifier.getAddress(),
@@ -94,7 +97,7 @@ describe("CipherTask", () => {
   }
 
   /** Run one full epoch: open, commit by `node`, wait out the dispute window, finalize. */
-  async function runEpoch(fx: Fx, id: bigint, epoch: number, node: Signer, traceDigest = bytes32Of(999)) {
+  async function runEpoch(fx: Fx, id: bigint, epoch: number, node: Fx["node"], traceDigest = bytes32Of(999)) {
     const { task, buyer, verifier } = fx;
     await openEpochAs(fx, id, buyer, bytes32Of(100 + Number(epoch)), bytes32Of(200 + Number(epoch)), BigInt(epoch));
     const transcript = await task.proofTranscript(id, epoch, traceDigest);
@@ -105,6 +108,50 @@ describe("CipherTask", () => {
     await task.connect(node).commitEpoch(id, epoch, proofRef(epoch), bytes32Of(300 + Number(epoch)), bytes32Of(400 + Number(epoch)), bytes32Of(500 + Number(epoch)), traceDigest);
     await time.increase(3600 + 600);
     await task.finalizeEpoch(id, epoch);
+  }
+
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Commit the claim and three verified disagreements for epoch `epoch`, without reporting them.
+   *
+   * `reportDispute` counts a report only from an address that holds a verified commit for that epoch
+   * whose `traceDigest` is the digest being reported, so a dispute fixture has to make those commits
+   * rather than just announce digests. Each challenger needs its own digest because the proof
+   * transcript is derived from `(taskId, epoch, traceDigest)` and the mock verifier consumes a
+   * transcript on first use.
+   *
+   * The claimant is the *lowest address* of the set, because that is the tie-break `commitEpoch`
+   * applies � Hardhat signer addresses are not ordered by index, so picking `node` because it
+   * commits first would silently make a challenger the claim, and its own report would then read as
+   * agreement with the claim.
+   */
+  async function competingCommits(fx: Fx, id: bigint, epoch: number, nodes: Fx["node"][]) {
+    const sorted = [...nodes].sort((a, b) => (BigInt(a.address) < BigInt(b.address) ? -1 : 1));
+    const [claimant, ...challengers] = sorted;
+    const claimDigest = bytes32Of(900 + Number(epoch));
+    await fx.task
+      .connect(claimant)
+      .commitEpoch(id, epoch, proofRef(1 + Number(epoch)), bytes32Of(301), bytes32Of(401), bytes32Of(501), claimDigest);
+
+    const digests: string[] = [];
+    for (const i of challengers.keys()) {
+      const digest = bytes32Of(1234 + 100 * Number(epoch) + i);
+      digests.push(digest);
+      await fx.task
+        .connect(challengers[i])
+        .commitEpoch(id, epoch, proofRef(40 + 10 * Number(epoch) + i), bytes32Of(601 + i), bytes32Of(701 + i), bytes32Of(801 + i), digest);
+    }
+    return { claimant, challengers, digests, claimDigest };
+  }
+
+  /** Commit and then report every challenger's own digest: an epoch rejected by quorum. */
+  async function disputeByQuorum(fx: Fx, id: bigint, epoch: number, nodes: Fx["node"][]) {
+    const c = await competingCommits(fx, id, epoch, nodes);
+    for (const i of c.challengers.keys()) {
+      await fx.task.connect(c.challengers[i]).reportDispute(id, epoch, c.digests[i]);
+    }
+    return c;
   }
 
   /* ---------------------------------------------------------------- */
@@ -157,9 +204,12 @@ describe("CipherTask", () => {
 
     it("enforces parameter bounds", async () => {
       const { task, buyer, escrow } = await deployFixture();
-      await expect(task.connect(buyer).createTask(escrow, params(buyer.address, { contributionWindow: 60 }))).to.be.revertedWithCustomError(task, "InvalidParams");
-      await expect(task.connect(buyer).createTask(escrow, params(buyer.address, { epochs: 0 }))).to.be.revertedWithCustomError(task, "InvalidParams");
-      await expect(task.connect(buyer).createTask(escrow, params(buyer.address, { features: 0 }))).to.be.revertedWithCustomError(task, "InvalidParams");
+      await expect(task.connect(buyer).createTask(escrow, params(buyer.address, { contributionWindow: 60 }))).to.be.revertedWithCustomError(
+        task,
+        "ContributionWindowInvalid"
+      );
+      await expect(task.connect(buyer).createTask(escrow, params(buyer.address, { epochs: 0 }))).to.be.revertedWithCustomError(task, "EpochCountInvalid");
+      await expect(task.connect(buyer).createTask(escrow, params(buyer.address, { features: 0 }))).to.be.revertedWithCustomError(task, "FeatureCountInvalid");
     });
   });
 
@@ -216,7 +266,7 @@ describe("CipherTask", () => {
       const id = await task.taskCount();
 
       await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(11), proofFor(1), bytes32Of(7), 1_000);
-      await expect(task.connect(buyer).sealTask(id)).to.be.revertedWithCustomError(task, "CapReached");
+      await expect(task.connect(buyer).sealTask(id)).to.be.revertedWithCustomError(task, "BelowMinContributors");
 
       await task.connect(bob).submitContribution(id, bytes32Of(2), bytes32Of(12), proofFor(2), bytes32Of(8), 1_000);
       await expect(task.connect(buyer).sealTask(id)).to.emit(task, "TaskSealed");
@@ -264,7 +314,7 @@ describe("CipherTask", () => {
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
       await expect(
         openEpochAs(fx, id, buyer, bytes32Of(102), bytes32Of(103))
-      ).to.be.revertedWithCustomError(task, "InvalidParams");
+      ).to.be.revertedWithCustomError(task, "EpochLocked");
     });
 
     it("rejects a proof that is not a STARK, and one whose transcript was already consumed", async () => {
@@ -316,7 +366,7 @@ describe("CipherTask", () => {
       await time.increase(3601);
       await expect(
         task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(9))
-      ).to.be.revertedWithCustomError(task, "InvalidParams");
+      ).to.be.revertedWithCustomError(task, "CommitWindowExpired");
     });
 
     it("rejects a duplicate commit from the same node", async () => {
@@ -332,34 +382,89 @@ describe("CipherTask", () => {
   });
 
   describe("dispute quorum", () => {
+    /**
+     * Epoch 0 of a 2-epoch task with four registered nodes: `node`'s claim (digest 999) holds the
+     * tie-break, and node2/node3/node4 each hold a *verified* commit for a different digest.
+     *
+     * The challengers have to commit, not just announce: `reportDispute` only counts a report from
+     * an address that can produce its own verified commit for that epoch. A fixture that skipped the
+     * commits would be exercising the rejection path in every test below instead of the quorum.
+     */
     async function committing() {
       const fx = await deployFixture();
       const { task, buyer, node, node2, node3, node4 } = fx;
       const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
-      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
-      return { fx, id };
+      const c = await competingCommits(fx, id, 0, [node, node2, node3, node4]);
+      return { fx, id, ...c };
     }
 
     it("a lone report does not shorten the dispute window", async () => {
-      const { fx, id } = await committing();
-      await fx.task.connect(fx.node2).reportDispute(id, 0, bytes32Of(1234));
+      const { fx, id, challengers, digests } = await committing();
+      await fx.task.connect(challengers[0]).reportDispute(id, 0, digests[0]);
       await expect(fx.task.finalizeEpoch(id, 0)).to.be.revertedWithCustomError(fx.task, "DisputeBelowQuorum");
     });
 
+    it("refuses a report from a node that holds no verified commit", async () => {
+      // The drain this closes: `registerNode` is permissionless and unbonded, so a report used to
+      // cost two transactions while `_payReporters` paid `reexecutionBps` of every epoch lock out of
+      // the buyer's escrow. Three throwaway addresses could reject every epoch of every task and
+      // collect the bounty each time.
+      const fx = await deployFixture();
+      const { task, vault, buyer, node, node2, node3, node4 } = fx;
+      const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
+
+      for (const i of [0, 1, 2]) {
+        const claimant = [node2, node3, node4][i];
+        await expect(task.connect(claimant).reportDispute(id, 0, bytes32Of(1234 + i))).to.be.revertedWithCustomError(
+          task,
+          "DisputeWithoutVerifiedCommit"
+        );
+      }
+
+      const [, have] = await task.disputeQuorum(id);
+      expect(have).to.equal(0n);
+      expect(await vault.taskBalance(id)).to.equal(1_000_000_000n);
+
+      // So the epoch is not poisoned: it settles to the honest claimant for the full lock.
+      await time.increase(3600 + 600);
+      await expect(task.finalizeEpoch(id, 0)).to.emit(task, "EpochSettled");
+      const channelId = await task.epochChannel(id, 0);
+      expect((await vault.channelInfo(channelId)).node).to.equal(node.address);
+      expect((await vault.channelInfo(channelId)).maxCumulative).to.equal(75_000_000n);
+    });
+
+    it("refuses a report that does not match the reporter's own commit", async () => {
+      const { fx, id, challengers } = await committing();
+      // Reporting a digest other than its own commit would let a challenger keep searching for
+      // whichever disagreement reaches quorum instead of standing behind its proof.
+      await expect(fx.task.connect(challengers[0]).reportDispute(id, 0, bytes32Of(4321))).to.be.revertedWithCustomError(
+        fx.task,
+        "DisputeDigestMismatch"
+      );
+    });
+
     it("quorum rejects the epoch and pays reporters from the lock", async () => {
-      const { fx, id } = await committing();
-      const { task, vault, node2, node3, node4 } = fx;
-      await task.connect(node2).reportDispute(id, 0, bytes32Of(1234));
-      await task.connect(node3).reportDispute(id, 0, bytes32Of(1235));
-      await task.connect(node4).reportDispute(id, 0, bytes32Of(1236));
+      const { fx, id, challengers, digests } = await committing();
+      const { task, vault } = fx;
+      for (const i of challengers.keys()) {
+        await task.connect(challengers[i]).reportDispute(id, 0, digests[i]);
+      }
 
       const [need, have] = await task.disputeQuorum(id);
       expect(need).to.equal(3n);
       expect(have).to.equal(3n);
 
-      await expect(task.finalizeEpoch(id, 0)).to.emit(task, "TaskAborted");
-      expect((await task.tasks(id)).nextEpoch).to.equal(1n);
+      const tx = await task.finalizeEpoch(id, 0);
+      // `EpochRejected`, not `TaskAborted`: the task carries on with its next epoch, and an indexer
+      // that watched a terminal event for a recoverable one would drop a live task.
+      await expect(tx).to.emit(task, "EpochRejected").withArgs(id, 0, 3);
+      await expect(tx).to.not.emit(task, "TaskAborted");
+      const t = await task.tasks(id);
+      expect(t.nextEpoch).to.equal(1n);
+      expect(t.status).to.equal(6n); // EpochSettled
       // The disputed epoch's lock went to the reporters, not to a node winner.
       expect(await task.epochChannel(id, 0)).to.equal(0n);
       // Escrow is reduced by the reporter bounty (reexecutionBps=200 of lock 7.5e7 = 1.5e6)
@@ -373,11 +478,9 @@ describe("CipherTask", () => {
       const { task, vault, token, buyer, node, node2, node3, node4 } = fx;
       const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
-      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
-
-      await task.connect(node2).reportDispute(id, 0, bytes32Of(1234));
-      await task.connect(node3).reportDispute(id, 0, bytes32Of(1235));
-      await task.connect(node4).reportDispute(id, 0, bytes32Of(1236));
+      // A bounty is owed only to a reporter that re-executed and proved the disagreement, so the
+      // fixture commits before it reports.
+      const { claimant, challengers } = await disputeByQuorum(fx, id, 0, [node, node2, node3, node4]);
       await task.finalizeEpoch(id, 0);
 
       // lock = 1e9 * 1500 / 10000 / 2 = 7.5e7; bounty = lock * 200 / 10000 = 1.5e6;
@@ -385,9 +488,10 @@ describe("CipherTask", () => {
       const expectedEach = 500_000n;
       const subBalanceBefore = await vault.taskBalance(id);
 
-      // Each reporter can redeem its slice over ERC-1271, exactly like a winner. The channels are
-      // opened in report order, so channel 1/2/3 belong to node2/node3/node4.
-      for (const [i, reporter] of [node2, node3, node4].entries()) {
+      // Each reporter can redeem its slice over ERC-1271, exactly like a winner. Channels open in
+      // report order, so channel 1/2/3 belongs to the challengers in that order.
+      for (const i of challengers.keys()) {
+        const reporter = challengers[i];
         const ch = await vault.channelInfo(BigInt(i + 1));
         expect(ch.node).to.equal(reporter.address);
         expect(ch.maxCumulative).to.equal(expectedEach);
@@ -403,8 +507,8 @@ describe("CipherTask", () => {
         expect(await token.balanceOf(reporter.address)).to.equal(expectedEach);
       }
 
-      // The lying claimant is paid nothing.
-      expect(await token.balanceOf(node.address)).to.equal(0n);
+      // The contradicted claimant is paid nothing.
+      expect(await token.balanceOf(claimant.address)).to.equal(0n);
       // `epochChannel` still reads 0: a bounty is not a win.
       expect(await task.epochChannel(id, 0)).to.equal(0n);
       expect(subBalanceBefore).to.equal(1_000_000_000n - 1_500_000n);
@@ -412,10 +516,10 @@ describe("CipherTask", () => {
     });
 
     it("refuses a report that agrees with the claim", async () => {
-      const { fx, id } = await committing();
+      const { fx, id, challengers, claimDigest } = await committing();
       await expect(
-        fx.task.connect(fx.node2).reportDispute(id, 0, bytes32Of(999))
-      ).to.be.revertedWithCustomError(fx.task, "InvalidParams");
+        fx.task.connect(challengers[0]).reportDispute(id, 0, claimDigest)
+      ).to.be.revertedWithCustomError(fx.task, "DisputeAgreesWithClaim");
     });
 
     it("does not let a losing committer redirect the dispute away from the winner", async () => {
@@ -423,7 +527,7 @@ describe("CipherTask", () => {
       // commit won it. A losing node could then submit a valid-but-different commit and move the
       // dispute target onto its own digest. Every honest re-executor reproduces the winner's
       // digest (computation is deterministic), so they would all file "disputes", reach quorum,
-      // and get an honest epoch rejected — for free, since the liar paid nothing.
+      // and get an honest epoch rejected � for free, since the liar paid nothing.
       const fx = await deployFixture();
       const { task, vault, token, buyer, node, node2, node3, node4 } = fx;
       const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
@@ -444,7 +548,7 @@ describe("CipherTask", () => {
       for (const reporter of [node3, node4]) {
         await expect(
           task.connect(reporter).reportDispute(id, 0, winnerDigest)
-        ).to.be.revertedWithCustomError(task, "InvalidParams");
+        ).to.be.revertedWithCustomError(task, "DisputeAgreesWithClaim");
       }
       const [, have] = await task.disputeQuorum(id);
       expect(have).to.equal(0n);
@@ -458,20 +562,20 @@ describe("CipherTask", () => {
     });
 
     it("no dispute -> the winner gets an ERC-1271 redeemable channel", async () => {
-      const { fx, id } = await committing();
-      const { task, vault, node, buyer } = fx;
+      const { fx, id, claimant } = await committing();
+      const { task, vault, buyer } = fx;
       await time.increase(3600 + 600);
       await expect(task.finalizeEpoch(id, 0)).to.emit(task, "EpochSettled");
 
       const channelId = await task.epochChannel(id, 0);
       const ch = await vault.channelInfo(channelId);
-      expect(ch.node).to.equal(node.address);
+      expect(ch.node).to.equal(claimant.address);
       // The winner receives the epoch's whole node pool: budget 1e9 * nodeShareBps 1500 / 10000
       // / 2 epochs = 7.5e7. `nodeShareBps` is not applied a second time at settlement.
       expect(ch.maxCumulative).to.equal(75_000_000n);
 
       const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, ch.maxCumulative]);
-      const expected = await vault.redeemDigest(channelId, await task.getAddress(), node.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256);
+      const expected = await vault.redeemDigest(channelId, await task.getAddress(), claimant.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256);
       expect(await task.isValidSignature(expected, sig)).to.equal("0x1626ba7e");
       // A tampered amount is not authorised.
       const bad = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, 1n]);
@@ -535,7 +639,7 @@ describe("CipherTask", () => {
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, node);
       await task.settle(id);
-      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "InvalidTaskStatus");
+      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "AlreadySettled");
     });
 
     it("refuses to settle while an epoch is still locked", async () => {
@@ -556,10 +660,10 @@ describe("CipherTask", () => {
       await runEpoch(fx, id, 0, node);
       expect((await task.tasks(id)).status).to.equal(6n); // EpochSettled
       expect((await task.tasks(id)).locked).to.equal(0n);
-      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("epochs remain");
+      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "EpochsRemain");
 
       await runEpoch(fx, id, 1, node);
-      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("epochs remain");
+      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "EpochsRemain");
 
       await runEpoch(fx, id, 2, node);
       await expect(task.settle(id)).to.emit(task, "EscrowSettled");
@@ -572,10 +676,7 @@ describe("CipherTask", () => {
 
       // Burn the quorum on epoch 0.
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
-      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
-      for (const r of [node2, node3, node4]) {
-        await task.connect(r).reportDispute(id, 0, bytes32Of(1234));
-      }
+      await disputeByQuorum(fx, id, 0, [node, node2, node3, node4]);
       const [, reported] = await task.disputeQuorum(id);
       expect(reported).to.equal(3n);
       await time.increase(3600 + 600);
@@ -641,7 +742,7 @@ describe("CipherTask", () => {
   describe("reward channel lifecycle", () => {
     it("rejects a sliceIndex that does not fit the monotonic counter", async () => {
       // `consumed` is a uint64 and `uint64(sliceIndex)` truncates instead of reverting, so
-      // `2**64` folded to 0 and set `consumed` back to 1 — silently rewinding the replay guard
+      // `2**64` folded to 0 and set `consumed` back to 1 � silently rewinding the replay guard
       // that F-14 documents. `withdrawn` still bounds the money, but the index must not move
       // backwards, and `uint64(sliceIndex) + 1` must not be able to overflow either.
       const fx = await deployFixture();
@@ -941,7 +1042,7 @@ describe("CipherTask", () => {
       const { task, buyer, node } = fx;
       const id = await sealed(fx, { nodes: [node] });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
-      await expect(fx.task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(task, "InvalidParams");
+      await expect(fx.task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(task, "EpochStillLive");
     });
 
     it("reclaimUnspentEpochs never touches the contributor or committee pools", async () => {
@@ -949,10 +1050,9 @@ describe("CipherTask", () => {
       const { task, vault, token, buyer, node, node2, node3, node4, escrow } = fx;
       const id = await sealed(fx, { epochs: 2, nodes: [node, node2, node3, node4] });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
-      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
       // Quorum rejects epoch 0: no winner is paid, and the reporter bounty is only 200 bps of
       // the lock. Run epoch 1 cleanly so `nextEpoch == epochs` and the buyer can reclaim.
-      for (const r of [node2, node3, node4]) await task.connect(r).reportDispute(id, 0, bytes32Of(777));
+      await disputeByQuorum(fx, id, 0, [node, node2, node3, node4]);
       await task.finalizeEpoch(id, 0);
       await runEpoch(fx, id, 1, node);
 
@@ -1023,7 +1123,7 @@ describe("CipherTask", () => {
 
     it("withdraw is blocked while the gate has not reached threshold", async () => {
       // The bug this guards: `withdraw` only checked `status == Revealing`, so the buyer could
-      // call it the instant `requestReveal` succeeded — zero partials submitted — and reach
+      // call it the instant `requestReveal` succeeded � zero partials submitted � and reach
       // `Disclosed`. That status is the protocol's on-chain attestation that the committee
       // decrypted the output, so bypassing the ceremony made it worthless as evidence.
       const { fx, id } = await settled();
@@ -1058,7 +1158,7 @@ describe("CipherTask", () => {
   describe("encrypted state ACL", () => {
     it("refuses to grant decryption of the orchestration state to an unrelated address", async () => {
       // The bug this guards: `grantStateAccess(account)` had no access control at all, so any
-      // caller could hand a third party a decryption grant on `_encState` — the buyer's
+      // caller could hand a third party a decryption grant on `_encState` � the buyer's
       // encrypted loss curve, noise budget and epoch checkpoint.
       const fx = await deployFixture();
       const { task, buyer, alice, outsider, node } = fx;
@@ -1067,13 +1167,13 @@ describe("CipherTask", () => {
       for (const stranger of [alice, outsider]) {
         await expect(
           task.grantStateAccess(id, stranger.address)
-        ).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("not a task party");
+        ).to.be.revertedWithCustomError(task, "NotTaskParty");
       }
       // The restriction is on the *target*, not just the caller: even the buyer, whose telemetry
       // this is, cannot widen the ACL to an address that has no role in the task.
       await expect(
         task.connect(buyer).grantStateAccess(id, alice.address)
-      ).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("not a task party");
+      ).to.be.revertedWithCustomError(task, "NotTaskParty");
 
       // The parties the protocol already trusts keep working access: a registered node, the
       // buyer themselves, and the owner.
@@ -1083,7 +1183,97 @@ describe("CipherTask", () => {
       // Zero address is rejected outright.
       await expect(task.grantStateAccess(id, ethers.ZeroAddress)).to.be.revertedWithCustomError(task, "ZeroAddress");
       // Unknown task.
-      await expect(task.grantStateAccess(999n, node.address)).to.be.revertedWithCustomError(task, "InvalidParams").withArgs("unknown");
+      await expect(task.grantStateAccess(999n, node.address)).to.be.revertedWithCustomError(task, "UnknownTask");
+    });
+  });
+
+  describe("ownership handover", () => {
+    /**
+     * The functions this loop drives. Declared structurally because the generated interfaces are
+     * per-contract, and the loop is about the behaviour they all share.
+     */
+    type Ownable = {
+      owner(): Promise<string>;
+      pendingOwner(): Promise<string>;
+      paused(): Promise<boolean>;
+      transferOwnership(to: string): Promise<unknown>;
+      acceptOwnership: (() => Promise<unknown>) & { staticCall(): Promise<unknown> };
+      setPaused: ((v: boolean) => Promise<unknown>) & { staticCall(v: boolean): Promise<unknown> };
+      connect(signer: Signer): Ownable;
+    };
+
+    // `CipherTask` pauses task creation, `DecryptionGate` gates the reveal and `ProofVerifier`
+    // gates every payout, so their `owner` is a key that has to be movable without the role ever
+    // ending up unclaimed or handed to an address that never asked for it.
+    it("moves each owner-gated contract only when the new key accepts", async () => {
+      const fx = await deployFixture();
+      const { task, gate, owner, outsider } = fx;
+      const inner = await ethers.deployContract("MockStarkVerifier", [48_576]);
+      const verifier = await ethers.deployContract("ProofVerifier", [await inner.getAddress(), 48_576, bytes32Of("domain")]);
+
+      const contracts: [string, BaseContract][] = [["CipherTask", task], ["DecryptionGate", gate], ["ProofVerifier", verifier]];
+      for (const [label, c] of contracts) {
+        const ownable = c as unknown as Ownable;
+        expect(await ownable.owner(), label).to.equal(owner.address);
+        expect(await ownable.pendingOwner(), label).to.equal(ethers.ZeroAddress);
+
+        // A handover is an announcement, not a transfer: the current key still holds the role until
+        // the recipient says so, so a typo in `to` strands nothing.
+        await expect(ownable.transferOwnership(outsider.address), label).to.emit(c, "OwnershipTransferStarted");
+        expect(await ownable.owner(), label).to.equal(owner.address);
+        expect(await ownable.pendingOwner(), label).to.equal(outsider.address);
+
+        // Zero is not a new owner anywhere either.
+        await expect(ownable.transferOwnership(ethers.ZeroAddress), label).to.be.revertedWithCustomError(c, "ZeroAddress");
+
+        // Neither the nominator nor a third party can take what was announced. Simulated, because
+        // `@fhevm/hardhat-plugin` hides the reason of a revert sent from a non-default signer with an
+        // `address` argument (see `PaymentVault.spec.ts`).
+        await expect(ownable.acceptOwnership.staticCall(), label).to.be.revertedWithCustomError(c, "NotOwner");
+        await ownable.connect(outsider).acceptOwnership();
+        expect(await ownable.owner(), label).to.equal(outsider.address);
+        expect(await ownable.pendingOwner(), label).to.equal(ethers.ZeroAddress);
+
+        // The old key is out and the new one is in.
+        await expect(ownable.setPaused.staticCall(true), label).to.be.revertedWithCustomError(c, "NotOwner");
+        await ownable.connect(outsider).setPaused(true);
+        expect(await ownable.paused(), label).to.equal(true);
+      }
+    });
+  });
+
+  describe("slice authorisation", () => {
+    it("refuses a slice the task never signed, and consumes nothing for it", async () => {
+      // `CipherTask` authorises exactly one slice per channel, at open time (`_authorizedSlice` is
+      // only ever written for index 0). So the vault's zero-payment branch, which consumes an index
+      // without moving money, must not be reachable through the 1271 path on an index nobody signed:
+      // otherwise an outsider could advance the replay guard of a live channel.
+      const fx = await deployFixture();
+      const { task, vault, node } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, node);
+
+      const channelId = await task.epochChannel(id, 0);
+      const ch = await vault.channelInfo(channelId);
+      const signed = (sliceIndex: bigint, amount: bigint) =>
+        ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, sliceIndex, amount]);
+
+      expect(await task.isValidSignature(await vault.redeemDigest(channelId, await task.getAddress(), node.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256), signed(0n, ch.maxCumulative))).to.equal(
+        "0x1626ba7e"
+      );
+      await vault.connect(node).redeem(channelId, 0, ch.maxCumulative, ethers.MaxUint256, signed(0n, ch.maxCumulative));
+      expect((await vault.channelInfo(channelId)).consumed).to.equal(1n);
+
+      // Index 1 with the same, already-paid amount: unauthorised, so it must not even be accepted as
+      // a no-op.
+      const digest1 = await vault.redeemDigest(channelId, await task.getAddress(), node.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256);
+      expect(await task.isValidSignature(digest1, signed(1n, ch.maxCumulative))).to.equal("0xffffffff");
+      await expect(vault.connect(node).redeem(channelId, 1, ch.maxCumulative, ethers.MaxUint256, signed(1n, ch.maxCumulative))).to.be.revertedWithCustomError(
+        vault,
+        "InvalidSignature"
+      );
+      expect((await vault.channelInfo(channelId)).consumed).to.equal(1n);
+      expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
     });
   });
 });
