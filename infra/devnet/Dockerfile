@@ -2,7 +2,7 @@
 #
 # The `@fhevm/hardhat-plugin` installs the in-process mock coprocessor, so no external KMS is
 # needed - the same bytecode runs against the Zama coprocessor in production.
-FROM node:20
+FROM node:26
 
 WORKDIR /app
 COPY packages/contracts/package.json packages/contracts/package-lock.json* ./
