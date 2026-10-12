@@ -156,6 +156,18 @@ describe("CipherTask", () => {
 
   /* ---------------------------------------------------------------- */
 
+  describe("constants the clients mirror", () => {
+    it("holds the values the SDK and the node copy into their own sources", async () => {
+      // Two of these are duplicated outside this package: `@shroud/sdk` re-declares
+      // MAX_ROWS_PER_SHARD so a client can reject an oversized shard before paying gas, and the
+      // settlement driver is written around a page size. Changing a constant here is otherwise
+      // silent for them, so it fails here first.
+      const { task } = await deployFixture();
+      expect(await task.MAX_ROWS_PER_SHARD()).to.equal(100_000n);
+      expect(await task.SETTLE_PAGE_SIZE()).to.equal(200n);
+    });
+  });
+
   describe("task creation and escrow", () => {
     it("escrows exactly the buyer's named budget and pins the params", async () => {
       const { task, token, vault, buyer, escrow } = await deployFixture();

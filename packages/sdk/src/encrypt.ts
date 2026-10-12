@@ -9,15 +9,19 @@
  * `providesConfidentiality = false` so `ShroudSdk` will refuse to submit its output unless the
  * caller explicitly opts in, which is the only thing standing between a forgotten config and a
  * cleartext upload.
+ *
+ * An encryptor returns the `rowCommitment` as well as the ciphertext bytes. That is deliberate:
+ * the commitment is over the contributor's *plaintext* rows, so no code that only ever sees the
+ * ciphertext — including this SDK — can compute it honestly.
  */
 import { ethers } from "ethers";
-import type { Encryptor } from "./types.js";
+import type { EncryptedShard, Encryptor, Hex } from "./types.js";
 
 export class NoopEncryptor implements Encryptor {
   // Loud, not silent: this is the flag `ShroudSdk` checks before it will submit a shard.
   readonly providesConfidentiality = false;
 
-  async encryptRows(data: Float64Array | number[], features: number): Promise<Uint8Array> {
+  async encryptRows(data: Float64Array | number[], features: number): Promise<EncryptedShard> {
     const arr = data instanceof Float64Array ? data : new Float64Array(data);
     const n = arr.length / features;
     const head = new TextEncoder().encode(`shroud/noop/v1\0${features}\0${n}\0`);
@@ -26,16 +30,25 @@ export class NoopEncryptor implements Encryptor {
     for (let i = 0; i < arr.length; i++) {
       new DataView(buf.buffer, head.length + i * 8, 8).setFloat64(0, arr[i], true);
     }
-    return buf;
+    return { ciphertext: buf, rowCommitment: noopRowCommitment(arr) };
   }
 }
 
-/** Derive the on-chain `PreparedShard` from a payload, mirroring `CipherTask._appendLeaf`. */
-export function pinPayload(payload: Uint8Array): { ctDigest: string; rowCommitment: string } {
-  // ctDigest pins the exact DA object bytes.
-  const ctDigest = ethers.keccak256(payload);
-  // rowCommitment is a commitment over the decrypted row structure; for the noop path we bind
-  // it to the plaintext digest so a re-execution can still check the structure.
-  const rowCommitment = ethers.keccak256(ethers.concat([payload, ctDigest]));
-  return { ctDigest, rowCommitment };
+/**
+ * The `rowCommitment` the noop path reports.
+ *
+ * It is a `keccak256` over the row matrix, which is *not* the Pedersen/label commitment the
+ * Groth16 membership proof binds, and it cannot be: the real commitment hides the labels. It is
+ * deterministic and it commits to exactly the rows that were uploaded, which is all the development
+ * path needs - a real `Encryptor` replaces it, and nothing that verifies a shape proof may use this.
+ */
+export function noopRowCommitment(rows: Float64Array): Hex {
+  const tag = new TextEncoder().encode("shroud/noop-row/v1\0");
+  const matrix = new Uint8Array(rows.buffer, rows.byteOffset, rows.byteLength);
+  return ethers.keccak256(ethers.concat([tag, matrix])) as Hex;
+}
+
+/** The on-chain `ctDigest` for a DA payload: keccak256 of the exact bytes that were uploaded. */
+export function pinPayload(payload: Uint8Array): { ctDigest: Hex } {
+  return { ctDigest: ethers.keccak256(payload) as Hex };
 }

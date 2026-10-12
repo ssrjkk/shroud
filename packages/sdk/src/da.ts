@@ -4,15 +4,19 @@
  * The default `MemoryShardStore` is for local development and tests. A production deployment
  * points `ShardStore` at the `infra/` ShardStore service (content-addressed, range-pull).
  *
- * Note on addressing: the store's `cid` is a *transport* address, while the value pinned on-chain
- * is `ctDigest` = keccak256(payload), computed client-side in `pinPayload`. The two differ — the
- * reference store uses Node's SHA3-256 and Ethereum uses keccak-256, which differ in padding — so
- * the store's `cid` is never the on-chain pin and must never be treated as one.
+ * Note on addressing: a store's `cid` is a *transport* address and may be anything the store
+ * chooses to call an object, while the value pinned on chain is `ctDigest` = keccak256(payload),
+ * computed client-side in `pinPayload`. `MemoryShardStore` happens to use the same keccak256 for
+ * both, which is one reason it is only for development. The reference service in `infra/shardstore`
+ * addresses objects with Node's sha3-256, which differs from keccak-256 in padding, so there the
+ * cid and the on-chain pin are different identifiers for the same bytes — and a store's `cid` must
+ * never be treated as the pin.
  *
  * Consequently `getVerified` recomputes keccak256 over the fetched bytes and compares against the
  * expected `ctDigest`. Trusting the store's own addressing instead would mean a DA that returns
  * the wrong object is indistinguishable from an honest one, which is precisely the assumption a
- * re-executing node cannot afford to make.
+ * re-executing node cannot afford to make. It is part of the `ShardStore` interface rather than an
+ * extra on the HTTP client, because verifying is the one thing a node always has to do.
  */
 import { ethers } from "ethers";
 import type { ShardStore } from "./types.js";
@@ -35,6 +39,16 @@ export function assertSafeCid(cid: string): void {
   }
 }
 
+/** Throw unless `bytes` are the object `expectedCtDigest` pins, naming the address that failed. */
+function assertDigest(bytes: Uint8Array, expectedCtDigest: string, cid: string): void {
+  const actual = ethers.keccak256(bytes);
+  if (actual.toLowerCase() !== expectedCtDigest.toLowerCase()) {
+    throw new Error(
+      `shard ${cid} failed integrity check: expected ctDigest ${expectedCtDigest}, computed ${actual}`
+    );
+  }
+}
+
 export class MemoryShardStore implements ShardStore {
   private readonly objects = new Map<string, Uint8Array>();
 
@@ -50,6 +64,15 @@ export class MemoryShardStore implements ShardStore {
     const hit = this.objects.get(cid);
     if (!hit) throw new Error(`shard ${cid} not found`);
     return hit;
+  }
+
+  async getVerified(cid: string, expectedCtDigest: string): Promise<Uint8Array> {
+    const bytes = await this.get(cid);
+    // Checked rather than assumed: an in-process store is used in tests alongside a forged or
+    // mistyped commit, and the node code under test must see the same behaviour here as it does
+    // against the HTTP store.
+    assertDigest(bytes, expectedCtDigest, cid);
+    return bytes;
   }
 }
 
@@ -95,12 +118,23 @@ export class HttpShardStore implements ShardStore {
     };
   }
 
-  private async fetchWithTimeout(path: string, init: RequestInit): Promise<Response> {
-    // Without an abort a hung DA would hang the node, and an epoch has a deadline.
+  /**
+   * Request `path` and consume its response inside the timeout window.
+   *
+   * The body read has to be inside the window, not just the header exchange: an epoch has a
+   * deadline, and a DA that sends a `content-length` and then stalls mid-body would otherwise hang
+   * the node forever with the abort timer already cleared.
+   */
+  private async withTimeout<T>(
+    path: string,
+    init: RequestInit,
+    consume: (res: Response) => Promise<T>
+  ): Promise<T> {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), this.timeoutMs);
     try {
-      return await fetch(`${this.baseUrl}${path}`, { ...init, signal: ac.signal });
+      const res = await fetch(`${this.baseUrl}${path}`, { ...init, signal: ac.signal });
+      return await consume(res);
     } catch (e) {
       if ((e as Error)?.name === "AbortError") {
         throw new Error(`shard store request timed out after ${this.timeoutMs}ms: ${path}`);
@@ -118,13 +152,14 @@ export class HttpShardStore implements ShardStore {
       );
     }
 
-    const res = await this.fetchWithTimeout("/objects", {
+    const body = await this.withTimeout("/objects", {
       method: "PUT",
       body: payload as BodyInit,
       headers: this.headers(),
+    }, async (res) => {
+      if (!res.ok) throw new Error(`shard store PUT failed: ${res.status}`);
+      return (await res.json()) as { cid?: string; digest?: string };
     });
-    if (!res.ok) throw new Error(`shard store PUT failed: ${res.status}`);
-    const body = (await res.json()) as { cid?: string; digest?: string };
 
     // Validate whatever address the store handed back before it can be committed on-chain.
     if (typeof body.cid !== "string" || !CID_RE.test(body.cid)) {
@@ -140,16 +175,21 @@ export class HttpShardStore implements ShardStore {
   async get(cid: string): Promise<Uint8Array> {
     assertSafeCid(cid);
 
-    const res = await this.fetchWithTimeout(`/objects/${cid}`, { method: "GET", headers: this.headers() });
-    if (!res.ok) throw new Error(`shard store GET failed for ${cid}: ${res.status}`);
+    const bytes = await this.withTimeout(
+      `/objects/${cid}`,
+      { method: "GET", headers: this.headers() },
+      async (res) => {
+        if (!res.ok) throw new Error(`shard store GET failed for ${cid}: ${res.status}`);
 
-    // Bound the body *before* buffering it, so a hostile or broken store cannot exhaust memory by
-    // streaming an unbounded response.
-    const declared = Number(res.headers.get("content-length") ?? "0");
-    if (Number.isFinite(declared) && declared > this.maxObjectBytes) {
-      throw new Error(`shard ${cid} declares ${declared} bytes, over the ${this.maxObjectBytes} byte cap`);
-    }
-    const bytes = new Uint8Array(await res.arrayBuffer());
+        // Bound the body *before* buffering it, so a hostile or broken store cannot exhaust memory
+        // by streaming an unbounded response.
+        const declared = Number(res.headers.get("content-length") ?? "0");
+        if (Number.isFinite(declared) && declared > this.maxObjectBytes) {
+          throw new Error(`shard ${cid} declares ${declared} bytes, over the ${this.maxObjectBytes} byte cap`);
+        }
+        return new Uint8Array(await res.arrayBuffer());
+      }
+    );
     if (bytes.byteLength > this.maxObjectBytes) {
       throw new Error(`shard ${cid} is ${bytes.byteLength} bytes, over the ${this.maxObjectBytes} byte cap`);
     }
@@ -160,17 +200,11 @@ export class HttpShardStore implements ShardStore {
    * Fetch a shard and prove it is the one that was committed.
    *
    * `expectedCtDigest` is the on-chain `ctDigest` (keccak256). The store's own addressing is
-   * ignored for the integrity decision: the bytes are hashed locally and compared. This is the
-   * only form of `get` a re-executing node should use.
+   * ignored for the integrity decision: the bytes are hashed locally and compared.
    */
   async getVerified(cid: string, expectedCtDigest: string): Promise<Uint8Array> {
     const bytes = await this.get(cid);
-    const actual = ethers.keccak256(bytes);
-    if (actual.toLowerCase() !== expectedCtDigest.toLowerCase()) {
-      throw new Error(
-        `shard ${cid} failed integrity check: expected ctDigest ${expectedCtDigest}, computed ${actual}`
-      );
-    }
+    assertDigest(bytes, expectedCtDigest, cid);
     return bytes;
   }
 
@@ -184,19 +218,51 @@ export class HttpShardStore implements ShardStore {
       throw new Error(`requested range of ${length} bytes exceeds the ${this.maxObjectBytes} byte cap`);
     }
 
-    const res = await this.fetchWithTimeout(`/objects/${cid}`, {
-      method: "GET",
-      headers: this.headers({ range: `bytes=${offset}-${offset + length - 1}` }),
-    });
-    // 200 means the server ignored the Range header and is sending the whole object; accept it
-    // only when it is small enough that the caller wanted the whole thing anyway.
-    if (res.status !== 206 && res.status !== 200) {
-      throw new Error(`shard store range GET failed for ${cid}: ${res.status}`);
-    }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.byteLength > this.maxObjectBytes) {
-      throw new Error(`shard ${cid} range returned ${bytes.byteLength} bytes, over the cap`);
-    }
+    const bytes = await this.withTimeout(
+      `/objects/${cid}`,
+      { method: "GET", headers: this.headers({ range: `bytes=${offset}-${offset + length - 1}` }) },
+      async (res) => {
+        if (res.status !== 200 && res.status !== 206) {
+          throw new Error(`shard store range GET failed for ${cid}: ${res.status}`);
+        }
+        const body = new Uint8Array(await res.arrayBuffer());
+
+        // A `200` means the server ignored `Range` and sent the whole object, which is only the
+        // answer to this request when the window *is* the object from its start. Accepting anything
+        // else would let a chunked pull reassemble the object's first bytes at every offset: a
+        // shard of the right length, whose CID resolves, whose contents are wrong.
+        if (res.status === 200) {
+          if (offset !== 0 || body.byteLength > length) {
+            throw new Error(
+              `shard store sent ${body.byteLength} bytes with status 200 for range ` +
+                `${offset}..${offset + length - 1} of ${cid}; it ignored the Range header`
+            );
+          }
+          return body;
+        }
+
+        // On a 206 the header is what proves the bytes belong at this offset. A short final chunk
+        // is normal, so the length alone cannot tell an honest tail from an ignored Range.
+        const contentRange = res.headers.get("content-range");
+        if (contentRange) {
+          const matched = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/.exec(contentRange);
+          const start = matched ? Number(matched[1]) : Number.NaN;
+          const end = matched ? Number(matched[2]) : Number.NaN;
+          if (start !== offset || end - start + 1 !== body.byteLength) {
+            throw new Error(
+              `shard store answered content-range ${JSON.stringify(contentRange)} for range ` +
+                `${offset}..${offset + length - 1} of ${cid}`
+            );
+          }
+        } else if (body.byteLength > length) {
+          throw new Error(
+            `shard store answered ${body.byteLength} bytes for a ${length} byte range on ${cid} ` +
+              `without a content-range header`
+          );
+        }
+        return body;
+      }
+    );
     return bytes;
   }
 }

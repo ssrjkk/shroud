@@ -23,6 +23,8 @@ const contracts = [
 fs.mkdirSync(out, { recursive: true });
 for (const [name, file] of contracts) {
   const abi = JSON.parse(fs.readFileSync(path.join(root, `${file}.json`), "utf8")).abi;
-  fs.writeFileSync(path.join(out, `${name}.json`), JSON.stringify(abi, null, 2));
+  // Trailing newline, so that a regeneration shows up as an ABI diff rather than a reformat of the
+  // last line. `smoke.test.ts` compares these copies deep-equal against the artifacts.
+  fs.writeFileSync(path.join(out, `${name}.json`), `${JSON.stringify(abi, null, 2)}\n`, "utf8");
   console.log(`wrote src/abi/${name}.json (${abi.length} entries)`);
 }

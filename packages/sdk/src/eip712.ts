@@ -6,8 +6,12 @@
  *                                maxCumulative,uint64 unlockAt,uint256 deadline)")
  *   digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash))
  *
- * `sliceDigest` must produce byte-for-byte the same digest the contract checks, otherwise an
+ * `redeemDigest` must produce byte-for-byte the same digest the contract checks, otherwise an
  * ERC-1271 authorisation (`isValidSignature`) will reject the slice.
+ *
+ * The second half of this module encodes the *other* half of that authorisation: a contract
+ * streamer (`CipherTask`, the standard deployment) is authenticated by the 96-byte slice blob it
+ * accepts in `isValidSignature`, not by an ECDSA signature. See `encodeSliceSignature`.
  */
 import { ethers, type Signer } from "ethers";
 import type { Hex, RedeemSlice } from "./types.js";
@@ -73,7 +77,17 @@ export function domainSeparator(vaultAddress: string, chainId: bigint): Hex {
   );
 }
 
-/** Sign a redeem slice for the streamer, producing the EIP-712 signature. */
+/**
+ * Sign a redeem slice for an EOA streamer.
+ *
+ * This is the *only* path that produces a signature the vault accepts from a wallet: when the
+ * channel's `streamer` has no code, `PaymentVault._authorize` `ecrecover`s a 65-byte ECDSA
+ * signature and compares it to the streamer. When the streamer is a contract — which is the
+ * standard deployment, where `CipherTask` opens every node reward channel — the vault instead
+ * calls `isValidSignature` on it, and a wallet signature is useless there because the contract
+ * streamer has no key: it only authorises the slice blob it recorded in `finalizeEpoch`.
+ * Use `encodeSliceSignature` for that case.
+ */
 export async function signRedeemSlice(
   streamer: Signer,
   slice: RedeemSlice,
@@ -101,4 +115,85 @@ export async function signRedeemSlice(
   };
   const signature = await streamer.signTypedData(domain, types, value);
   return signature as Hex;
+}
+
+/* ================================================================== */
+/*                    ERC-1271 slice authorisation                     */
+/* ================================================================== */
+
+/**
+ * Length of the blob `CipherTask.isValidSignature` accepts, in bytes.
+ *
+ * Three left-aligned 32-byte words (`channelId`, `sliceIndex`, `amount`); anything else is
+ * rejected with `0xffffffff` before it is even decoded.
+ */
+export const SLICE_SIGNATURE_BYTES = 96;
+
+/**
+ * The deadline a contract-streamer slice must carry.
+ *
+ * `CipherTask._decodeSliceFull` fixes it at `type(uint256).max` — authorised slices deliberately
+ * never expire — so the digest it recomputes, and therefore the digest the vault computes, uses
+ * exactly this value. A node that passes any other deadline gets `InvalidSignature`.
+ */
+export const SLICE_DEADLINE: bigint = ethers.MaxUint256;
+
+/** The slice index `CipherTask` authorises: `finalizeEpoch` writes only index 0. */
+export const SLICE_INDEX: bigint = 0n;
+
+const MAX_UINT256 = ethers.MaxUint256;
+const MAX_UINT128 = (1n << 128n) - 1n;
+
+/**
+ * The `signature` argument `redeem` must carry when the streamer is `CipherTask`.
+ *
+ * This is not a signature in the ECDSA sense: `PaymentVault._authorize` hands these bytes to the
+ * streamer contract's `isValidSignature`, and `CipherTask` checks them against the slice it
+ * recorded in `finalizeEpoch`, then re-derives the vault's EIP-712 digest from them. The encoding
+ * is `abi.encode(uint256 channelId, uint256 sliceIndex, uint128 amount)`, which for three static
+ * types is exactly 96 raw bytes — identical to the word-sliced form the contract reads.
+ */
+export function encodeSliceSignature(channelId: bigint, sliceIndex: bigint, amount: bigint): Hex {
+  // Out-of-range values are refused rather than wrapped: `CipherTask` reads these words with
+  // `uint128(uint256(...))`, so an amount above the uint128 would silently authorise a *different*
+  // slice than the one the caller meant to redeem.
+  if (typeof channelId !== "bigint" || channelId < 0n || channelId > MAX_UINT256) {
+    throw new Error(`channelId must be a non-negative uint256, got ${channelId}`);
+  }
+  if (typeof sliceIndex !== "bigint" || sliceIndex < 0n || sliceIndex > MAX_UINT256) {
+    throw new Error(`sliceIndex must be a non-negative uint256, got ${sliceIndex}`);
+  }
+  if (typeof amount !== "bigint" || amount < 0n || amount > MAX_UINT128) {
+    throw new Error(`amount ${amount} does not fit the uint128 the contract decodes`);
+  }
+  return ethers.AbiCoder.defaultAbiCoder().encode(
+    ["uint256", "uint256", "uint128"],
+    [channelId, sliceIndex, amount]
+  ) as Hex;
+}
+
+/** Inverse of `encodeSliceSignature`, reading the words the Solidity side reads. */
+export function decodeSliceSignature(signature: Hex): {
+  channelId: bigint;
+  sliceIndex: bigint;
+  amount: bigint;
+} {
+  const bytes = ethers.getBytes(signature);
+  if (bytes.length !== SLICE_SIGNATURE_BYTES) {
+    throw new Error(
+      `a contract-streamer slice signature is exactly ${SLICE_SIGNATURE_BYTES} bytes, got ${bytes.length}`
+    );
+  }
+  const word = (offset: number): bigint => {
+    let value = 0n;
+    for (let i = offset; i < offset + 32; i++) value = (value << 8n) | BigInt(bytes[i]);
+    return value;
+  };
+  const channelId = word(0);
+  const sliceIndex = word(32);
+  const amount = word(64);
+  if (amount > MAX_UINT128) {
+    throw new Error(`slice amount ${amount} does not fit the uint128 the contract decodes`);
+  }
+  return { channelId, sliceIndex, amount };
 }

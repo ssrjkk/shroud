@@ -61,6 +61,17 @@ export interface ShardStore {
    * payload, which is the value committed on chain — never a digest echoed by the store.
    */
   get(cid: Hex): Promise<Uint8Array>;
+
+  /**
+   * GET `cid` and refuse bytes that are not the object `expectedCtDigest` pins.
+   *
+   * In the interface rather than an extra on one implementation, because re-execution — the
+   * protocol's core dispute mechanism — cannot be written against a store that might hand back
+   * different bytes under the same address. `expectedCtDigest` is the on-chain `ctDigest`, i.e.
+   * keccak256 of the exact payload that was committed; implementations must recompute it locally
+   * and throw on a mismatch instead of trusting their own addressing.
+   */
+  getVerified(cid: Hex, expectedCtDigest: Hex): Promise<Uint8Array>;
 }
 
 /** The local FHE encryption abstraction (FHEWasm / relayer in production). */
@@ -78,13 +89,47 @@ export interface Encryptor {
   readonly providesConfidentiality: boolean;
 
   /**
-   * Encrypt `rows` of `features` floats into an on-chain-representable ciphertext blob.
+   * `keccak256(abi.encode(s_pub))` for the network public key this encryptor encrypts under.
    *
-   * The bytes are opaque to the SDK; they are committed to the DA and pinned by their digest.
-   * In production this is FHEWasm (browser) or `@zama-fhe/relayer-sdk` (server). The default
-   * `NoopEncryptor` is for local development / tests only - it must never be used with real data.
+   * Declared by the encryptor rather than the caller, because the encryptor is the only component
+   * that knows which key it holds: a client can be configured to check the on-chain pin while
+   * encrypting under a completely different key, and comparing a config string to the chain would
+   * then prove nothing at all. This is what makes the F-08 key-substitution check bite.
+   *
+   * Optional only because `NoopEncryptor` has no key at all.
    */
-  encryptRows(data: Float64Array | number[], features: number): Promise<Uint8Array>;
+  readonly publicKeyHash?: Hex;
+
+  /**
+   * Encrypt `rows` of `features` floats into an on-chain-representable shard.
+   *
+   * In production this is FHEWasm (browser) or `@zama-fhe` (server). The default `NoopEncryptor`
+   * is for local development / tests only - it must never be used with real data.
+   */
+  encryptRows(data: Float64Array | number[], features: number): Promise<EncryptedShard>;
+}
+
+/**
+ * What `encryptRows` returns: the bytes to upload, plus the one value only the encryptor can know.
+ */
+export interface EncryptedShard {
+  /**
+   * The opaque ciphertext bytes. These go to the DA and are pinned on chain by their
+   * `keccak256`, which the SDK computes itself (see `pinPayload`).
+   */
+  ciphertext: Uint8Array;
+
+  /**
+   * Commitment to the contributor's row structure, as the shape proof defines it.
+   *
+   * The SDK cannot compute this. `CipherTask` stores it as a required `bytes32` and a re-execution
+   * decrypts the shard, rebuilds the row root and compares — so the value has to be produced from
+   * the *plaintext* rows, by whoever holds them, and it has to be the same commitment the Groth16
+   * membership proof binds (`docs/01-architecture.md`, threat A1). Deriving it from the ciphertext
+   * bytes instead, which is what this used to do, yields a commitment no honest re-execution can
+   * reproduce and no proof can be written against, while still looking perfectly valid on chain.
+   */
+  rowCommitment: Hex;
 }
 
 /** Result of `uploadAndMonetize`. */

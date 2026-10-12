@@ -19,6 +19,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "export-abi": "node scripts/export-abi.cjs",
     "test": "npm run build && node --test --experimental-strip-types test/smoke.test.ts"
   },
   "dependencies": {

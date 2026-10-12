@@ -13,9 +13,17 @@ import { dirname, join } from "node:path";
 import { ethers } from "ethers";
 
 import { MemoryShardStore, HttpShardStore, assertSafeCid } from "../dist/index.js";
-import { NoopEncryptor, pinPayload } from "../dist/index.js";
+import { NoopEncryptor, noopRowCommitment, pinPayload } from "../dist/index.js";
 import { REDEEM_TYPEHASH, domainSeparator } from "../dist/index.js";
-import { ShroudSdk, MAX_ROWS_PER_SHARD, type Encryptor, type ShardStore } from "../dist/index.js";
+import {
+  decodeSliceSignature,
+  encodeSliceSignature,
+  SLICE_DEADLINE,
+  SLICE_INDEX,
+  SLICE_SIGNATURE_BYTES
+} from "../dist/index.js";
+import { NETWORK_PARAMS_ABI, taskIdFromReceipt } from "../dist/index.js";
+import { ShroudSdk, type Encryptor, type Hex, type ShardStore } from "../dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +59,25 @@ test("SDK PaymentVault ABI matches the compiled artifact (no drift)", () => {
   const compiled = compiledAbi("payments/PaymentVault.sol/PaymentVault");
   assert.deepEqual(sdk, compiled);
   assert.equal(selector(sdk, "redeem"), selector(compiled, "redeem"));
+});
+
+test("the task id comes from TaskCreated, never from a counter", () => {
+  // `createTask` used to read `taskCount()` after sending, so a task another buyer created in the
+  // same block made this client monitor, contribute to and fund the wrong task.
+  const iface = new ethers.Interface(sdkAbi("CipherTask"));
+  const created = iface.getEvent("TaskCreated")!;
+  const buyer = "0x0000000000000000000000000000000000000010";
+  const taskCreated = (taskId: bigint) => ({
+    topics: [created.topicHash, ethers.toBeHex(taskId, 32), ethers.toBeHex(buyer, 32)],
+    data: ethers.AbiCoder.defaultAbiCoder().encode(["uint128", "uint32"], [1_000_000_000n, 3]),
+  });
+  // A log from anything the transaction called into: same shape, unknown topic0.
+  const foreign = { topics: [ethers.id("Transfer(address,address,uint256)")], data: "0x" };
+
+  assert.equal(taskIdFromReceipt([taskCreated(7n)], iface), 7n);
+  assert.equal(taskIdFromReceipt([foreign, taskCreated(42n)], iface), 42n);
+  assert.equal(taskIdFromReceipt([foreign], iface), undefined);
+  assert.equal(taskIdFromReceipt([], iface), undefined);
 });
 
 test("the SDK can encode a real createTask call", () => {
@@ -92,6 +119,49 @@ test("REDEEM_TYPEHASH matches the PaymentVault type string", () => {
   );
 });
 
+test("a contract-streamer slice is three big-endian words, nothing else", () => {
+  // `CipherTask._decodeSliceFull` reads `bytes32(s[0:32])`, `bytes32(s[32:64])` and
+  // `uint128(uint256(bytes32(s[64:96])))` and rejects any other length outright. So the blob is
+  // pinned by position, not by an ABI header: this is the byte-for-byte layout both sides use, and
+  // the contracts suite redeems real channels with exactly this shape.
+  const blob = encodeSliceSignature(7n, 0n, 1_000_000n);
+  const word = (v: bigint) => v.toString(16).padStart(64, "0");
+  assert.equal(blob, `0x${word(7n)}${word(0n)}${word(1_000_000n)}`);
+  assert.equal(ethers.dataLength(blob), SLICE_SIGNATURE_BYTES);
+  assert.deepEqual(decodeSliceSignature(blob), { channelId: 7n, sliceIndex: 0n, amount: 1_000_000n });
+
+  // The rules `CipherTask` enforces by truncating to uint128 have to be enforced here by refusing.
+  assert.throws(() => encodeSliceSignature(7n, 0n, 1n << 128n), /uint128/);
+  assert.throws(() => encodeSliceSignature(-1n, 0n, 1n), /non-negative/);
+  assert.throws(() => encodeSliceSignature(0n, 0n, 1n << 256n), /uint128/);
+  assert.throws(() => decodeSliceSignature(`0x${"11".repeat(95)}`), /exactly 96 bytes/);
+
+  // A word whose amount exceeds uint128 is what a hand-built blob gets wrong silently.
+  const overflowing = `0x${word(1n)}${word(0n)}${word(1n << 128n)}` as Hex;
+  assert.throws(() => decodeSliceSignature(overflowing), /uint128/);
+});
+
+test("slice constants are the values CipherTask hard-codes", () => {
+  // `finalizeEpoch` authorises only slice index 0 of a channel, and `_decodeSliceFull` fixes the
+  // deadline at `type(uint256).max`. Both are part of the digest, so drifting either one produces
+  // `InvalidSignature` on a channel the node is entitled to.
+  assert.equal(SLICE_INDEX, 0n);
+  assert.equal(SLICE_DEADLINE, ethers.MaxUint256);
+});
+
+test("the embedded NetworkParams fragments match the compiled contract", () => {
+  // `NetworkParamsClient` is the one ABI in the SDK that is written by hand rather than exported
+  // from an artifact, so it can silently drift from a contract change. Comparing the full fragment
+  // rather than just the selector catches the part that actually breaks clients: the outputs. A
+  // tuple-shaped `current()` has the same selector as the flattened getter solc really emits, and
+  // every named field of the wrong shape reads `undefined`.
+  const compiled = new ethers.Interface(compiledAbi("NetworkParams.sol/NetworkParams"));
+  const sdk = new ethers.Interface(NETWORK_PARAMS_ABI as unknown as string[]);
+  for (const fn of ["isCurrentKey", "current", "rotationPending"]) {
+    assert.equal(sdk.getFunction(fn)!.format(), compiled.getFunction(fn)!.format(), fn);
+  }
+});
+
 test("pinPayload is deterministic and content-addressed", () => {
   const a = new TextEncoder().encode("hello");
   const b = new TextEncoder().encode("hello");
@@ -116,6 +186,20 @@ test("MemoryShardStore returns a local keccak digest, and get() can reach every 
   assert.equal(digest, ethers.keccak256(payload));
   assert.deepEqual(await store.get(cid), payload);
   await assert.rejects(() => store.get(ethers.keccak256(new Uint8Array([9]))), /not found/);
+});
+
+test("every ShardStore must verify, not just hand back bytes", async () => {
+  // `getVerified` is in the interface for the same reason `get` is: re-execution is the protocol's
+  // dispute mechanism, and it has to work against whichever store a deployment is pointed at. An
+  // in-process store can still be handed a commit that does not match its contents.
+  const store: ShardStore = new MemoryShardStore();
+  const payload = new TextEncoder().encode("verified");
+  const { cid } = await store.put(payload);
+  assert.deepEqual(await store.getVerified(cid, ethers.keccak256(payload)), payload);
+  await assert.rejects(
+    () => store.getVerified(cid, ethers.id("a-different-commit")),
+    /failed integrity check/
+  );
 });
 
 test("assertSafeCid rejects path traversal and URL injection", () => {
@@ -196,6 +280,43 @@ test("HttpShardStore caps object size on both upload and download", async () => 
   }
 });
 
+test("HttpShardStore.getRange checks that the bytes really are the requested window", async () => {
+  // A 200 for a range request means the whole object arrived, and a 206 with a mismatched
+  // content-range means the server answered some other window. Either way a chunked pull would
+  // reassemble a shard whose length is right, whose CID resolves, and whose contents are wrong.
+  const original = globalThis.fetch;
+  const cid = ethers.keccak256(new Uint8Array([1]));
+  try {
+    globalThis.fetch = (async () => new Response(new Uint8Array(16), { status: 200 })) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid");
+    await assert.rejects(() => store.getRange(cid, 0, 8), /ignored the Range header/);
+    await assert.rejects(() => store.getRange(cid, 8, 8), /ignored the Range header/);
+    // A whole object that fits the window from its start is a legitimate answer.
+    globalThis.fetch = (async () => new Response(new Uint8Array(8), { status: 200 })) as typeof fetch;
+    assert.equal((await store.getRange(cid, 0, 16)).byteLength, 8);
+
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array(8), { status: 206, headers: { "content-range": "bytes 8-15/40" } })) as typeof fetch;
+    assert.equal((await store.getRange(cid, 8, 8)).byteLength, 8);
+
+    // The final chunk of an object is short and still correct.
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array(4), { status: 206, headers: { "content-range": "bytes 8-11/12" } })) as typeof fetch;
+    assert.equal((await store.getRange(cid, 8, 8)).byteLength, 4);
+
+    // 206 status, but the bytes are from a different offset.
+    globalThis.fetch = (async () =>
+      new Response(new Uint8Array(8), { status: 206, headers: { "content-range": "bytes 0-7/40" } })) as typeof fetch;
+    await assert.rejects(() => store.getRange(cid, 8, 8), /content-range/);
+
+    // A 206 with no content-range at all is only usable if it did not overshoot the window.
+    globalThis.fetch = (async () => new Response(new Uint8Array(12), { status: 206 })) as typeof fetch;
+    await assert.rejects(() => store.getRange(cid, 0, 8), /without a content-range header/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("HttpShardStore.getVerified rejects bytes that do not match the committed digest", async () => {
   // The integrity decision must be made locally. A store that returns the wrong object has to be
   // distinguishable from an honest one, otherwise a re-executor compares digests against itself.
@@ -219,12 +340,24 @@ test("HttpShardStore.getVerified rejects bytes that do not match the committed d
   }
 });
 
-test("NoopEncryptor preserves rows x features shape", async () => {
+test("NoopEncryptor returns a ciphertext and a commitment to the rows", async () => {
   const enc = new NoopEncryptor();
   const data = [1, 2, 3, 4, 5, 6]; // 2 rows x 3 features
-  const buf = await enc.encryptRows(data, 3);
-  assert.ok(buf.length > 0);
-  assert.equal(pinPayload(buf).ctDigest.length, 66); // 0x + 32 bytes
+  const shard = await enc.encryptRows(data, 3);
+  assert.ok(shard.ciphertext.length > 0);
+  assert.equal(pinPayload(shard.ciphertext).ctDigest.length, 66); // 0x + 32 bytes
+  assert.equal(ethers.dataLength(shard.rowCommitment), 32);
+
+  // The commitment is over the row *values*, not over the payload bytes: the same rows must commit
+  // identically, and different rows with an identical payload shape must not.
+  assert.equal(shard.rowCommitment, (await enc.encryptRows([...data], 3)).rowCommitment);
+  const different = await enc.encryptRows([1, 2, 3, 4, 5, 7], 3);
+  assert.notEqual(different.rowCommitment, shard.rowCommitment);
+  assert.equal(ethers.dataLength(different.ciphertext), shard.ciphertext.length);
+
+  // Re-deriving it the way the SDK used to (over the ciphertext bytes) is exactly the mistake this
+  // interface change makes impossible.
+  assert.notEqual(different.rowCommitment, pinPayload(shard.ciphertext).ctDigest);
 });
 
 test("NoopEncryptor declares that it does not encrypt", () => {
@@ -236,9 +369,77 @@ test("NoopEncryptor declares that it does not encrypt", () => {
 test("a real encryptor must declare that it encrypts", () => {
   const honest = {
     providesConfidentiality: true,
-    encryptRows: async () => new Uint8Array([1, 2, 3]),
+    publicKeyHash: ethers.id("s_pub"),
+    encryptRows: async () => ({
+      ciphertext: new Uint8Array([1, 2, 3]),
+      rowCommitment: noopRowCommitment(new Float64Array([1, 2, 3])),
+    }),
   } satisfies Encryptor;
   assert.equal(honest.providesConfidentiality, true);
+});
+
+test("the SDK refuses an encryptor that reports a different key than it is configured with", () => {
+  // The pin check is only worth anything if the key it checks is the key the bytes came from.
+  // Without this, a client could verify `cfg.fhePublicKeyHash` against the chain while its
+  // encryptor worked under a substituted key, which is threat F-08 with the detection step moved
+  // somewhere that cannot see it.
+  const sPub = ethers.id("network-key");
+  const rogue = ethers.id("rogue-key");
+  const encryptor: Encryptor = {
+    providesConfidentiality: true,
+    publicKeyHash: rogue,
+    encryptRows: async () => ({ ciphertext: new Uint8Array([1]), rowCommitment: ethers.ZeroHash }),
+  };
+
+  assert.throws(
+    () =>
+      new ShroudSdk({
+        cipherTask: "0x0000000000000000000000000000000000000001",
+        paymentVault: "0x0000000000000000000000000000000000000002",
+        signer: new ethers.Wallet(ethers.id("test").slice(2, 66)),
+        provider: { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider,
+        encryptor,
+        fhePublicKeyHash: sPub,
+      }),
+    (e: Error) => {
+      assert.match(e.message, /encrypts under/);
+      assert.ok(e.message.includes(sPub) && e.message.includes(rogue), "both hashes must be named");
+      return true;
+    }
+  );
+});
+
+test("the encryptor's declared key is enough to enable the pin check", async () => {
+  // No `fhePublicKeyHash` in the config: the encryptor's own key is the value that has to be
+  // pinned, so a caller cannot skip the check by simply not configuring the optional field.
+  const onChain = ethers.id("network-key");
+  const stub = networkParamsProvider(onChain, 1n, false);
+  const rogue = ethers.id("rogue-key");
+  const sdk = new ShroudSdk({
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    networkParams: "0x0000000000000000000000000000000000000003",
+    signer: stub.signer,
+    provider: stub.provider,
+    chainId: 31337n,
+    encryptor: {
+      providesConfidentiality: true,
+      publicKeyHash: rogue,
+      encryptRows: async () => ({
+        ciphertext: new Uint8Array([1]),
+        rowCommitment: noopRowCommitment(new Float64Array([1])),
+      }),
+    },
+  });
+
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3], 1n, { features: 3 }),
+    (e: Error) => {
+      assert.match(e.message, /is not the key pinned on chain/);
+      assert.ok(e.message.includes(rogue), "the refusal must name the key the encryptor holds");
+      return true;
+    }
+  );
 });
 
 test("ShroudSdk refuses to upload through an encryptor that does not encrypt", async () => {
@@ -299,6 +500,130 @@ test("ShroudSdk rejects a networkParams config with nothing to compare against",
       }),
     /without fhePublicKeyHash/
   );
+});
+
+/**
+ * A provider that answers only the three `NetworkParams` view calls and refuses everything else.
+ *
+ * The pin check has to be exercised before the SDK reaches the chain, and refusing anything that is
+ * not `NetworkParams` is what proves the call was blocked at the pin rather than somewhere later.
+ */
+function networkParamsProvider(pinned: Hex, keyVersion: bigint, rotationPending: boolean) {
+  const sdkIface = new ethers.Interface(NETWORK_PARAMS_ABI as unknown as string[]);
+  const currentResult = [
+    31337n,
+    keyVersion,
+    pinned,
+    ethers.id("committee"),
+    2,
+    3,
+    48_576,
+    1 << 24,
+    4096,
+    1_700_000_000n,
+    true,
+  ];
+  const provider = {
+    async call(tx: { to?: string | null; data?: string }) {
+      // `parseTransaction` throws on a selector this ABI does not have, which is exactly the case
+      // that must fall through to the sentinel below.
+      const fn = (() => {
+        try {
+          return sdkIface.parseTransaction({ data: tx.data ?? "0x" });
+        } catch {
+          return undefined;
+        }
+      })();
+      switch (fn?.name) {
+        case "isCurrentKey":
+          return sdkIface.encodeFunctionResult("isCurrentKey", [fn.args[0] === pinned]);
+        case "current":
+          return sdkIface.encodeFunctionResult("current", currentResult);
+        case "rotationPending":
+          return sdkIface.encodeFunctionResult("rotationPending", [rotationPending]);
+        default:
+          throw new Error(`SENTINEL: the upload got past the key pin (call to ${tx.to} ${tx.data})`);
+      }
+    },
+    async getNetwork() {
+      return { chainId: 31337n };
+    },
+    async resolveName(name: string) {
+      return name;
+    },
+  } as unknown as ethers.Provider;
+  return { provider, signer: new ethers.Wallet(ethers.id("test").slice(2, 66), provider) };
+}
+
+function pinSdk(configured: Hex, stub: { provider: ethers.Provider; signer: ethers.Wallet }) {
+  return new ShroudSdk({
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    networkParams: "0x0000000000000000000000000000000000000003",
+    fhePublicKeyHash: configured,
+    signer: stub.signer,
+    provider: stub.provider,
+    chainId: 31337n,
+  });
+}
+
+test("ShroudSdk refuses to upload under a key the chain has not pinned", async () => {
+  // Threat model F-08: a sequencer that publishes its own public key collects the ciphertexts
+  // submitted under it and decrypts them. The pin turns that from a silent confidentiality loss into
+  // a client-side refusal, so the refusal has to be proven, not just implemented.
+  const onChain = ethers.id("pinned-key");
+  const rogue = ethers.id("rogue-key");
+  const stub = networkParamsProvider(onChain, 4n, false);
+  const sdk = pinSdk(rogue, stub);
+
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3], 1n, { features: 3, allowUnencrypted: true }),
+    (e: Error) => {
+      assert.match(e.message, /is not the key pinned on chain/);
+      assert.ok(e.message.includes(onChain), "the error must name the key the chain actually pins");
+      assert.ok(e.message.includes(rogue), "and the key this client would have used");
+      assert.match(e.message, /keyVersion 4/);
+      assert.doesNotMatch(e.message, /SENTINEL/, "nothing may reach the chain, not even a task read");
+      return true;
+    }
+  );
+});
+
+test("ShroudSdk reports an imminent rotation alongside the mismatch", async () => {
+  const onChain = ethers.id("pinned-key");
+  const stub = networkParamsProvider(onChain, 9n, true);
+  const sdk = pinSdk(ethers.id("rogue-key"), stub);
+
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3], 1n, { features: 3, allowUnencrypted: true }),
+    /a rotation is currently pending/
+  );
+});
+
+test("ShroudSdk uploads through the pin when the configured key is the pinned one", async () => {
+  const onChain = ethers.id("pinned-key");
+  const stub = networkParamsProvider(onChain, 1n, false);
+  const sdk = pinSdk(onChain, stub);
+
+  // The pin passes, so the next thing to fail is the task read — which the stub refuses loudly.
+  // Asserting the sentinel is the point: it proves the pin did not block a legitimate upload.
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3], 1n, { features: 3, allowUnencrypted: true }),
+    /SENTINEL: the upload got past the key pin/
+  );
+});
+
+test("without a configured key hash the pin check is skipped, not silently failed", async () => {
+  // `networkParams` without `fhePublicKeyHash` is refused at construction (test above), so the only
+  // unconfigured shape is neither field — and that must not be read as "the key is fine".
+  const sdk = new ShroudSdk({
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    signer: new ethers.Wallet(ethers.id("test").slice(2, 66)),
+    provider: { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider,
+    chainId: 31337n,
+  });
+  assert.equal(sdk.networkParams, undefined);
 });
 
 test("domainSeparator is deterministic", () => {

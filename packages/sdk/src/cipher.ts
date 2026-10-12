@@ -2,14 +2,37 @@
  * Thin ethers v6 wrapper around `CipherTask` and `PaymentVault`.
  *
  * The ABIs are the compiled artifacts, embedded in `src/abi/*.json` so the SDK is self-contained
- * when published and always selects the same functions as the on-chain contracts. Regenerate
- * them with `scripts/export-abi.cjs` whenever the Solidity changes.
+ * when published and always selects the same functions as the on-chain contracts. Compile the
+ * contracts and regenerate the copies with `npm run export-abi` in `packages/sdk` whenever the
+ * Solidity changes; the SDK's smoke suite fails on any drift between a copy and its artifact.
  */
-import { Contract, ethers, type Signer, type Provider } from "ethers";
+import { Contract, ethers, type Interface, type Signer, type Provider } from "ethers";
 import CipherTaskAbi from "./abi/CipherTask.json" with { type: "json" };
 import PaymentVaultAbi from "./abi/PaymentVault.json" with { type: "json" };
 import type { Hex, PreparedShard, TaskParams, RedeemSlice } from "./types.js";
-import { domainSeparator, redeemDigest, signRedeemSlice } from "./eip712.js";
+import { domainSeparator, encodeSliceSignature, redeemDigest, signRedeemSlice, SLICE_DEADLINE, SLICE_INDEX } from "./eip712.js";
+
+/**
+ * The task id a mined `createTask` produced, read from its `TaskCreated` event.
+ *
+ * Reading `taskCount()` back after the transaction was a race: a task created by anyone else in the
+ * same block makes it return an id this transaction did not create, and the caller then contributes
+ * to, monitors and pays escrow for the wrong task — with a budget that is not its own.
+ * `TaskCreated` carries the id this call minted, indexed, so the receipt is the only authority
+ * needed, and a receipt without the event is an error rather than a guess.
+ */
+export function taskIdFromReceipt(
+  logs: readonly { topics: readonly string[]; data: string }[],
+  iface: Interface
+): bigint | undefined {
+  for (const log of logs) {
+    // `parseLog` returns null for a topic0 this ABI does not declare, which is every log from a
+    // contract the task manager called into — the DA, the verifier, the vault.
+    const parsed = iface.parseLog(log);
+    if (parsed?.name === "TaskCreated") return BigInt(parsed.args["taskId"]);
+  }
+  return undefined;
+}
 
 export class CipherTaskClient {
   readonly contract: Contract;
@@ -22,8 +45,14 @@ export class CipherTaskClient {
     const tx = await this.contract.createTask(budget, params);
     const receipt = await tx.wait();
     if (!receipt) throw new Error("no receipt for createTask");
-    const taskId = await this.contract.taskCount();
-    return { taskId: BigInt(taskId), tx: tx.hash };
+    const taskId = taskIdFromReceipt(receipt.logs, this.contract.interface);
+    if (taskId === undefined) {
+      throw new Error(
+        `createTask was mined in ${tx.hash} but its receipt carries no TaskCreated event; ` +
+          `refusing to guess the task id`
+      );
+    }
+    return { taskId, tx: tx.hash };
   }
 
   async submitContribution(taskId: bigint, shard: PreparedShard): Promise<string> {
@@ -140,8 +169,28 @@ export class PaymentVaultClient {
     this.contract = new Contract(address, PaymentVaultAbi, signerOrProvider);
   }
 
-  /** Redeem a slice; `sig` must be an EIP-712 signature by the streamer (see `signRedeemSlice`). */
+  /**
+   * Redeem slice `sliceIndex` of `slice.channelId`.
+   *
+   * `signature` is whatever authenticates the channel's streamer, and which one that is depends on
+   * the streamer, not on the caller's preference:
+   * — a contract streamer (`CipherTask`, i.e. every node reward channel) takes the 96-byte slice
+   *   blob from `encodeSliceSignature`;
+   * — an EOA streamer takes a 65-byte ECDSA signature over the EIP-712 digest (`signRedeemSlice`).
+   *
+   * Passing the wrong kind is `InvalidSignature`, and for the common case `authorizedSlice` below
+   * produces the right one from on-chain data.
+   */
   async redeem(slice: RedeemSlice, sliceIndex: number, amount: bigint, signature: Hex): Promise<string> {
+    if (!Number.isInteger(sliceIndex) || sliceIndex < 0) {
+      throw new Error(`sliceIndex must be a non-negative integer, got ${sliceIndex}`);
+    }
+    // `PaymentVault` bounds the index so that `uint64(sliceIndex)` cannot truncate a larger value
+    // back onto a consumed index, and `redeem` is `onlyNode`, so a wrong argument here is a revert
+    // the caller pays for rather than a mistake the chain catches for free.
+    if (BigInt(sliceIndex) >= 1n << 64n) {
+      throw new Error(`sliceIndex ${sliceIndex} is outside uint64 and reverts with SliceIndexOutOfRange`);
+    }
     const tx = await this.contract.redeem(
       slice.channelId,
       sliceIndex,
@@ -158,8 +207,70 @@ export class PaymentVaultClient {
     return this.contract.channelInfo(channelId);
   }
 
-  /** Build the digest the vault expects for a slice, then have the streamer sign it. */
-  async authorizeSlice(
+  /**
+   * The slice `CipherTask` authorised for a reward channel, plus its signature.
+   *
+   * There is no private key involved: `finalizeEpoch` writes exactly one authorised slice per node
+   * channel — index 0, amount equal to the channel cap — and the vault accepts that triple encoded
+   * as the ERC-1271 "signature" (see `encodeSliceSignature`). Everything needed to redeem is
+   * therefore readable from the channel itself, which is also why a node cannot redeem more than it
+   * earned: the cap is on chain, and `withdrawn` only ever grows.
+   *
+   * `redeem` is callable only by the channel's node, so that is checked locally before spending gas.
+   */
+  async authorizedSlice(channelId: bigint): Promise<{ slice: RedeemSlice; signature: Hex }> {
+    const ch = await this.channelInfo(channelId);
+    const node = String(ch.node);
+    if (node === ethers.ZeroAddress) {
+      throw new Error(`channel ${channelId} does not exist (its node is the zero address)`);
+    }
+    const me = await this.signerAddress();
+    if (me && me.toLowerCase() !== node.toLowerCase()) {
+      throw new Error(
+        `channel ${channelId} belongs to node ${node}; this client is ${me} and ` +
+          `PaymentVault.redeem is onlyNode`
+      );
+    }
+    const slice: RedeemSlice = {
+      channelId,
+      streamer: String(ch.streamer),
+      node,
+      maxCumulative: BigInt(ch.maxCumulative),
+      unlockAt: BigInt(ch.unlockAt),
+      deadline: SLICE_DEADLINE,
+    };
+    return {
+      slice,
+      signature: encodeSliceSignature(channelId, SLICE_INDEX, slice.maxCumulative),
+    };
+  }
+
+  /** Read a channel's authorised slice and redeem it, in one call. */
+  async redeemAuthorizedSlice(channelId: bigint): Promise<string> {
+    const { slice, signature } = await this.authorizedSlice(channelId);
+    return this.redeem(slice, Number(SLICE_INDEX), slice.maxCumulative, signature);
+  }
+
+  /**
+   * The address this client sends from, or `undefined` for a read-only client.
+   *
+   * A `Provider` runner has no address; callers that gate on it must treat `undefined` as "cannot
+   * check locally", not as "not authorised", or a monitoring client built on a provider would be
+   * told it cannot read its own channels.
+   */
+  private async signerAddress(): Promise<string | undefined> {
+    const runner = this.contract.runner as { getAddress?: () => Promise<string> };
+    return runner?.getAddress?.();
+  }
+
+  /**
+   * Build the digest the vault expects for a slice and have an EOA streamer sign it.
+   *
+   * Only correct when the channel's streamer is a wallet. For a contract streamer this produces
+   * bytes the vault will reject, because the contract authenticates the recorded slice blob, not a
+   * signature over a digest; use `authorizedSlice` there.
+   */
+  async signSliceAsStreamer(
     streamer: Signer,
     slice: RedeemSlice,
     chainId: bigint
@@ -196,12 +307,16 @@ export class PaymentVaultClient {
  * confidentiality loss.
  *
  * A minimal ABI is embedded rather than pulled from the artifact pipeline because this client only
- * needs two view functions; `NetworkParams.isCurrentKey` is a pure comparison against
- * `current.fhePublicKeyHash` and cannot be misread if kept to exactly these two entries.
+ * needs three view functions. Being hand-written it is the one ABI the generated copies cannot
+ * keep honest, so the SDK suite compares each fragment — inputs *and* outputs — against the
+ * compiled `NetworkParams` artifact.
  */
-const NETWORK_PARAMS_ABI = [
+export const NETWORK_PARAMS_ABI = [
   "function isCurrentKey(bytes32 sPubHash) view returns (bool)",
-  "function current() view returns (tuple(uint64 chainId, uint64 keyVersion, bytes32 fhePublicKeyHash, bytes32 committeeAggregateKey, uint16 committeeThreshold, uint16 committeeSize, uint32 maxProofBytes, uint32 maxCiphertextBytes, uint32 maxFeatures, uint64 activatedAt, bool active))",
+  // `Params public current;` is a public struct, so solc's auto-getter returns its *flattened*
+  // members rather than a tuple. Declaring this as a tuple compiles fine against ethers and fails
+  // at runtime, because every named output reads `undefined`.
+  "function current() view returns (uint64 chainId, uint64 keyVersion, bytes32 fhePublicKeyHash, bytes32 committeeAggregateKey, uint16 committeeThreshold, uint16 committeeSize, uint32 maxProofBytes, uint32 maxCiphertextBytes, uint32 maxFeatures, uint64 activatedAt, bool active)",
   "function rotationPending() view returns (bool)",
 ] as const;
 

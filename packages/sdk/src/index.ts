@@ -17,7 +17,7 @@ export * from "./types.js";
 export * from "./eip712.js";
 export * from "./encrypt.js";
 export * from "./da.js";
-export { CipherTaskClient, NetworkParamsClient, PaymentVaultClient };
+export { CipherTaskClient, NetworkParamsClient, NETWORK_PARAMS_ABI, PaymentVaultClient, taskIdFromReceipt } from "./cipher.js";
 
 export interface SdkConfig {
   cipherTask: string;
@@ -31,10 +31,12 @@ export interface SdkConfig {
   /** chain id; if omitted it is read from the provider. */
   chainId?: bigint;
   /**
-   * The `fhePublicKeyHash` this client will encrypt under (`keccak256(abi.encode(s_pub))`).
+   * The `keccak256(abi.encode(s_pub))` this client encrypts under.
    *
-   * When supplied together with `networkParams`, the SDK verifies against the on-chain pin before
-   * every upload and refuses to submit on a mismatch. See `NetworkParamsClient`.
+   * Optional when the configured `encryptor` declares its own `publicKeyHash`, which is the case
+   * that actually matters: a key the caller *believes* is in use can be compared against the chain,
+   * while a key the encryptor holds can be substituted without the client noticing. See
+   * `Encryptor.publicKeyHash` and `NetworkParamsClient`.
    */
   fhePublicKeyHash?: Hex;
   /** Address of the on-chain `NetworkParams` pin. Enables the key-substitution check. */
@@ -93,11 +95,22 @@ export class ShroudSdk {
     this.encryptor = cfg.encryptor ?? new NoopEncryptor();
     this.shardStore = cfg.shardStore ?? new MemoryShardStore();
     this.configuredChainId = cfg.chainId;
-    this.fhePublicKeyHash = cfg.fhePublicKeyHash;
+    // The key the client is *told* it uses and the key the encryptor *actually* uses have to agree
+    // before either is compared with the chain, otherwise the pin check verifies a string that is
+    // not the one the ciphertext depends on.
+    const declared = this.encryptor.publicKeyHash;
+    if (cfg.fhePublicKeyHash && declared && cfg.fhePublicKeyHash !== declared) {
+      throw new Error(
+        `cfg.fhePublicKeyHash is ${cfg.fhePublicKeyHash} but the configured encryptor encrypts under ` +
+          `${declared}; the pin check would attest to a key the shard is not encrypted under`
+      );
+    }
+    this.fhePublicKeyHash = cfg.fhePublicKeyHash ?? declared;
     if (cfg.networkParams) {
-      if (!cfg.fhePublicKeyHash) {
+      if (!this.fhePublicKeyHash) {
         throw new Error(
-          "networkParams was provided without fhePublicKeyHash; the pin check would have nothing to compare against"
+          "networkParams was provided without fhePublicKeyHash, and the encryptor declares no " +
+            "publicKeyHash; the pin check would have nothing to compare against"
         );
       }
       this.networkParams = new NetworkParamsClient(cfg.networkParams, cfg.signer);
@@ -138,12 +151,15 @@ export class ShroudSdk {
   }
 
   /**
-   * Verify the configured `fhePublicKeyHash` against the on-chain pin (threat model F-08).
+   * Verify the key this client encrypts under against the on-chain pin (threat model F-08).
    *
-   * Skipped when `networkParams`/`fhePublicKeyHash` were not configured, because a client with no
-   * key hash has nothing to compare. That is a real gap and is why the absence of configuration is
-   * itself worth noticing: `NetworkParams` exists to make a key swap *detectable*, and a client
-   * that never reads it cannot detect anything.
+   * The key is `cfg.fhePublicKeyHash`, or what the encryptor declares when the caller did not
+   * configure one — the constructor refuses a client where the two disagree.
+   *
+   * Skipped when `networkParams` was not configured, because a client with no pin to read has
+   * nothing to compare. That is a real gap and is why the absence of configuration is itself worth
+   * noticing: `NetworkParams` exists to make a key swap *detectable*, and a client that never reads
+   * it cannot detect anything.
    */
   private async assertKeyPin(): Promise<void> {
     if (!this.networkParams || !this.fhePublicKeyHash) return;
@@ -169,10 +185,12 @@ export class ShroudSdk {
    * `opts.budget` first, so the escrow is in place before the shard lands.
    *
    * Every condition the contract would revert on is checked locally first — task status, shard
-   * size bounds, the contributor cap, the contribution window, one-shard-per-address, and
-   * shape-proof presence — so a misconfigured call fails with an actionable message instead of
-   * burning gas. The list below is exhaustive against `submitContribution`; the contract remains
-   * the authority and still reverts if anything slips through.
+   * size bounds, the contributor cap, the contribution window, one-shard-per-address, shape-proof
+   * presence, and the encryptor's own outputs (a non-empty ciphertext, a row commitment, and a
+   * content address short enough to be a `bytes32`) — so a misconfigured call fails with an
+   * actionable message instead of burning gas. The list below is exhaustive against
+   * `submitContribution`; the contract remains the authority and still reverts if anything slips
+   * through.
    */
   async uploadAndMonetize(
     data: Float64Array | number[],
@@ -252,12 +270,31 @@ export class ShroudSdk {
       }
     }
 
-    // 1. Encrypt locally - plaintext never leaves the client.
-    const payload = await this.encryptor.encryptRows(data, opts.features);
+    // 1. Encrypt locally — plaintext never leaves the client.
+    const { ciphertext, rowCommitment } = await this.encryptor.encryptRows(data, opts.features);
+
+    // The two values the contract will not accept empty or malformed, checked before the upload so
+    // a broken encryptor cannot leave a shard in the DA that is then unpinnable.
+    if (ciphertext.length === 0) {
+      throw new Error("the encryptor returned an empty ciphertext; there is nothing to upload");
+    }
+    if (!rowCommitment || rowCommitment === ethers.ZeroHash) {
+      throw new Error(
+        "the encryptor returned no rowCommitment. It commits to the plaintext rows, so it can only " +
+          "come from the encryptor - CipherTask rejects a zero commitment with RowCommitmentInvalid, " +
+          "and a re-execution compares it against the rows it decrypts"
+      );
+    }
 
     // 2. Upload the shard to the DA.
-    const { cid } = await this.shardStore.put(payload);
-    const { ctDigest, rowCommitment } = pinPayload(payload);
+    const { cid } = await this.shardStore.put(ciphertext);
+    const { ctDigest } = pinPayload(ciphertext);
+    if (ethers.dataLength(cid) !== 32) {
+      throw new Error(
+        `the shard store returned a ${ethers.dataLength(cid)}-byte cid (${cid}); the on-chain ` +
+          `ciphertextCid is a bytes32, so only a 32-byte content address can be committed to it`
+      );
+    }
 
     // 3. Commit the shard to the task.
     const shard: PreparedShard = {

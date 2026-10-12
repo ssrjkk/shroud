@@ -43,6 +43,22 @@
         "type": "uint256"
       },
       {
+        "internalType": "uint32",
+        "name": "epoch",
+        "type": "uint32"
+      }
+    ],
+    "name": "AllEpochsRun",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
         "internalType": "address",
         "name": "contributor",
         "type": "address"
@@ -59,7 +75,65 @@
         "type": "uint256"
       }
     ],
-    "name": "AlreadyDisclosed",
+    "name": "AlreadySettled",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "enum ICipherTask.TaskStatus",
+        "name": "status",
+        "type": "uint8"
+      }
+    ],
+    "name": "AlreadyTerminal",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint32",
+        "name": "minimum",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "have",
+        "type": "uint32"
+      }
+    ],
+    "name": "BelowMinContributors",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint128",
+        "name": "available",
+        "type": "uint128"
+      },
+      {
+        "internalType": "uint128",
+        "name": "required",
+        "type": "uint128"
+      }
+    ],
+    "name": "BudgetExhausted",
     "type": "error"
   },
   {
@@ -118,17 +192,12 @@
         "type": "uint256"
       },
       {
-        "internalType": "bytes32",
-        "name": "expected",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "provided",
-        "type": "bytes32"
+        "internalType": "uint64",
+        "name": "deadline",
+        "type": "uint64"
       }
     ],
-    "name": "CiphertextPinMismatch",
+    "name": "CommitWindowExpired",
     "type": "error"
   },
   {
@@ -143,6 +212,21 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "ContributionWindowInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ContributorBoundsInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ContributorCapExceeded",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -153,9 +237,14 @@
         "internalType": "uint32",
         "name": "epoch",
         "type": "uint32"
+      },
+      {
+        "internalType": "address",
+        "name": "reporter",
+        "type": "address"
       }
     ],
-    "name": "DisputeAlreadyClosed",
+    "name": "DisputeAgreesWithClaim",
     "type": "error"
   },
   {
@@ -198,11 +287,132 @@
       },
       {
         "internalType": "address",
+        "name": "reporter",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "committed",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "reported",
+        "type": "bytes32"
+      }
+    ],
+    "name": "DisputeDigestMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "DisputeWindowInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint32",
+        "name": "epoch",
+        "type": "uint32"
+      },
+      {
+        "internalType": "address",
+        "name": "reporter",
+        "type": "address"
+      }
+    ],
+    "name": "DisputeWithoutVerifiedCommit",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint32",
+        "name": "epoch",
+        "type": "uint32"
+      },
+      {
+        "internalType": "address",
         "name": "node",
         "type": "address"
       }
     ],
     "name": "DuplicateCommit",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EpochCountInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "EpochDurationInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "EpochLocked",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint32",
+        "name": "provided",
+        "type": "uint32"
+      }
+    ],
+    "name": "EpochOutOfOrder",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint64",
+        "name": "deadline",
+        "type": "uint64"
+      }
+    ],
+    "name": "EpochStillLive",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "EpochsRemain",
     "type": "error"
   },
   {
@@ -222,14 +432,8 @@
     "type": "error"
   },
   {
-    "inputs": [
-      {
-        "internalType": "string",
-        "name": "reason",
-        "type": "string"
-      }
-    ],
-    "name": "InvalidParams",
+    "inputs": [],
+    "name": "FeatureCountInvalid",
     "type": "error"
   },
   {
@@ -275,6 +479,16 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "LabelBitsInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ModelSpecMissing",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -294,6 +508,17 @@
       }
     ],
     "name": "NarrowCastId",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "NoContributions",
     "type": "error"
   },
   {
@@ -336,17 +561,6 @@
         "type": "address"
       }
     ],
-    "name": "NotCommitteeMember",
-    "type": "error"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "caller",
-        "type": "address"
-      }
-    ],
     "name": "NotOwner",
     "type": "error"
   },
@@ -359,11 +573,11 @@
       },
       {
         "internalType": "address",
-        "name": "caller",
+        "name": "account",
         "type": "address"
       }
     ],
-    "name": "NotTaskUpdateManager",
+    "name": "NotTaskParty",
     "type": "error"
   },
   {
@@ -380,33 +594,6 @@
       }
     ],
     "name": "NotUpdateManagerOrOwner",
-    "type": "error"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "account",
-        "type": "address"
-      }
-    ],
-    "name": "NothingToWithdraw",
-    "type": "error"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "bytes32",
-        "name": "weightsCid",
-        "type": "bytes32"
-      }
-    ],
-    "name": "OutputNotRegistered",
     "type": "error"
   },
   {
@@ -457,24 +644,13 @@
     "type": "error"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "proofLength",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "max",
-        "type": "uint256"
-      }
-    ],
-    "name": "ProofTooLarge",
+    "inputs": [],
+    "name": "Reentrancy",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "Reentrancy",
+    "name": "ReexecutionBpsInvalid",
     "type": "error"
   },
   {
@@ -510,6 +686,11 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "RowsPerShardInvalid",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "bytes32",
@@ -533,12 +714,44 @@
         "type": "uint256"
       },
       {
+        "internalType": "uint256",
+        "name": "provided",
+        "type": "uint256"
+      }
+    ],
+    "name": "SettleCursorMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "SettlementBegun",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
         "internalType": "address",
         "name": "contributor",
         "type": "address"
       }
     ],
     "name": "ShapeProofInvalid",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ShapeRootMissing",
     "type": "error"
   },
   {
@@ -582,16 +795,11 @@
     "inputs": [
       {
         "internalType": "uint256",
-        "name": "channelId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "uint256",
-        "name": "sliceIndex",
+        "name": "taskId",
         "type": "uint256"
       }
     ],
-    "name": "SliceNotAuthorized",
+    "name": "UnknownTask",
     "type": "error"
   },
   {
@@ -758,6 +966,31 @@
       }
     ],
     "name": "EpochOpened",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint32",
+        "name": "epoch",
+        "type": "uint32"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "reporters",
+        "type": "uint256"
+      }
+    ],
+    "name": "EpochRejected",
     "type": "event"
   },
   {
@@ -962,7 +1195,7 @@
         "type": "address"
       }
     ],
-    "name": "OwnershipTransferred",
+    "name": "OwnershipTransferStarted",
     "type": "event"
   },
   {
@@ -970,24 +1203,18 @@
     "inputs": [
       {
         "indexed": true,
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
+        "internalType": "address",
+        "name": "from",
+        "type": "address"
       },
       {
         "indexed": true,
         "internalType": "address",
-        "name": "member",
+        "name": "to",
         "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "bytes32",
-        "name": "partialDecryption",
-        "type": "bytes32"
       }
     ],
-    "name": "PartialDecryptionSubmitted",
+    "name": "OwnershipTransferred",
     "type": "event"
   },
   {
@@ -1040,7 +1267,7 @@
       {
         "indexed": false,
         "internalType": "bytes32",
-        "name": "blsAggregateSig",
+        "name": "blsAggregateSigDigest",
         "type": "bytes32"
       }
     ],
@@ -1421,6 +1648,13 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "acceptOwnership",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -1612,6 +1846,11 @@
           {
             "internalType": "bytes32",
             "name": "shapeProof",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "bytes32",
+            "name": "rowCommitment",
             "type": "bytes32"
           },
           {
@@ -1882,7 +2121,13 @@
     "type": "function"
   },
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
     "name": "encStateHandle",
     "outputs": [
       {
@@ -2013,25 +2258,6 @@
   {
     "inputs": [
       {
-        "internalType": "uint256",
-        "name": "taskId",
-        "type": "uint256"
-      }
-    ],
-    "name": "isSettled",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "bytes32",
         "name": "digest",
         "type": "bytes32"
@@ -2048,43 +2274,6 @@
         "internalType": "bytes4",
         "name": "",
         "type": "bytes4"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "bytes32",
-        "name": "digest",
-        "type": "bytes32"
-      },
-      {
-        "internalType": "bytes",
-        "name": "signature",
-        "type": "bytes"
-      }
-    ],
-    "name": "isValidSignatureNow",
-    "outputs": [
-      {
-        "internalType": "bytes4",
-        "name": "",
-        "type": "bytes4"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "liveEpochHandle",
-    "outputs": [
-      {
-        "internalType": "euint32",
-        "name": "",
-        "type": "bytes32"
       }
     ],
     "stateMutability": "view",
@@ -2187,6 +2376,19 @@
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "pendingOwner",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
       }
     ],
     "stateMutability": "view",
@@ -2345,19 +2547,6 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "sealFlagHandle",
-    "outputs": [
-      {
-        "internalType": "euint32",
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -2486,50 +2675,6 @@
         "internalType": "bool",
         "name": "",
         "type": "bool"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "channelId",
-        "type": "uint256"
-      },
-      {
-        "internalType": "address",
-        "name": "streamer",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "node",
-        "type": "address"
-      },
-      {
-        "internalType": "uint128",
-        "name": "maxCumulative",
-        "type": "uint128"
-      },
-      {
-        "internalType": "uint64",
-        "name": "unlockAt",
-        "type": "uint64"
-      },
-      {
-        "internalType": "uint256",
-        "name": "deadline",
-        "type": "uint256"
-      }
-    ],
-    "name": "sliceDigest",
-    "outputs": [
-      {
-        "internalType": "bytes32",
-        "name": "",
-        "type": "bytes32"
       }
     ],
     "stateMutability": "view",
@@ -2856,19 +3001,6 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "verifiedNodesHandle",
-    "outputs": [
-      {
-        "internalType": "euint32",
-        "name": "",
-        "type": "bytes32"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
         "internalType": "uint256",
@@ -2877,13 +3009,7 @@
       }
     ],
     "name": "withdraw",
-    "outputs": [
-      {
-        "internalType": "uint128",
-        "name": "amount",
-        "type": "uint128"
-      }
-    ],
+    "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   }
