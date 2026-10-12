@@ -14,9 +14,9 @@
     "dependencies":  {
                          "@fhevm/hardhat-plugin":  "^0.4.2",
                          "@fhevm/mock-utils":  "^0.4.2",
-                         "@fhevm/solidity":  "^0.11.1",
+                         "@fhevm/solidity":  "^0.13.4",
                          "@openzeppelin/contracts":  "^5.0.2",
-                         "@zama-fhe/relayer-sdk":  "^0.4.1",
+                         "@zama-fhe/relayer-sdk":  "^0.4.5",
                          "encrypted-types":  "^0.0.4"
                      },
     "devDependencies":  {
