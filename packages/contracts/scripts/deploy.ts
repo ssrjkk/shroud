@@ -14,7 +14,7 @@
  */
 import { ethers, network } from "hardhat";
 import { deployLinked } from "./libraries";
-import { writeFileSync, mkdirSync, readFileSync } from "fs";
+import { writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 
 const OUT = join(__dirname, "../../../infra/devnet/addresses.json");
@@ -50,23 +50,12 @@ async function assertFheMocksPresent(): Promise<void> {
   if (code === "0x") {
     throw new Error(
       `the FHE mock coprocessor is not installed at ${coprocessor} (chainId ${network.config.chainId}).\n` +
-        `  @fhevm/hardhat-plugin@${pluginVersion()} only installs it via the 'fhevm:install-solidity' subtask,\n` +
-        `  which Hardhat will not run from the CLI and which refuses any network but 'hardhat'.\n` +
-        `  Workarounds: run the contracts through 'npx hardhat test' (the mock is installed there),\n` +
-        `  or change the @fhevm/hardhat-plugin version before deploying to a standalone node.`
+        `  The plugin etches the mocks into a standalone node only when it runs as the 'localhost'\n` +
+        `  network (port 8545, chainId 31337): re-run with '--network localhost' against a live\n` +
+        `  'npx hardhat node'. Running without '--network' targets the ephemeral in-process\n` +
+        `  network, where no mocks are installed; any other network name resolves to provider\n` +
+        `  type Unknown and mock setup refuses. See docs/05 section 7a.`
     );
-  }
-}
-
-function pluginVersion(): string {
-  try {
-    // Read the file directly: the plugin's package.json is not in its `exports` map, so
-    // `require("@fhevm/hardhat-plugin/package.json")` fails. `scripts/` sits next to
-    // `node_modules/`, so it is one level up, not two.
-    const pkg = join(__dirname, "../node_modules/@fhevm/hardhat-plugin/package.json");
-    return JSON.parse(readFileSync(pkg, "utf8")).version as string;
-  } catch {
-    return "unknown";
   }
 }
 

@@ -265,10 +265,10 @@ rather than test-only conveniences:
 
 Both are owner-only now, and `deploy.ts` marks the mocks in `addresses.json` and prints a warning.
 
-### F-31 — Devnet deployment path with the pinned plugin (ADV5) — **Mitigated**
-`docker compose up devnet` deploys the contracts to a standalone `hardhat node` today. The two
-failure modes documented here turned out to share one root cause: network *selection*, not the
-plugin version.
+### F-31 — Devnet deployment path (ADV5) — **Mitigated**
+`docker compose up devnet` deploys the contracts to a standalone `hardhat node` today, on the
+`@fhevm` 0.13 line (hardhat-plugin 0.13.0, solidity 0.13.4). The two failure modes documented here
+turned out to share one root cause: network *selection*, not the plugin version.
 
 1. `hardhat run` without `--network` targets the ephemeral in-process network, where no mocks
    are installed — so `CipherTask`'s constructor reverts inside `FHE.asEuint64` with no reason
