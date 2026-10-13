@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::{
     chain::{
-        bindings::{ICipherTaskView, ICipherTaskWrite, IERC20, INetworkParams, IPaymentVault},
+        bindings::{ICipherTaskView, ICipherTaskWrite, INetworkParams, IPaymentVault, IERC20},
         parse_rpc_url,
         slice::{BLOB_BYTES, SLICE_DEADLINE},
     },
@@ -527,11 +527,7 @@ impl OrchestratorClient {
         if allowance >= U256::from(bond) {
             return Ok(());
         }
-        let hash = submit_tx!(
-            erc20.approve(self.vault, U256::MAX),
-            None,
-            "approve"
-        );
+        let hash = submit_tx!(erc20.approve(self.vault, U256::MAX), None, "approve");
         info!(token = %token, bond, %hash, "vault approved for registration bonds");
         Ok(())
     }
