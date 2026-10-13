@@ -73,9 +73,25 @@ mitigated, not solved. Single devnet sequencer in this repo.
 
 ## 7. Audit status
 
-Nothing here has been externally audited. The Solidity has a Hardhat suite (96 tests, including
-the `test-vectors/` byte-layout vectors) and the node has property tests for the state fold, but
-"tested" ≠ "audited". Do not deploy with real value.
+Nothing here has been externally audited. The Solidity has a Hardhat suite (102 tests plus the
+`test-vectors/` byte-layout vectors) and the node has 165 unit tests including the state fold,
+but "tested" ≠ "audited". Do not deploy with real value.
+
+## 7b. Dependency advisories are dev-tooling transitives blocked on upstream majors
+
+`npm audit` / Dependabot report advisories against transitive dependencies of the Hardhat 2
+toolchain (`undici`, `adm-zip`, `@fastify/busboy`, `tmp`, `cookie`, `elliptic`, …). They are
+real CVEs but they live in the *test runner*, not in deployed code: no advisory dependency ships
+in any contract bytecode or in the SDK/runtime paths that touch funds.
+
+Fixing them within semver (`npm update`) is done whenever it resolves; the remainder require
+major bumps of the toolchain itself — Hardhat 2 → 3 (`hardhat`, `hardhat-ethers`,
+`hardhat-chai-matchers`, `typechain`) — which the pinned `@fhevm/hardhat-plugin` does not
+support (its latest line peers `hardhat: ^2.0.0`, and no Hardhat-3-compatible plugin release
+exists). So the advisories stay open until Zama ships one, at which point the Hardhat 3
+migration unblocks the whole family at once. Do not "fix" them with `overrides` pinning
+transitives outside their parents' ranges: forcing a newer `undici` under Hardhat 2 risks the
+test runner's HTTP layer in ways the suite cannot meaningfully cover.
 
 ## 7a. The devnet deploys through `--network localhost` — nothing else works
 
