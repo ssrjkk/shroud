@@ -6,7 +6,7 @@
 # serves sequencer-attached workers and dispute re-executors alike. FHE execution and the STARK
 # prover are not compiled in, so a default build does not pull the `tfhe`/`winterfell` stack (see
 # the `prover` feature in Cargo.toml).
-FROM rust:1.94 AS builder
+FROM rust:1.98 AS builder
 WORKDIR /build
 
 RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
