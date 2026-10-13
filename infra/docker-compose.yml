@@ -45,8 +45,11 @@ services:
     command: ["node", "server.mjs"]
     environment:
       PORT: "8080"
-      # Bound to the compose network only. The service has no authentication, so publishing it on
-      # an untrusted network would hand anyone an unbounded write path.
+      # Bound to the compose network only. Writes additionally require the bearer token when
+      # set here (empty keeps the previous open behaviour); the SDK sends `Authorization: Bearer`
+      # whenever its own `authToken` is configured. Set SHARDSTORE_AUTH_TOKEN in a `.env` file
+      # next to this compose file to turn writes authenticated.
+      AUTH_TOKEN: ${SHARDSTORE_AUTH_TOKEN:-}
       HOST: "0.0.0.0"
       DATA_DIR: "/data"
       MAX_OBJECT_BYTES: "67108864" # 64 MiB

@@ -1,0 +1,23 @@
+name: shardstore
+
+on:
+  push:
+    branches: [master]
+    paths: ["infra/shardstore/**", ".github/workflows/shardstore.yml"]
+  pull_request:
+    paths: ["infra/shardstore/**", ".github/workflows/shardstore.yml"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: server unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/shardstore
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node --test server.test.mjs

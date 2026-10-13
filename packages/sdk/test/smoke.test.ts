@@ -8,6 +8,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ethers } from "ethers";
@@ -200,6 +202,27 @@ test("every ShardStore must verify, not just hand back bytes", async () => {
     () => store.getVerified(cid, ethers.id("a-different-commit")),
     /failed integrity check/
   );
+});
+
+test("FileShardStore persists across instances and verifies like the memory store", async () => {
+  const { FileShardStore } = await import("../dist/file-store.js");
+  const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-"));
+  try {
+    const a: ShardStore = new FileShardStore(dir);
+    const payload = new TextEncoder().encode("file-backed");
+    const { cid, digest } = await a.put(payload);
+    assert.equal(digest, ethers.keccak256(payload));
+    // A second instance over the same directory sees the object: the directory is the
+    // authority, so SDK uploads and node reads stay coherent across processes.
+    const b: ShardStore = new FileShardStore(dir);
+    assert.deepEqual(await b.get(cid), payload);
+    assert.deepEqual(await b.getVerified(cid, digest), payload);
+    await assert.rejects(() => b.get(ethers.keccak256(new Uint8Array([9]))), /not found/);
+    await assert.rejects(() => b.getVerified(cid, ethers.id("a-different-commit")), /failed integrity check/);
+    await assert.rejects(() => b.get("../../etc/passwd"), /unsafe shard digest/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("assertSafeCid rejects path traversal and URL injection", () => {

@@ -144,10 +144,13 @@ What remains true:
   has no authentication — it is a development service and is published on `127.0.0.1` only.
 
 - `infra/shardstore`: a real, running service (content-addressed, size-capped, `Range`-capable,
-  optionally persistent), but **no authentication, no TLS, and no garbage collection** — objects
-  are never deleted, so the store only grows. Its addressing is Node's SHA3-256 while the on-chain
-  pin is keccak-256, which is why `HttpShardStore.getVerified` re-hashes locally instead of trusting
-  the CID. There is no test harness for this file; its behaviour was verified by running it.
+  optionally persistent), with bearer-token writes (`AUTH_TOKEN`, reads stay open by design),
+  optional TLS termination (`TLS_CERT`/`TLS_KEY`), LRU-evicting catalogue (`MAX_OBJECTS`, disk
+  copies go with the entry), boot index rebuild from `DATA_DIR`, and a `DELETE` endpoint — covered
+  by `server.test.mjs` (8 tests) in its own CI job. Its addressing is Node's SHA3-256 while the
+  on-chain pin is keccak-256, which is why `HttpShardStore.getVerified` re-hashes locally instead
+  of trusting the CID. No GC beyond LRU eviction: objects can still only be deleted explicitly or
+  evicted, never expired by age.
 - `node/`: complete service skeleton — reorg-safe log watcher, shard store with byte budget,
   FHE engine behind a `FheEngine` trait (u32 TFHE adapter + reference CPU adapter for tests),
   Winterfell PoC circuit + prover, gRPC peer mesh, EIP-712 slice signer, dispute gossip.
