@@ -132,6 +132,17 @@ interface ICipherTask {
     /// @notice The dispute quorum was reached for `epoch`: its claimant is not paid and the epoch
     ///         is skipped. Emitted instead of `TaskAborted`, because the task keeps running.
     event EpochRejected(uint256 indexed taskId, uint32 indexed epoch, uint256 reporters);
+    /// @notice A rejected epoch's winner contradicted by quorum forfeits its registration bond
+    ///         into the task sub-balance (buyer refund at settlement). Reporters keep theirs:
+    ///         the chain cannot tell a lying winner from a lying quorum, but the winner is the
+    ///         address three independently verified proofs disagree with.
+    /// @dev Declared here (and emitted by `PaymentVault`, which owns custody) so indexers
+    ///      decoding through the orchestrator ABI see the identical topic.
+    event NodeBondSlashed(uint256 indexed taskId, uint32 indexed epoch, address indexed node, uint128 amount);
+    /// @notice A registration bond released to its owner; releasable only once the task can no
+    ///         longer slash it (terminal or fully settled).
+    /// @dev Declared here, emitted by `PaymentVault`; same topic-identity reasoning as above.
+    event NodeBondWithdrawn(uint256 indexed taskId, address indexed node, uint128 amount);
     event TaskSettled(uint256 indexed taskId, uint128 userPool, uint128 nodePool, uint128 treasury);
     /// @param blsAggregateSigDigest `keccak256` of the aggregate signature that authorised the
     ///        reveal. The 96-byte signature itself does not fit a `bytes32` topic-free field, and
@@ -204,6 +215,16 @@ interface ICipherTask {
     error DisputeAgreesWithClaim(uint256 taskId, uint32 epoch, address reporter);
     error DisputeWithoutVerifiedCommit(uint256 taskId, uint32 epoch, address reporter);
     error DisputeDigestMismatch(uint256 taskId, uint32 epoch, address reporter, bytes32 committed, bytes32 reported);
+
+    /* ---------------------------- nodes: bond ---------------------------- */
+    /// @dev Declared here so the orchestrator ABI resolves them, but raised by `PaymentVault`,
+    ///      which owns bond custody (see its `nodeBond` ledger). A revert propagates through
+    ///      `registerNode`, so matching against this ABI sees the exact same bytes as an inline
+    ///      raise would produce.
+    error BondInsufficient(uint256 taskId, address node, uint128 required);
+    error BlsKeyAlreadyUsed(uint256 taskId, bytes32 blsPubKey);
+    error ZeroBlsKey(uint256 taskId, address node);
+    error BondNotReleasable(uint256 taskId, address node);
 
     /* ---------------------------- settlement ---------------------------- */
 

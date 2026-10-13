@@ -68,6 +68,16 @@ describe("CipherTask", () => {
     // `approve` replaces rather than adds, so a bounded allowance would block the second escrow.
     await token.connect(buyer).approve(await vault.getAddress(), ethers.MaxUint256);
 
+    // Nodes post a registration bond pulled by the vault on `registerNode`, so every signer that
+    // may register is funded and approved up front — same pattern as the buyer escrow above.
+    // Exactly one bond each: tests asserting exact token balances would otherwise count unspent
+    // bonds as earnings. The one test registering the same node on two tasks tops up explicitly.
+    const bond = await vault.REGISTRATION_BOND();
+    for (const n of [node, node2, node3, node4]) {
+      await token.mint(n.address, bond);
+      await token.connect(n).approve(await vault.getAddress(), ethers.MaxUint256);
+    }
+
     return { token, vault, verifier, bls, gate, task, net, escrow, owner, buyer, alice, bob, carol, node, node2, node3, node4, committee, outsider, treasury };
   }
 
@@ -81,7 +91,9 @@ describe("CipherTask", () => {
     await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(11), proofFor(1), bytes32Of(7), opts.aRows ?? 1_000);
     await task.connect(bob).submitContribution(id, bytes32Of(2), bytes32Of(12), proofFor(2), bytes32Of(8), opts.bRows ?? 1_000);
     await task.connect(buyer).sealTask(id);
-    for (const n of nodes) await task.connect(n).registerNode(id, bytes32Of(42));
+    // BLS keys are unique per task on chain: reusing one key across nodes reverts, so each node
+    // gets its own (`bytes32Of` hashes its input, so distinct inputs are distinct keys).
+    for (const [i, n] of nodes.entries()) await task.connect(n).registerNode(id, bytes32Of(1000 + i));
     return id;
   }
 
@@ -348,12 +360,14 @@ describe("CipherTask", () => {
 
     it("binds the proof to the task id", async () => {
       const fx = await deployFixture();
-      const { task, token, buyer, escrow } = fx;
+      const { task, token, vault, buyer, escrow, node } = fx;
       // `createTask` escrows the buyer's whole approved balance, so a second task in the same
       // fixture needs a second tranche minted after the first is spent. (This is the behaviour
       // the explicit-budget redesign removes.)
       const idA = await sealed(fx);
       await token.mint(buyer.address, escrow);
+      // Bonds are per task too: the same node registering twice pays twice.
+      await token.mint(node.address, await vault.REGISTRATION_BOND());
       const idB = await sealed(fx);
       expect(await task.proofTranscript(idA, 0, bytes32Of(5))).to.not.equal(await task.proofTranscript(idB, 0, bytes32Of(5)));
     });
@@ -523,7 +537,10 @@ describe("CipherTask", () => {
       expect(await token.balanceOf(claimant.address)).to.equal(0n);
       // `epochChannel` still reads 0: a bounty is not a win.
       expect(await task.epochChannel(id, 0)).to.equal(0n);
-      expect(subBalanceBefore).to.equal(1_000_000_000n - 1_500_000n);
+      // Bounty 1.5e6 out to reporter channels, slashed winner bond back in on top of it: the
+      // quorum does not only deny the reward, it forfeits the liar's bond to the buyer refund.
+      expect(subBalanceBefore).to.equal(1_000_000_000n - 1_500_000n + 10_000_000n);
+      expect(await vault.nodeBond(id, claimant.address)).to.equal(0n);
       expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
     });
 

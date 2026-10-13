@@ -211,6 +211,10 @@ describe("chain vectors", () => {
     const escrow = 1_000_000_000n;
     await token.mint(buyer.address, escrow);
     await token.connect(buyer).approve(await vault.getAddress(), ethers.MaxUint256);
+    // Registration pulls a bond from the node via the vault (no new deployments, so the pinned
+    // CREATE addresses below are unaffected).
+    await token.mint(node.address, await vault.REGISTRATION_BOND());
+    await token.connect(node).approve(await vault.getAddress(), ethers.MaxUint256);
 
     return { token, vault, task, net, escrow, owner, buyer, alice, bob, carol, node, committee };
   }

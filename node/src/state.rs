@@ -274,6 +274,10 @@ pub enum Work {
     Reclaim { channel_id: U256 },
     /// `pendingWithdrawal` for the operator is non-zero; call `claim`.
     Claim,
+    /// The task reached a state where our registration bond can no longer be slashed; call
+    /// `releaseBond`. The worker reads the bond on chain first, so an already-released or
+    /// slashed bond is a skipped nudge, not a revert.
+    ReleaseBond { task_id: U256 },
 }
 
 /// Inner state, guarded by one lock.
@@ -693,6 +697,11 @@ impl NodeState {
                 t.epochs.values_mut().for_each(|e| {
                     e.winner = None;
                 });
+                // An aborted task can never slash again: nudge the bond home. Unregistered
+                // watchers never posted one, so there is nothing to release for them.
+                if t.registered {
+                    work.push(Work::ReleaseBond { task_id: *task_id });
+                }
                 debug!(task = %task_id, reason = %hex::encode(reason), "task aborted");
             }
             ChainEvent::TaskSettled {
@@ -704,6 +713,11 @@ impl NodeState {
                 let t = g.tasks.entry(*task_id).or_default();
                 t.task_id = *task_id;
                 t.settled = true;
+                // Settlement is final for bonds too: no epoch can be rejected after the escrow
+                // is distributed, so the bond is releasable from here on.
+                if t.registered {
+                    work.push(Work::ReleaseBond { task_id: *task_id });
+                }
                 info!(
                     task = %task_id,
                     user_pool, node_pool, committee_pool,
@@ -1626,6 +1640,66 @@ mod tests {
         });
         assert_eq!(s.task(U256::from(18)).unwrap().status, TaskStatus::Aborted);
         assert!(s.pending_epochs(NODE).is_empty());
+    }
+
+    #[test]
+    fn a_terminal_task_nudges_the_bond_home_when_we_registered() {
+        let s = state();
+        s.mark_registered(U256::from(20), true);
+        opened(&s, 20, 0);
+        s.take_work();
+        let work = s.apply(&ChainEvent::TaskAborted {
+            task_id: U256::from(20),
+            reason: [0xb5, 0x51, 0xa2, 0x2b],
+        });
+        assert_eq!(
+            work,
+            vec![Work::ReleaseBond {
+                task_id: U256::from(20)
+            }],
+            "an aborted task can never slash again: {work:?}"
+        );
+    }
+
+    #[test]
+    fn a_settled_task_nudges_the_bond_home_when_we_registered() {
+        let s = state();
+        s.mark_registered(U256::from(21), true);
+        opened(&s, 21, 0);
+        s.take_work();
+        let work = s.apply(&ChainEvent::TaskSettled {
+            task_id: U256::from(21),
+            user_pool: 800_000_000,
+            node_pool: 150_000_000,
+            committee_pool: 50_000_000,
+        });
+        assert_eq!(
+            work,
+            vec![Work::ReleaseBond {
+                task_id: U256::from(21)
+            }],
+            "settlement is final for bonds too: {work:?}"
+        );
+    }
+
+    #[test]
+    fn no_bond_nudge_without_registration() {
+        let s = state();
+        opened(&s, 22, 0);
+        s.take_work();
+        // Unregistered watchers never posted a bond: nothing to release, on either terminal path.
+        let work = s.apply(&ChainEvent::TaskAborted {
+            task_id: U256::from(22),
+            reason: [0xb5, 0x51, 0xa2, 0x2b],
+        });
+        assert!(work.is_empty(), "no registration means no bond: {work:?}");
+        let work = s.apply(&ChainEvent::TaskSettled {
+            task_id: U256::from(22),
+            user_pool: 1,
+            node_pool: 1,
+            committee_pool: 1,
+        });
+        assert!(work.is_empty(), "no registration means no bond: {work:?}");
     }
 
     #[test]

@@ -426,11 +426,20 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /*                    3. NODES: EPOCH ORCHESTRATION                   */
     /* ================================================================== */
 
-    /// @notice Compute nodes register once per task before the first epoch opens.
+    /// @notice Compute nodes register once per task before the first epoch opens, posting a
+    ///         bond that is slashed if a dispute quorum rejects their epoch and returned once the
+    ///         task can no longer slash it.
+    /// @dev The bond is pulled by the vault, not pledged: `approve` the vault then
+    ///      `registerNode` in one operator flow — the same two-step pattern as the buyer's escrow
+    ///      (approve the vault, `createTask`). Custody is the vault's `nodeBond` ledger (a
+    ///      first-class term of its accounting invariant, not sub-balance money: sub-balances are
+    ///      buyer-refundable, and a bond swept into a refund would pay the buyer with the node's
+    ///      money). BLS-key uniqueness is enforced there too.
     function registerNode(uint256 taskId, bytes32 blsPubKey) external whenNotPaused {
         if (_tasks[taskId].status == TaskStatus.None) revert UnknownTask(taskId);
         if (_nodeRegistered[taskId][msg.sender]) revert NodeAlreadyRegistered(taskId, msg.sender);
         _nodeRegistered[taskId][msg.sender] = true;
+        vault.takeBond(taskId, msg.sender, blsPubKey);
         emit NodeRegistered(taskId, msg.sender, blsPubKey);
     }
 
@@ -615,6 +624,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             // abort is terminal. Emitting the terminal event for a recoverable one made every
             // indexer watching `TaskAborted` treat a live task as dead.
             _payReporters(taskId, epoch, lock);
+            // Forfeit a rejected epoch's winner bond into the task sub-balance (buyer refund at
+            // settlement); custody and rationale live in `PaymentVault.slashBond`, here only the
+            // call remains so this contract stays inside the deployment limit.
+            vault.slashBond(taskId, epoch, winner);
             emit EpochRejected(taskId, epoch, _epochReporters[taskId][epoch].length);
         } else if (winner != address(0)) {
             // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides

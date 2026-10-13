@@ -28,7 +28,7 @@ use tracing::{info, warn};
 
 use crate::{
     chain::{
-        bindings::{ICipherTaskView, ICipherTaskWrite, INetworkParams, IPaymentVault},
+        bindings::{ICipherTaskView, ICipherTaskWrite, IERC20, INetworkParams, IPaymentVault},
         parse_rpc_url,
         slice::{BLOB_BYTES, SLICE_DEADLINE},
     },
@@ -455,7 +455,13 @@ impl OrchestratorClient {
 
     /// Register this node's BLS key for a task. Idempotent on chain, but the caller still
     /// checks `nodeRegistered` first to avoid paying gas.
+    ///
+    /// Registration pulls the bond from the operator into the vault, so the vault must be
+    /// approved first — the same two-step pattern as the buyer's escrow. The approval is for
+    /// `MaxUint256`, also like the buyer's: one approval covers every future task, and the
+    /// vault can only pull `REGISTRATION_BOND` per registration.
     pub async fn register_node(&self, task_id: U256, bls_pub_key: B256) -> Result<B256> {
+        self.ensure_bond_allowance().await?;
         let contract = ICipherTaskWrite::new(self.cipher_task, self.provider.clone());
         let hash = submit_tx!(
             contract.registerNode(task_id, bls_pub_key),
@@ -464,6 +470,70 @@ impl OrchestratorClient {
         );
         info!(%task_id, %hash, "registered for task");
         Ok(hash)
+    }
+
+    /// The bond `registerNode` pulls, read from the vault so the node never hardcodes money.
+    pub async fn registration_bond(&self) -> Result<u128> {
+        let vault = IPaymentVault::new(self.vault, self.provider.clone());
+        vault
+            .REGISTRATION_BOND()
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))
+    }
+
+    /// This operator's bond on a task, or zero when never posted, released or slashed.
+    pub async fn node_bond(&self, task_id: U256, node: Address) -> Result<u128> {
+        let vault = IPaymentVault::new(self.vault, self.provider.clone());
+        vault
+            .nodeBond(task_id, node)
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))
+    }
+
+    /// Release our bond once the task can no longer slash it. The contract decides
+    /// releasability; the worker checks the bond is still there first (see `release_gate`), so
+    /// this sends only when the call is expected to succeed.
+    pub async fn release_bond(&self, task_id: U256) -> Result<B256> {
+        let vault = IPaymentVault::new(self.vault, self.provider.clone());
+        let hash = submit_tx!(
+            vault.releaseBond(task_id, self.operator),
+            None,
+            "releaseBond"
+        );
+        info!(%task_id, %hash, "registration bond released");
+        Ok(hash)
+    }
+
+    /// Approve the vault to pull registration bonds, unless it already may.
+    ///
+    /// Checked rather than blindly sent: an approval is a transaction like any other, and one
+    /// per operator lifetime is enough.
+    async fn ensure_bond_allowance(&self) -> Result<()> {
+        let bond = self.registration_bond().await?;
+        let task = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        let token = task
+            .escrowToken()
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        let erc20 = IERC20::new(token, self.provider.clone());
+        let allowance: U256 = erc20
+            .allowance(self.operator, self.vault)
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        if allowance >= U256::from(bond) {
+            return Ok(());
+        }
+        let hash = submit_tx!(
+            erc20.approve(self.vault, U256::MAX),
+            None,
+            "approve"
+        );
+        info!(token = %token, bond, %hash, "vault approved for registration bonds");
+        Ok(())
     }
 
     /// Post an epoch commit. Returns the transaction hash.

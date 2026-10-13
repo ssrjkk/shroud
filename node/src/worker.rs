@@ -176,6 +176,9 @@ impl Worker {
             for w in self.registrations_to_repair() {
                 push_work(&mut queue, &deferred, w, 0);
             }
+            for w in self.bonds_to_release() {
+                push_work(&mut queue, &deferred, w, 0);
+            }
 
             if queue.is_empty() {
                 continue;
@@ -283,6 +286,7 @@ impl Worker {
             Work::Redeem { channel_id } => self.on_redeem(*channel_id).await,
             Work::Reclaim { channel_id } => self.on_reclaim(*channel_id, chain_now).await,
             Work::Claim => self.on_claim().await,
+            Work::ReleaseBond { task_id } => self.on_release_bond(*task_id).await,
         }
     }
 
@@ -320,6 +324,12 @@ impl Worker {
                 reason: "expected 32 bytes of hex".into(),
             })
         })?;
+        if bls_pub_key.is_zero() {
+            // The chain rejects zero keys (`ZeroBlsKey`): registering one would burn gas on a
+            // certain revert, and a zero key is never a real identity — it is an unset config.
+            debug!(task = %task_id, "worker: BLS public key is zero, so no registration");
+            return Ok(Outcome::Done);
+        }
 
         self.client.register_node(task_id, bls_pub_key).await?;
         self.state.mark_registered(task_id, true);
@@ -516,6 +526,22 @@ impl Worker {
         Ok(Outcome::Done)
     }
 
+    /// Release our registration bond once the task can no longer slash it.
+    ///
+    /// Like `claim`, this is exit money, not protocol progress: a node that never calls it
+    /// leaves its own bond locked. The gate reads the vault first, so an already-released or
+    /// slashed bond is a skipped nudge rather than a `BondNotReleasable` revert.
+    async fn on_release_bond(&self, task_id: U256) -> Result<Outcome> {
+        let me = self.client.operator();
+        let bond = self.client.node_bond(task_id, me).await?;
+        let gate = release_gate(bond);
+        if gate != Gate::Ready {
+            return Ok(outcome_of(gate));
+        }
+        self.client.release_bond(task_id).await?;
+        Ok(Outcome::Done)
+    }
+
     // --- repair -----------------------------------------------------------------------
 
     /// Registration nudges the fold could not have produced.
@@ -539,6 +565,29 @@ impl Worker {
                 continue;
             }
             out.push(Work::Register { task_id });
+        }
+        out
+    }
+
+    /// Bond-release nudges the fold could not have produced.
+    ///
+    /// Same two blind spots as registration: a watcher that started mid-history never saw the
+    /// terminal event, and a `releaseBond` that failed transiently after the event was folded.
+    /// Either leaves a bond locked that the chain would already release, so this pass re-nudges
+    /// every registered task the fold already considers finished. The arm re-reads the vault
+    /// before sending, so tasks whose bonds are already gone cost one point read, never a revert.
+    fn bonds_to_release(&self) -> Vec<Work> {
+        let mut out = Vec::new();
+        for task_id in self.state.task_ids() {
+            let Some(task) = self.state.task(task_id) else {
+                continue;
+            };
+            if !task.registered {
+                continue;
+            }
+            if task.settled || task.status.is_terminal() {
+                out.push(Work::ReleaseBond { task_id });
+            }
         }
         out
     }
@@ -682,6 +731,14 @@ pub fn reclaim_gate(ch: &ChannelOnChain, me: Address, now: u64, retry: Duration)
 pub fn claim_gate(pending: U256) -> Gate {
     if pending.is_zero() {
         return Gate::Skip("nothing is credited to the operator");
+    }
+    Gate::Ready
+}
+
+/// `releaseBond`: the only thing that can stop it is there being no bond.
+pub fn release_gate(bond: u128) -> Gate {
+    if bond == 0 {
+        return Gate::Skip("no registration bond on this task");
     }
     Gate::Ready
 }
@@ -985,6 +1042,48 @@ mod tests {
             Gate::Skip("nothing is credited to the operator")
         ));
         assert_eq!(claim_gate(U256::from(1)), Gate::Ready);
+    }
+
+    #[test]
+    fn releasing_without_a_bond_is_refused_locally() {
+        assert!(matches!(
+            release_gate(0),
+            Gate::Skip("no registration bond on this task")
+        ));
+        assert_eq!(release_gate(1), Gate::Ready);
+    }
+
+    #[test]
+    fn a_finished_task_with_our_registration_gets_its_bond_released() {
+        // The repair pass covers the watcher that started mid-history and never saw the terminal
+        // event: the fold says finished and registered, the arm re-reads the vault, and a gone
+        // bond is a skip rather than a revert.
+        let state = Arc::new(NodeState::new());
+        state.set_operator(ME);
+        state.mark_registered(U256::from(44), true);
+        state.apply(&ChainEvent::TaskAborted {
+            task_id: U256::from(44),
+            reason: [0xb5, 0x51, 0xa2, 0x2b],
+        });
+        let worker = worker_with(state.clone());
+        assert_eq!(
+            worker.bonds_to_release(),
+            vec![Work::ReleaseBond {
+                task_id: U256::from(44)
+            }]
+        );
+
+        // Live tasks and tasks we never registered for are not ours to exit.
+        let live = Arc::new(NodeState::new());
+        live.set_operator(ME);
+        live.apply(&ChainEvent::EpochOpened {
+            task_id: U256::from(45),
+            epoch: 0,
+            enc_weights_cid: B256::repeat_byte(0x0e),
+            weights_digest: B256::repeat_byte(0x0f),
+        });
+        let worker = worker_with(live.clone());
+        assert!(worker.bonds_to_release().is_empty());
     }
 
     #[test]

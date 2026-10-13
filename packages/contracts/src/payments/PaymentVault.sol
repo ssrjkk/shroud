@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "../interfaces/IERC20.sol";
+import {ICipherTask} from "../interfaces/ICipherTask.sol";
 import {ReentrancyGuard, Pausable} from "../libraries/Guard.sol";
 
 interface IERC1271 {
@@ -16,7 +17,10 @@ interface IERC1271 {
 ///      The vault keeps a **sub-balance per task**, so a bug in one task's accounting can never
 ///      overdraw another task's escrow:
 ///
-///        totalLocked == Σ taskBalance[i] + Σ channel[i].locked
+///        totalLocked == Σ taskBalance[i] + Σ channel[i].locked + Σ nodeBond[i]
+///
+///      Registration bonds are the third term: custodied here but never sub-balance money, so a
+///      bond can never be swept into a buyer refund.
 ///
 ///      `CipherTask` is the only address allowed to move funds between a task sub-balance, a
 ///      reward channel, and a pending claim. Everything else is either a pull by the earner or
@@ -94,10 +98,29 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     /// @notice Channel ids opened per task, for reclamation.
     mapping(uint256 => uint256[]) public taskChannels;
 
-    uint256 public totalLocked; // = subBalancesTotal + channelLocksTotal
+    uint256 public totalLocked; // = subBalancesTotal + channelLocksTotal + bondTotal
     uint256 public subBalancesTotal; // Σ taskBalance
     uint256 public channelLocksTotal; // Σ open (maxCumulative - withdrawn)
     uint256 public totalWithdrawn;
+    /// @notice Sum of all registration bonds held, maintained incrementally.
+    /// @dev Bonds are a first-class term of the accounting invariant, not sub-balance money:
+    ///      sub-balances are buyer-refundable at settlement by construction, and a bond swept
+    ///      into a refund would pay the buyer with the node's money.
+    uint256 public bondTotal;
+    /// @dev Registration bond per node per task, in escrow-token base units (10 CMUSD at 6 dp).
+    ///      Flat protocol constant, not per-task math, so operators know what to approve without
+    ///      reading the task: `REGISTRATION_BOND()` is the number. Sized at ~20% of a typical
+    ///      epoch lock, so a 3-address ring locks 3× the bond for the task's whole life — a real
+    ///      spam cost, not a fee, and not a Sybil *proof*: locked capital returns to the attacker
+    ///      afterwards (see F-04).
+    uint128 public constant REGISTRATION_BOND = 10_000_000;
+    /// @notice Bonds posted, keyed by task then node. Released by `releaseBond`, forfeited by
+    ///         `slashBond`; never counted toward any task sub-balance until slashed.
+    mapping(uint256 => mapping(address => uint128)) public nodeBond;
+    /// @dev BLS keys already taken for a task. Keys are self-declared, so this stops accidents
+    ///      and lazy key reuse, not a determined Sybil — generating fresh keys is free, and the
+    ///      bond is what makes fresh identities cost.
+    mapping(uint256 => mapping(bytes32 => bool)) public blsKeyUsed;
 
     error InvalidSignature();
     error NotStreamer(address caller);
@@ -121,6 +144,13 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     error TaskManagerUnchanged(address proposed);
     error TaskManagerNotReady(uint64 eta);
     error NothingToRescue();
+    // Bond errors are declared in `ICipherTask` (same selectors) so reverts propagating through
+    // `CipherTask.registerNode` resolve against the orchestrator ABI; redeclared here for
+    // compilation.
+    error BondInsufficient(uint256 taskId, address node, uint128 required);
+    error BlsKeyAlreadyUsed(uint256 taskId, bytes32 blsPubKey);
+    error ZeroBlsKey(uint256 taskId, address node);
+    error BondNotReleasable(uint256 taskId, address node);
 
     event TaskFunded(uint256 indexed taskId, address indexed from, uint256 amount, uint256 newBalance);
     event ChannelOpened(
@@ -142,6 +172,10 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
     event StrayTokensRescued(address indexed to, uint256 amount);
+    // Bond events are declared in `ICipherTask` (identical topics); redeclared here for
+    // compilation — a vault log decodes the same through the orchestrator ABI.
+    event NodeBondSlashed(uint256 indexed taskId, uint32 indexed epoch, address indexed node, uint128 amount);
+    event NodeBondWithdrawn(uint256 indexed taskId, address indexed node, uint128 amount);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner(msg.sender);
@@ -263,6 +297,81 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         pendingTotal += amount;
         _assertInvariant();
         emit WithdrawalCredited(account, amount, taskId);
+    }
+
+    /* ================================================================== */
+    /*                        NODE BONDS (REGISTRATION)                   */
+    /* ================================================================== */
+
+    /// @notice Pull the registration bond from `node` and record its BLS key. Called by the
+    ///         orchestrator from `registerNode`; nodes approve this vault (the same two-step
+    ///         pattern as the buyer's escrow: approve the vault, then register).
+    /// @dev Bonds are custodied here but are NOT sub-balance money: `nodeBond` is its own term
+    ///      of the accounting invariant, so a bond can never be swept into a buyer refund. The
+    ///      orchestrator's `registerNode` has already checked the task exists and the node is
+    ///      not yet registered; key validity and payment are checked here.
+    function takeBond(uint256 taskId, address node, bytes32 blsPubKey) external onlyTaskManager whenNotPaused nonReentrant {
+        if (blsPubKey == bytes32(0)) revert ZeroBlsKey(taskId, node);
+        if (blsKeyUsed[taskId][blsPubKey]) revert BlsKeyAlreadyUsed(taskId, blsPubKey);
+        if (token.allowance(node, address(this)) < REGISTRATION_BOND) {
+            revert BondInsufficient(taskId, node, REGISTRATION_BOND);
+        }
+        blsKeyUsed[taskId][blsPubKey] = true;
+        nodeBond[taskId][node] = REGISTRATION_BOND;
+        bondTotal += REGISTRATION_BOND;
+        totalLocked += REGISTRATION_BOND;
+        _pull(node, REGISTRATION_BOND);
+        _assertInvariant();
+    }
+
+    /// @notice Release `node`'s bond to it, once the task can no longer slash it: terminal
+    ///         (`Aborted`/`Disclosed`) or fully settled. Permissionless — the money can only go
+    ///         to the bond's owner — so a node never depends on anyone else to exit.
+    /// @dev Deliberately NOT `whenNotPaused` (like `claim`): a pause freezes protocol progress,
+    ///      not exits. Trapping bonds behind an emergency pause would turn a safety lever into a
+    ///      hostage mechanism.
+    function releaseBond(uint256 taskId, address node) external nonReentrant {
+        uint128 bond = nodeBond[taskId][node];
+        if (bond == 0) revert BondNotReleasable(taskId, node);
+        ICipherTask manager = ICipherTask(taskManager);
+        ICipherTask.TaskStatus status = manager.statusOf(taskId);
+        if (
+            status != ICipherTask.TaskStatus.Aborted &&
+            status != ICipherTask.TaskStatus.Disclosed &&
+            !manager.isFullySettled(taskId)
+        ) {
+            revert BondNotReleasable(taskId, node);
+        }
+        nodeBond[taskId][node] = 0;
+        bondTotal -= bond;
+        totalLocked -= bond;
+        _assertInvariant();
+        _push(node, bond);
+        emit NodeBondWithdrawn(taskId, node, bond);
+    }
+
+    /// @notice Forfeit a rejected epoch's `winner` bond into the task sub-balance, where it joins
+    ///         the buyer refund at settlement. Called by the orchestrator from the dispute-quorum
+    ///         branch of `finalizeEpoch`.
+    /// @dev The winner is the address three independently verified proofs disagree with — the
+    ///      strongest on-chain signal of a lying claimant the protocol has. Reporters keep their
+    ///      bonds: the chain cannot tell a lying winner from a lying quorum, so punishing
+    ///      reporters would tax honest disputes (see F-04). A griefing quorum can still burn an
+    ///      honest winner's bond; the bond prices that grief, it does not prevent it. A missing
+    ///      bond (never posted, already released) is a silent no-op, never a revert: slashing is
+    ///      a consequence of rejection, not a precondition of it.
+    function slashBond(uint256 taskId, uint32 epoch, address winner) external onlyTaskManager nonReentrant {
+        uint128 bond = nodeBond[taskId][winner];
+        if (bond == 0) return;
+        nodeBond[taskId][winner] = 0;
+        bondTotal -= bond;
+        // Reclassification, not movement: the tokens stay in the vault while the ledger moves
+        // them from the bond term to the sub-balance term. `totalLocked` is untouched, so the
+        // invariant holds by construction rather than by recomputation.
+        taskBalance[taskId] += bond;
+        subBalancesTotal += bond;
+        _assertInvariant();
+        emit NodeBondSlashed(taskId, epoch, winner, bond);
     }
 
     /* ================================================================== */
@@ -450,8 +559,8 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     ///      USDC straight to the vault address. Such a transfer is invisible to the accounting
     ///      model — it joins neither a task sub-balance nor a channel — so before this existed it
     ///      simply sat here forever with no function anywhere in the contract able to move it.
-    /// @dev What is *not* stray is precisely what the vault owes: `totalLocked` (task sub-balances
-    ///      and channel locks) plus `pendingTotal` (credited and awaiting `claim`). Both are
+    /// @dev What is *not* stray is precisely what the vault owes: `totalLocked` (task sub-balances,
+    ///      channel locks and bonds) plus `pendingTotal` (credited and awaiting `claim`). Both are
     ///      maintained on every movement, so the subtraction cannot be talked into releasing
     ///      escrowed funds; a mistaken deposit is recoverable, an escrowed one never is.
     function rescueStrayTokens() external onlyOwner nonReentrant returns (uint256 amount) {
@@ -494,9 +603,9 @@ contract PaymentVault is ReentrancyGuard, Pausable {
             );
     }
 
-    /// @notice `totalLocked` must always equal sub-balances plus open channel locks.
+    /// @notice `totalLocked` must always equal sub-balances plus open channel locks plus bonds.
     function accountedLocked() public view returns (uint256) {
-        return subBalancesTotal + channelLocksTotal;
+        return subBalancesTotal + channelLocksTotal + bondTotal;
     }
 
     /* ------------------------------------------------------------------ */
@@ -548,13 +657,13 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     }
 
     /// @dev O(1): `channelLocksTotal` is maintained incrementally on every channel movement,
-    ///      and `subBalancesTotal` on every sub-balance movement, so
-    ///      `totalLocked == subBalancesTotal + channelLocksTotal` is checkable in constant
-    ///      time. This is the tripwire that catches an accounting bug before it becomes a
-    ///      drainable one; it is cheap enough to sit on the orchestrator hot path.
+    ///      `subBalancesTotal` on every sub-balance movement and `bondTotal` on every bond
+    ///      movement, so `totalLocked == subBalancesTotal + channelLocksTotal + bondTotal` is
+    ///      checkable in constant time. This is the tripwire that catches an accounting bug before
+    ///      it becomes a drainable one; it is cheap enough to sit on the orchestrator hot path.
     function _assertInvariant() private view {
-        if (totalLocked != subBalancesTotal + channelLocksTotal) {
-            revert InvariantViolated(totalLocked, subBalancesTotal + channelLocksTotal);
+        if (totalLocked != subBalancesTotal + channelLocksTotal + bondTotal) {
+            revert InvariantViolated(totalLocked, subBalancesTotal + channelLocksTotal + bondTotal);
         }
     }
 }

@@ -53,6 +53,9 @@ describe("settlement scalability", () => {
     const budget = 10_000_000_000_000n;
     await token.mint(buyer.address, budget);
     await token.connect(buyer).approve(await vault.getAddress(), ethers.MaxUint256);
+    // Registration pulls a bond from the node via the vault.
+    await token.mint(node.address, await vault.REGISTRATION_BOND());
+    await token.connect(node).approve(await vault.getAddress(), ethers.MaxUint256);
 
     await task.connect(buyer).createTask(
       budget,

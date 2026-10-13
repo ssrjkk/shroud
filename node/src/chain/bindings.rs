@@ -157,6 +157,18 @@ sol! {
 
         function reclaim(uint256 channelId) external returns (uint128 amount);
         function claim() external returns (uint256 amount);
+
+        /// Registration-bond custody. The bond is the vault's own invariant term, never
+        /// sub-balance money, so it cannot leak into buyer refunds.
+        function REGISTRATION_BOND() external view returns (uint128);
+        function nodeBond(uint256 taskId, address node) external view returns (uint128);
+        function releaseBond(uint256 taskId, address node) external;
+    }
+
+    #[sol(rpc)]
+    interface IERC20 {
+        function allowance(address owner, address spender) external view returns (uint256);
+        function approve(address spender, uint256 value) external returns (bool);
     }
 
     #[sol(rpc)]
