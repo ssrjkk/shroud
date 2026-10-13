@@ -623,7 +623,16 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             // `EpochRejected`, not `TaskAborted`: the task continues with the next epoch, and an
             // abort is terminal. Emitting the terminal event for a recoverable one made every
             // indexer watching `TaskAborted` treat a live task as dead.
-            _payReporters(taskId, epoch, lock);
+            SettlementLib.payReporters(
+                vault,
+                taskId,
+                epoch,
+                _epochReporters[taskId][epoch],
+                t.params.reexecutionBps,
+                lock,
+                uint64(block.timestamp) + rewardChannelWindow(),
+                _authorizedSlice
+            );
             // Forfeit a rejected epoch's winner bond into the task sub-balance (buyer refund at
             // settlement); custody and rationale live in `PaymentVault.slashBond`, here only the
             // call remains so this contract stays inside the deployment limit.
@@ -1067,32 +1076,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         channelId = vault.openTaskChannel(taskId, node, reward, unlockAt);
         _authorizedSlice[channelId][0] = reward;
         emit NodeRewardChannelOpened(taskId, epoch, node, channelId, reward, unlockAt, reward);
-    }
-
-    /// @dev Pay the nodes that re-executed and disagreed with the claimed digest.
-    ///
-    ///      The docstring on `finalizeEpoch` promises reporters are paid out of the disputed
-    ///      lock; without this they would spend real gas and re-execution compute for nothing,
-    ///      and the only rational strategy would be to accept every claim unchallenged. The
-    ///      bounty is `reexecutionBps` of the lock split equally, with the division remainder to
-    ///      the first reporter so the whole bounty is always paid out and nothing is stranded in
-    ///      the sub-balance. The remainder of the lock is *not* paid here: it stays in the task
-    ///      sub-balance and is refunded to the buyer at settlement.
-    function _payReporters(uint256 taskId, uint32 epoch, uint128 lock) private {
-        address[] memory reporters = _epochReporters[taskId][epoch];
-        uint256 n = reporters.length;
-        if (n == 0 || lock == 0) return;
-        uint128 bounty = (uint128(lock) * _tasks[taskId].params.reexecutionBps) / BPS;
-        if (bounty == 0) return;
-        uint128 each = bounty / uint128(uint256(n));
-        if (each == 0) return;
-        uint128 total = each * uint128(uint256(n));
-        for (uint256 i = 0; i < n; ++i) {
-            _openChannel(taskId, epoch, reporters[i], each);
-        }
-        if (total < bounty) {
-            _openChannel(taskId, epoch, reporters[0], bounty - total);
-        }
     }
 
     function _setStatus(uint256 taskId, TaskStatus to) private {
