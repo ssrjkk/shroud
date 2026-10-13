@@ -255,7 +255,10 @@ impl Worker {
     /// Exponential backoff on the poll interval, so a persistently failing step slows down rather
     /// than spending gas on every tick.
     fn backoff(&self, attempts: u32) -> Duration {
-        self.cfg.chain.poll_interval.saturating_mul(1u32 << attempts.min(4))
+        self.cfg
+            .chain
+            .poll_interval
+            .saturating_mul(1u32 << attempts.min(4))
     }
 
     /// Dispatch one nudge.
@@ -337,7 +340,10 @@ impl Worker {
         let me = self.client.operator();
         for (task, epoch) in self.state.pending_epochs(me) {
             if task == task_id {
-                self.state.nudge(Work::Execute { task, epoch });
+                self.state.nudge(Work::Execute {
+                    task_id: task,
+                    epoch,
+                });
             }
         }
     }
@@ -403,7 +409,9 @@ impl Worker {
         if gate != Gate::Ready {
             return Ok(outcome_of(gate));
         }
-        self.client.report_dispute(task_id, epoch, our_digest).await?;
+        self.client
+            .report_dispute(task_id, epoch, our_digest)
+            .await?;
         Ok(Outcome::Done)
     }
 
@@ -542,16 +550,9 @@ impl Worker {
 /// duplicate *transaction* is at best a wasted `DuplicateCommit` revert and at worst a
 /// `NothingToClaim` one. Deduplicating here is what makes it safe to drain the fold's queue more
 /// than once per pass.
-fn push_work(
-    queue: &mut VecDeque<(Work, u32)>,
-    deferred: &[Deferred],
-    work: Work,
-    attempts: u32,
-) {
-    let duplicate = queue
-        .iter()
-        .any(|(queued, _)| *queued == work)
-        || deferred.iter().any(|d| d.work == work);
+fn push_work(queue: &mut VecDeque<(Work, u32)>, deferred: &[Deferred], work: Work, attempts: u32) {
+    let duplicate =
+        queue.iter().any(|(queued, _)| *queued == work) || deferred.iter().any(|d| d.work == work);
     if !duplicate {
         queue.push_back((work, attempts));
     }
@@ -791,7 +792,10 @@ mod tests {
     #[test]
     fn an_epoch_we_could_still_commit_in_is_ready() {
         let t = task(TaskStatus::EpochOpen, 3);
-        assert_eq!(commit_gate(&t, 3, 700, Duration::from_secs(300)), Gate::Ready);
+        assert_eq!(
+            commit_gate(&t, 3, 700, Duration::from_secs(300)),
+            Gate::Ready
+        );
     }
 
     #[test]
@@ -835,7 +839,10 @@ mod tests {
     fn finalize_waits_for_the_window_and_requeues_at_its_end() {
         let t = task(TaskStatus::EpochCommitting, 3);
         // Deadline 1_000 plus a 300 second window: at 1_100 there are 200 seconds left.
-        assert_eq!(finalize_gate(&t, 3, 1_100, false), Gate::Wait(Duration::from_secs(200)));
+        assert_eq!(
+            finalize_gate(&t, 3, 1_100, false),
+            Gate::Wait(Duration::from_secs(200))
+        );
         assert_eq!(finalize_gate(&t, 3, 1_300, false), Gate::Ready);
     }
 
@@ -892,8 +899,14 @@ mod tests {
     fn an_unreadable_channel_is_retried_not_dropped() {
         // The vault returns zeroes for an id it has not seen yet. Reading that as "not ours" would
         // lose the reward for good.
-        assert_eq!(redeem_gate(&ChannelOnChain::default(), ME, RETRY), Gate::Wait(RETRY));
-        assert_eq!(reclaim_gate(&ChannelOnChain::default(), ME, 5_000, RETRY), Gate::Wait(RETRY));
+        assert_eq!(
+            redeem_gate(&ChannelOnChain::default(), ME, RETRY),
+            Gate::Wait(RETRY)
+        );
+        assert_eq!(
+            reclaim_gate(&ChannelOnChain::default(), ME, 5_000, RETRY),
+            Gate::Wait(RETRY)
+        );
     }
 
     #[test]
@@ -947,7 +960,10 @@ mod tests {
     #[test]
     fn reclaim_waits_for_the_unlock_and_then_runs() {
         let ch = channel(ME);
-        assert_eq!(reclaim_gate(&ch, ME, 1_900, RETRY), Gate::Wait(Duration::from_secs(100)));
+        assert_eq!(
+            reclaim_gate(&ch, ME, 1_900, RETRY),
+            Gate::Wait(Duration::from_secs(100))
+        );
         assert_eq!(reclaim_gate(&ch, ME, 2_000, RETRY), Gate::Ready);
 
         let mut closed = ch;
@@ -983,7 +999,12 @@ mod tests {
         ));
         // A digest that is not what we committed: `DisputeDigestMismatch`.
         assert!(matches!(
-            dispute_gate(&t, Some(&commit(0xbb, true)), false, B256::repeat_byte(0xcc)),
+            dispute_gate(
+                &t,
+                Some(&commit(0xbb, true)),
+                false,
+                B256::repeat_byte(0xcc)
+            ),
             Gate::Skip("the digest to report is not the one we committed")
         ));
         // The claim is already ours: `DisputeAgreesWithClaim`.
@@ -992,14 +1013,22 @@ mod tests {
             Gate::Skip("the chain already holds our digest as the claim")
         ));
         // Everything the contract asks for is present.
-        assert_eq!(dispute_gate(&t, Some(&commit(0xbb, true)), false, ours), Gate::Ready);
+        assert_eq!(
+            dispute_gate(&t, Some(&commit(0xbb, true)), false, ours),
+            Gate::Ready
+        );
     }
 
     #[test]
     fn a_closed_epoch_is_not_disputable() {
         let t = task(TaskStatus::EpochSettled, 3);
         assert!(matches!(
-            dispute_gate(&t, Some(&commit(0xbb, true)), false, B256::repeat_byte(0xbb)),
+            dispute_gate(
+                &t,
+                Some(&commit(0xbb, true)),
+                false,
+                B256::repeat_byte(0xbb)
+            ),
             Gate::Skip("the epoch is no longer disputable")
         ));
     }

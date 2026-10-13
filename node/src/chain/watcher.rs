@@ -327,7 +327,11 @@ impl Watcher {
             // the task that is already mid-epoch.
             if self.cursor.load(Ordering::SeqCst) == DERIVE_START {
                 let start = head.saturating_sub(self.backfill_blocks);
-                info!(start, backfill = self.backfill_blocks, "no checkpoint; backfilling");
+                info!(
+                    start,
+                    backfill = self.backfill_blocks,
+                    "no checkpoint; backfilling"
+                );
                 self.cursor.store(start, Ordering::SeqCst);
             }
 
@@ -751,7 +755,7 @@ pub fn decode_task_event(sig: &B256, topics: &[B256], data: &[u8]) -> Option<Cha
             task_id: indexed(topics, 0)?,
             epoch: indexed_u32(topics, 1)?,
             node: indexed_address(topics, 2)?,
-            ok: bool_of(&data_word(data, 0)?)?,
+            ok: bool_of(data_word(data, 0)?)?,
         });
     }
     if *sig == *events::NODE_REWARD_CHANNEL_OPENED_TOPIC {
@@ -759,7 +763,7 @@ pub fn decode_task_event(sig: &B256, topics: &[B256], data: &[u8]) -> Option<Cha
             task_id: indexed(topics, 0)?,
             epoch: indexed_u32(topics, 1)?,
             node: indexed_address(topics, 2)?,
-            channel_id: data_word(data, 0)?,
+            channel_id: U256::from_be_slice(data_word(data, 0)?.as_slice()),
             max_cumulative: u128_of(data_word(data, 1)?),
             unlock_at: u64_of(data_word(data, 2)?),
             first_slice: u128_of(data_word(data, 3)?),
@@ -887,7 +891,12 @@ mod tests {
 
     #[test]
     fn a_non_boolean_word_is_not_silently_accepted_as_true() {
-        let t = vec![*events::EPOCH_VERIFIED_TOPIC, B256::ZERO, B256::ZERO, B256::ZERO];
+        let t = vec![
+            *events::EPOCH_VERIFIED_TOPIC,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+        ];
         let mut odd = [0u8; 32];
         odd[31] = 2;
         assert!(decode_task_event(&events::EPOCH_VERIFIED_TOPIC, &t, &odd).is_none());
@@ -904,7 +913,12 @@ mod tests {
     fn a_vault_topic_emitted_by_the_task_address_is_not_decoded() {
         // Same topic, wrong emitter: the task decoder would read the vault's data words as
         // task fields and produce a plausible amount.
-        let vault_topics = vec![*events::CHANNEL_OPENED_TOPIC, B256::ZERO, B256::ZERO, B256::ZERO];
+        let vault_topics = vec![
+            *events::CHANNEL_OPENED_TOPIC,
+            B256::ZERO,
+            B256::ZERO,
+            B256::ZERO,
+        ];
         assert!(decode_any(
             addr(TASK_ADDR),
             addr(VAULT_ADDR),

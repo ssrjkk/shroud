@@ -4626,6 +4626,7 @@ dependencies = [
  "tfhe",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tonic",
  "tonic-prost",

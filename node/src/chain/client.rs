@@ -125,7 +125,8 @@ impl TaskOnChain {
     /// `finalizeEpoch` requires `block.timestamp >= epochDeadline + disputeWindow` unless the
     /// dispute quorum has already been reached, so this is the earliest block that can succeed.
     pub fn finalize_ready_at(&self) -> u64 {
-        self.epoch_deadline.saturating_add(self.dispute_window as u64)
+        self.epoch_deadline
+            .saturating_add(self.dispute_window as u64)
     }
 }
 
@@ -161,7 +162,10 @@ macro_rules! submit_tx {
             Some(limit) => builder.gas(limit),
             None => builder,
         };
-        let pending = builder.send().await.map_err(|e| Error::Alloy(format!("{e}")))?;
+        let pending = builder
+            .send()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
         let hash = *pending.tx_hash();
         let receipt = pending
             .get_receipt()
@@ -500,7 +504,11 @@ impl OrchestratorClient {
     /// nobody else has an incentive to, not because only it may.
     pub async fn finalize_epoch(&self, task_id: U256, epoch: u32) -> Result<B256> {
         let contract = ICipherTaskWrite::new(self.cipher_task, self.provider.clone());
-        let hash = submit_tx!(contract.finalizeEpoch(task_id, epoch), None, "finalizeEpoch");
+        let hash = submit_tx!(
+            contract.finalizeEpoch(task_id, epoch),
+            None,
+            "finalizeEpoch"
+        );
         info!(%task_id, epoch, %hash, "epoch finalized");
         Ok(hash)
     }
@@ -517,11 +525,7 @@ impl OrchestratorClient {
     /// limit. `settle` and `settleFrom` are the same loop; the cursor only bounds it.
     pub async fn settle_from(&self, task_id: U256, cursor: U256) -> Result<B256> {
         let contract = ICipherTaskWrite::new(self.cipher_task, self.provider.clone());
-        let hash = submit_tx!(
-            contract.settleFrom(task_id, cursor),
-            None,
-            "settleFrom"
-        );
+        let hash = submit_tx!(contract.settleFrom(task_id, cursor), None, "settleFrom");
         info!(%task_id, %cursor, %hash, "settle step accepted");
         Ok(hash)
     }
@@ -549,7 +553,7 @@ impl OrchestratorClient {
                 U256::from(slice_index),
                 amount,
                 SLICE_DEADLINE,
-                alloy::primitives::Bytes::from_slice(blob),
+                alloy::primitives::Bytes::copy_from_slice(blob),
             ),
             Some(self.redeem_gas),
             "redeem"
@@ -581,7 +585,11 @@ impl OrchestratorClient {
         let expected = before.remaining();
 
         let contract = IPaymentVault::new(self.vault, self.provider.clone());
-        let hash = submit_tx!(contract.reclaim(channel_id), Some(self.redeem_gas), "reclaim");
+        let hash = submit_tx!(
+            contract.reclaim(channel_id),
+            Some(self.redeem_gas),
+            "reclaim"
+        );
         info!(channel = %channel_id, reclaimed = expected, %hash, "channel reclaimed");
         Ok((hash, expected))
     }
@@ -967,10 +975,7 @@ mod tests {
         let id = U256::from(3);
         assert!(c.check_claim(id, id, 500, 10_000).is_ok());
         assert!(
-            matches!(
-                c.check_claim(id, id, 501, 10_000),
-                Err(Error::Chain(_))
-            ),
+            matches!(c.check_claim(id, id, 501, 10_000), Err(Error::Chain(_))),
             "the per-task claim cap must bite before the channel's own cap"
         );
         assert!(

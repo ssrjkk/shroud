@@ -255,7 +255,7 @@ pub mod events {
 
     macro_rules! topic_static {
         ($name:ident, $sig:expr) => {
-            #[doc = concat!("`topic(", $sig, ")`, computed once.")]
+            #[doc = concat!("`topic(", stringify!($sig), ")`, computed once.")]
             pub static $name: Lazy<B256> = Lazy::new(|| topic($sig));
         };
     }
@@ -325,13 +325,20 @@ pub mod events {
             assert_eq!(all.len(), TASK_EVENTS.len() + VAULT_EVENTS.len());
             all.sort();
             all.dedup();
-            assert_eq!(all.len(), WATCH.len(), "two signatures collide on keccak256");
+            assert_eq!(
+                all.len(),
+                WATCH.len(),
+                "two signatures collide on keccak256"
+            );
         }
 
         #[test]
         fn statics_agree_with_their_signature_strings() {
             assert_eq!(*TASK_SEALED_TOPIC, topic(TASK_SEALED));
-            assert_eq!(*NODE_REWARD_CHANNEL_OPENED_TOPIC, topic(NODE_REWARD_CHANNEL_OPENED));
+            assert_eq!(
+                *NODE_REWARD_CHANNEL_OPENED_TOPIC,
+                topic(NODE_REWARD_CHANNEL_OPENED)
+            );
             assert_eq!(*CHANNEL_RECLAIMED_TOPIC, topic(CHANNEL_RECLAIMED));
         }
     }

@@ -266,7 +266,7 @@ impl mesh_server::Mesh for MeshService {
         // concatenation itself.
         if range.complete && !req.expected_sha256.is_empty() {
             let got = Sha256::digest(&chunk);
-            if got.as_slice() != req.expected_sha256.as_slice() {
+            if got[..] != req.expected_sha256[..] {
                 // Refusing is the only safe answer: the local copy is corrupt, and serving it would
                 // hand the caller bytes that cannot reach the digest it asked for.
                 warn!(
@@ -351,7 +351,10 @@ fn epoch_answer(epoch: u32, seen: Option<&EpochState>) -> Ack {
         },
         Some(e) => Ack {
             ok: true,
-            reason: format!("{} node(s) have committed to epoch {epoch}", e.commits.len()),
+            reason: format!(
+                "{} node(s) have committed to epoch {epoch}",
+                e.commits.len()
+            ),
         },
     }
 }
@@ -381,7 +384,7 @@ async fn run_gossip(
 
         let rejection = match env.body {
             Some(Body::ShardAnnounce(announce)) => record_announce(&shared, &peer.label, announce),
-            Some(Body::TraceDigestAnnounce(trace)) => {
+            Some(Body::TraceDigest(trace)) => {
                 let reason = validate_trace(&peer.capabilities, &trace);
                 if reason.is_none() {
                     debug!(
@@ -525,7 +528,10 @@ fn record_announce(shared: &Shared, peer: &str, a: ShardAnnounce) -> Option<Stri
     if index.insert(cid, entry).is_some() {
         // Steady state once the cap is reached, so it stays out of the operator's log: the memory
         // is bounded, which is all the cap was ever for.
-        debug!(cid = format!("{cid:#x}"), "shard index full; dropped the oldest announcement");
+        debug!(
+            cid = format!("{cid:#x}"),
+            "shard index full; dropped the oldest announcement"
+        );
     }
     None
 }
@@ -537,11 +543,16 @@ fn validate_trace(capabilities: &[String], trace: &TraceDigestAnnounce) -> Optio
         return Some(expected);
     }
     if parse_id(&trace.task_id).is_none() {
-        return Some(format!("task_id {:?} is not a decimal uint256", trace.task_id));
+        return Some(format!(
+            "task_id {:?} is not a decimal uint256",
+            trace.task_id
+        ));
     }
     if trace.trace_digest.len() != DIGEST_BYTES {
         let got = trace.trace_digest.len();
-        return Some(format!("trace_digest must be {DIGEST_BYTES} bytes, got {got}"));
+        return Some(format!(
+            "trace_digest must be {DIGEST_BYTES} bytes, got {got}"
+        ));
     }
     None
 }
@@ -671,7 +682,9 @@ pub async fn serve(
         let tls = ServerTlsConfig::new()
             .identity(read_identity(cert, key)?)
             .client_ca_root(read_certificate(ca)?);
-        builder = builder.tls_config(tls).map_err(|e| listen_error(&cfg, &e))?;
+        builder = builder
+            .tls_config(tls)
+            .map_err(|e| listen_error(&cfg, &e))?;
         info!(addr = %cfg.mesh.listen, "peer mesh listening with mTLS");
     } else {
         warn!(
@@ -811,7 +824,10 @@ mod tests {
     #[test]
     fn a_matching_hello_is_labelled_by_its_node_id() {
         let hello = hello(vec![0xab; 20], "31338");
-        assert_eq!(validate_hello(&hello, 31_338).expect("accepts"), "ab".repeat(20));
+        assert_eq!(
+            validate_hello(&hello, 31_338).expect("accepts"),
+            "ab".repeat(20)
+        );
     }
 
     #[test]
@@ -827,12 +843,10 @@ mod tests {
     fn an_announcement_is_foundable_by_cid() {
         let shared = shared(16);
         assert!(record_announce(&shared, PEER, announce()).is_none());
-        let got = shared
-            .index
-            .lock()
-            .unwrap_or_else(poisoned)
-            .get(cid(1))
-            .expect("indexed");
+        // The guard has to outlive the lookup: binding the two together would drop the lock at
+        // the end of the statement and leave `got` pointing into a released mutex.
+        let index = shared.index.lock().unwrap_or_else(poisoned);
+        let got = index.get(cid(1)).expect("indexed");
         assert_eq!(got.task_id, U256::from(7));
         assert_eq!(got.ct_digest, cid(2));
         assert_eq!(got.peer, PEER);
@@ -882,7 +896,7 @@ mod tests {
             proof: Vec::new(),
         };
         let err = validate_trace(&["range-fetch".to_string()], &trace)
-            .expect_err("no re-execution capability");
+            .expect("no re-execution capability");
         assert!(err.contains(CAPABILITY_REEXECUTION), "{err}");
         let caps = vec![CAPABILITY_REEXECUTION.to_string()];
         assert!(validate_trace(&caps, &trace).is_none());
@@ -898,7 +912,7 @@ mod tests {
             observed_at: 1,
             proof: Vec::new(),
         };
-        let err = validate_trace(&caps, &trace).expect_err("short digest");
+        let err = validate_trace(&caps, &trace).expect("short digest");
         assert!(err.contains("trace_digest must be 32 bytes"), "{err}");
     }
 
@@ -923,13 +937,27 @@ mod tests {
     #[test]
     fn a_zero_length_means_up_to_one_chunk() {
         let range = plan_range(10 << 20, 0, 0, 4 << 20, 8 << 30).expect("plans");
-        assert_eq!(range, Range { start: 0, len: 4 << 20, complete: false });
+        assert_eq!(
+            range,
+            Range {
+                start: 0,
+                len: 4 << 20,
+                complete: false
+            }
+        );
     }
 
     #[test]
     fn the_last_chunk_of_an_object_reports_complete() {
         let range = plan_range(10, 8, 100, 4 << 20, 8 << 30).expect("clamps");
-        assert_eq!(range, Range { start: 8, len: 2, complete: true });
+        assert_eq!(
+            range,
+            Range {
+                start: 8,
+                len: 2,
+                complete: true
+            }
+        );
     }
 
     #[test]
@@ -994,7 +1022,10 @@ mod tests {
             .fetch_shard(request(0, 16, cid(1), Vec::new()))
             .await
             .expect_err("still not in the store");
-        assert!(hint.message().contains(PEER), "the message names the peer: {hint}");
+        assert!(
+            hint.message().contains(PEER),
+            "the message names the peer: {hint}"
+        );
     }
 
     #[tokio::test]

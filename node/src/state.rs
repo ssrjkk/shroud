@@ -438,33 +438,35 @@ impl NodeState {
             } => {
                 let t = g.tasks.entry(*task_id).or_default();
                 t.task_id = *task_id;
-                if t.ct_root != B256::ZERO && t.ct_root != *ct_root {
-                    g.tainted = true;
-                    warn!(task = %task_id, "ctRoot changed for an already-seen task; state is tainted");
-                }
+                // Both cross-checks only *decide* whether to taint here. The flag itself is
+                // written at the end of the arm: `t` borrows `g.tasks`, and writing `g.tainted`
+                // while that borrow is still live is a second mutable borrow of the same guard.
+                let root_changed = t.ct_root != B256::ZERO && t.ct_root != *ct_root;
+                let derived = t.derived_ct_root();
+                let derived_mismatch = derived.is_some_and(|d| d != *ct_root);
                 t.ct_root = *ct_root;
                 t.shards = *shards;
                 t.contributors = *contributors;
                 t.status = TaskStatus::Sealed;
 
-                // Cross-check the seal against the contributions we saw. This is the only place
-                // the node can catch a wrong `ctRoot` before it executes against it.
-                if let Some(derived) = t.derived_ct_root() {
-                    if derived != *ct_root {
-                        g.tainted = true;
-                        warn!(
-                            task = %task_id,
-                            on_chain = %ct_root,
-                            derived = %derived,
-                            "our ctRoot does not match the chain; state is tainted"
-                        );
-                    }
-                }
                 // The seal is the last moment registration is still early: `registerNode` is
                 // documented as "once per task before the first epoch opens", and until it lands
                 // the node can neither commit nor dispute anything on this task.
                 if !t.registered {
                     work.push(Work::Register { task_id: *task_id });
+                }
+                if root_changed {
+                    g.tainted = true;
+                    warn!(task = %task_id, "ctRoot changed for an already-seen task; state is tainted");
+                }
+                if let Some(derived) = derived.filter(|_| derived_mismatch) {
+                    g.tainted = true;
+                    warn!(
+                        task = %task_id,
+                        on_chain = %ct_root,
+                        derived = %derived,
+                        "our ctRoot does not match the chain; state is tainted"
+                    );
                 }
             }
             ChainEvent::EpochOpened {
@@ -588,7 +590,11 @@ impl NodeState {
                 let Some(t) = g.tasks.get_mut(task_id) else {
                     return work;
                 };
-                let Some(c) = t.epochs.get_mut(epoch).and_then(|e| e.commits.get_mut(node)) else {
+                let Some(c) = t
+                    .epochs
+                    .get_mut(epoch)
+                    .and_then(|e| e.commits.get_mut(node))
+                else {
                     // Normal, not exceptional: inside `commitEpoch` the `EpochVerified` log is
                     // emitted before `EpochCommitted`, so in the same transaction the verifier's
                     // statement always arrives first. The commit arm records `verified = true` for
@@ -597,6 +603,10 @@ impl NodeState {
                     return work;
                 };
                 c.verified = *ok;
+                // Copy the digest out of the commit before anything else borrows the epoch: the
+                // lookup below takes `t.epochs` immutably, and the mutable borrow that produced
+                // `c` is still live as long as `c` is used.
+                let our_digest = c.trace_digest;
 
                 let Some(me) = me else { return work };
                 if *node != me || !*ok {
@@ -606,11 +616,11 @@ impl NodeState {
                 // the contract will accept a report of our own digest.
                 let e = t.epochs.get(epoch).expect("epoch exists");
                 if let Some(claimed) = e.claimed_digest() {
-                    if claimed != c.trace_digest {
+                    if claimed != our_digest {
                         work.push(Work::FileDispute {
                             task_id: *task_id,
                             epoch: *epoch,
-                            our_digest: c.trace_digest,
+                            our_digest,
                         });
                     }
                 }
@@ -1026,10 +1036,15 @@ mod tests {
         sealed(&s, 1);
         assert_eq!(
             s.take_work(),
-            vec![Work::Register { task_id: U256::from(1) }],
+            vec![Work::Register {
+                task_id: U256::from(1)
+            }],
             "the seal is the last moment `registerNode` is early"
         );
-        assert!(s.take_work().is_empty(), "the queued nudge is consumed by the drain");
+        assert!(
+            s.take_work().is_empty(),
+            "the queued nudge is consumed by the drain"
+        );
         assert_eq!(s.task(U256::from(1)).unwrap().status, TaskStatus::Sealed);
     }
 
@@ -1057,7 +1072,12 @@ mod tests {
         sealed(&s, 3);
         s.take_work();
         opened(&s, 3, 0);
-        assert_eq!(s.take_work(), vec![Work::Register { task_id: U256::from(3) }]);
+        assert_eq!(
+            s.take_work(),
+            vec![Work::Register {
+                task_id: U256::from(3)
+            }]
+        );
         s.mark_registered(U256::from(3), true);
         opened(&s, 3, 1);
         assert_eq!(
@@ -1079,7 +1099,10 @@ mod tests {
         assert!(work.is_empty(), "a duplicate commit must not produce work");
         let t = s.task(U256::from(4)).unwrap();
         assert_eq!(t.epoch(0).unwrap().commits.len(), 1);
-        assert_eq!(t.epoch(0).unwrap().commits[&OTHER].trace_digest, B256::repeat_byte(0xaa));
+        assert_eq!(
+            t.epoch(0).unwrap().commits[&OTHER].trace_digest,
+            B256::repeat_byte(0xaa)
+        );
         assert!(s.is_tainted(), "contradictory commits must taint the state");
     }
 
@@ -1128,9 +1151,7 @@ mod tests {
         // would revert with DisputeWithoutVerifiedCommit.
         let work = committed(&s, 7, 0, OTHER, 0xbb);
         assert!(
-            !work
-                .iter()
-                .any(|w| matches!(w, Work::FileDispute { .. })),
+            !work.iter().any(|w| matches!(w, Work::FileDispute { .. })),
             "an unverified commit cannot dispute: {work:?}"
         );
         // Verification lands.
@@ -1167,7 +1188,10 @@ mod tests {
             node: NODE,
             ok: true,
         });
-        assert!(work.is_empty(), "agreeing with the claim must not file: {work:?}");
+        assert!(
+            work.is_empty(),
+            "agreeing with the claim must not file: {work:?}"
+        );
     }
 
     #[test]
@@ -1185,7 +1209,10 @@ mod tests {
             node: NODE,
             ok: false,
         });
-        assert!(work.is_empty(), "a proof the verifier rejected cannot back a dispute");
+        assert!(
+            work.is_empty(),
+            "a proof the verifier rejected cannot back a dispute"
+        );
         assert!(!s.task(U256::from(9)).unwrap().epoch(0).unwrap().commits[&NODE].verified);
     }
 
@@ -1212,8 +1239,16 @@ mod tests {
             node: OTHER,
             amount: 100,
         };
-        assert_eq!(s.apply(&ev), vec![Work::Settle { task_id: U256::from(11) }]);
-        assert!(s.apply(&ev).is_empty(), "replaying the log must not queue it twice");
+        assert_eq!(
+            s.apply(&ev),
+            vec![Work::Settle {
+                task_id: U256::from(11)
+            }]
+        );
+        assert!(
+            s.apply(&ev).is_empty(),
+            "replaying the log must not queue it twice"
+        );
     }
 
     #[test]
@@ -1239,7 +1274,12 @@ mod tests {
             max_cumulative: 1_000,
             unlock_at: 100,
         });
-        assert_eq!(work, vec![Work::Redeem { channel_id: U256::from(2) }]);
+        assert_eq!(
+            work,
+            vec![Work::Redeem {
+                channel_id: U256::from(2)
+            }]
+        );
     }
 
     #[test]
@@ -1263,7 +1303,12 @@ mod tests {
         });
         assert_eq!(
             work,
-            vec![Work::Claim, Work::Reclaim { channel_id: U256::from(3) }]
+            vec![
+                Work::Claim,
+                Work::Reclaim {
+                    channel_id: U256::from(3)
+                }
+            ]
         );
         assert_eq!(s.channel(U256::from(3)).unwrap().consumed, 1);
         assert_eq!(s.channel(U256::from(3)).unwrap().remaining(), 0);
@@ -1311,7 +1356,10 @@ mod tests {
             amount: 1_000,
             slice_index: 0,
         });
-        assert!(work.is_empty(), "another node's payout is not ours to claim: {work:?}");
+        assert!(
+            work.is_empty(),
+            "another node's payout is not ours to claim: {work:?}"
+        );
     }
 
     #[test]
@@ -1338,7 +1386,10 @@ mod tests {
             node: NODE,
             amount: 0,
         });
-        assert!(work.is_empty(), "nothing was pushed, so there is nothing to claim: {work:?}");
+        assert!(
+            work.is_empty(),
+            "nothing was pushed, so there is nothing to claim: {work:?}"
+        );
     }
 
     #[test]
@@ -1393,7 +1444,11 @@ mod tests {
         });
         let c = s.channel(U256::from(6)).unwrap();
         assert!(c.closed);
-        assert_eq!(c.remaining(), 1_000, "a reclaim does not erase the authorisation");
+        assert_eq!(
+            c.remaining(),
+            1_000,
+            "a reclaim does not erase the authorisation"
+        );
     }
 
     #[test]

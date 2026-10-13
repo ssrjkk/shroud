@@ -76,8 +76,8 @@ pub fn decode(blob: &[u8]) -> Option<Slice> {
     }
     Some(Slice {
         channel_id: U256::from_be_slice(&blob[0..32]),
-        index: u64::from_be_slice(&blob[56..64]),
-        amount: u128::from_be_slice(&blob[80..96]),
+        index: u64::from_be_bytes(blob[56..64].try_into().ok()?),
+        amount: u128::from_be_bytes(blob[80..96].try_into().ok()?),
     })
 }
 

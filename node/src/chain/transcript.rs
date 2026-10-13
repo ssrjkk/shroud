@@ -162,7 +162,11 @@ mod tests {
     #[test]
     fn every_public_input_changes_the_transcript() {
         let task: Address = TASK_ADDRESS.parse().expect("address");
-        let (ct, w, tr) = (B256::repeat_byte(1), B256::repeat_byte(2), B256::repeat_byte(3));
+        let (ct, w, tr) = (
+            B256::repeat_byte(1),
+            B256::repeat_byte(2),
+            B256::repeat_byte(3),
+        );
         let base = || proof_transcript(CHAIN_ID, task, U256::from(1), 0, ct, w, tr);
         let mut seen = vec![base()];
         for (chain_id, task_id, epoch, root, weights, trace) in [
@@ -174,7 +178,11 @@ mod tests {
             (CHAIN_ID, U256::from(1), 0, ct, w, B256::repeat_byte(9)),
         ] {
             let got = proof_transcript(chain_id, task, task_id, epoch, root, weights, trace);
-            assert_ne!(got, base(), "a changed public input must change the transcript");
+            assert_ne!(
+                got,
+                base(),
+                "a changed public input must change the transcript"
+            );
             seen.push(got);
         }
         let before = seen.len();
@@ -190,8 +198,24 @@ mod tests {
             .parse()
             .expect("address");
         assert_ne!(
-            proof_transcript(CHAIN_ID, addr, U256::from(1), 0, B256::ZERO, B256::ZERO, B256::ZERO),
-            proof_transcript(CHAIN_ID, other, U256::from(1), 0, B256::ZERO, B256::ZERO, B256::ZERO),
+            proof_transcript(
+                CHAIN_ID,
+                addr,
+                U256::from(1),
+                0,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO
+            ),
+            proof_transcript(
+                CHAIN_ID,
+                other,
+                U256::from(1),
+                0,
+                B256::ZERO,
+                B256::ZERO,
+                B256::ZERO
+            ),
         );
     }
 }

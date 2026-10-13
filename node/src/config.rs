@@ -817,8 +817,7 @@ mod tests {
         cfg.contracts.network_params = Address::ZERO;
         assert!(
             matches!(
-                cfg.validate()
-                    .expect_err("the pin has no contract to read"),
+                cfg.validate().expect_err("the pin has no contract to read"),
                 Error::Config(ConfigError::Missing("contracts.network_params"))
             ),
             "the pin needs an address"
@@ -924,6 +923,7 @@ mod tests {
         // Unset is legal: the node simply refuses to register, which the worker reports.
         let cfg = base();
         assert_eq!(cfg.node.bls_pub_key, None);
-        cfg.validate().expect("a node without a BLS key may still start");
+        cfg.validate()
+            .expect("a node without a BLS key may still start");
     }
 }

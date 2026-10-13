@@ -88,7 +88,10 @@ async fn run() -> Result<()> {
     if state.restore_snapshot(&cfg.node.data_dir).await? {
         info!("hydrated the derived fold from a snapshot");
         if let Some(cp) = state.last_checkpoint() {
-            info!(block = cp.last_scanned, "resuming the watcher at the snapshot's checkpoint");
+            info!(
+                block = cp.last_scanned,
+                "resuming the watcher at the snapshot's checkpoint"
+            );
             watcher.restore(&cp, cfg.chain.chain_id).await?;
         }
     } else {
@@ -175,7 +178,10 @@ async fn finish(name: &'static str, task: JoinHandle<Result<()>>) {
         Ok(Ok(Ok(()))) => info!(stage = name, "stopped cleanly"),
         Ok(Ok(Err(e))) => error!(stage = name, error = %e, "stopped with an error"),
         Ok(Err(e)) => error!(stage = name, error = %e, "task panicked"),
-        Err(_) => warn!(stage = name, "did not stop within the grace period; exiting anyway"),
+        Err(_) => warn!(
+            stage = name,
+            "did not stop within the grace period; exiting anyway"
+        ),
     }
 }
 
