@@ -59,6 +59,15 @@ library SettlementLib {
     event Withdrawn(uint256 indexed taskId, address indexed who, uint128 amount);
     event SettleProgress(uint256 indexed taskId, uint256 paidUpTo, uint256 total);
     event EscrowSettled(uint256 indexed taskId, uint128 contributorsPool, uint128 committeePool, uint128 refunded);
+    event NodeRewardChannelOpened(
+        uint256 indexed taskId,
+        uint32 indexed epoch,
+        address indexed node,
+        uint256 channelId,
+        uint128 maxCumulative,
+        uint64 unlockAt,
+        uint128 firstSlice
+    );
 
     /// @notice Pay contributor pages `[cursor, cursor + PAGE_SIZE)` and, on the last page, the dust,
     ///         committee and buyer legs.
@@ -161,6 +170,66 @@ library SettlementLib {
 
         emit EscrowSettled(taskId, userPool, committeePool, uint128(finalBalance));
         return Outcome(true, userPool, committeePool, uint128(finalBalance));
+    }
+
+    /// @notice Pay the nodes that re-executed and disagreed with the claimed digest.
+    ///
+    ///      The docstring on `finalizeEpoch` promises reporters are paid out of the disputed
+    ///      lock; without this they would spend real gas and re-execution compute for nothing,
+    ///      and the only rational strategy would be to accept every claim unchallenged. The
+    ///      bounty is `reexecutionBps` of the lock split equally, with the division remainder to
+    ///      the first reporter so the whole bounty is always paid out and nothing is stranded in
+    ///      the sub-balance. The remainder of the lock is *not* paid here: it stays in the task
+    ///      sub-balance and is refunded to the buyer at settlement.
+    ///
+    /// @dev Lives here rather than in the host for the same reason `payPage` does: the host
+    ///      contract must stay inside the 24,576-byte deployment limit, and only `external`
+    ///      library calls move bytes out. The bounty channels must not overwrite the epoch's
+    ///      headline channel (`_epochChannel` stays the winner's own): reporter channels are
+    ///      opened without recording them, exactly as the host's `_openChannel` does for the
+    ///      abort-retention path. The guards deciding *whether* a quorum was reached stay with
+    ///      the host in `finalizeEpoch`.
+    function payReporters(
+        PaymentVault vault,
+        uint256 taskId,
+        uint32 epoch,
+        address[] storage reporters,
+        uint16 reexecutionBps,
+        uint128 lock,
+        uint64 unlockAt,
+        mapping(uint256 => mapping(uint256 => uint128)) storage authorizedSlice
+    ) external {
+        uint256 n = reporters.length;
+        if (n == 0 || lock == 0) return;
+        uint128 bounty = (uint128(lock) * reexecutionBps) / TaskParamsLib.BPS;
+        if (bounty == 0) return;
+        uint128 each = bounty / uint128(uint256(n));
+        if (each == 0) return;
+        uint128 total = each * uint128(uint256(n));
+        for (uint256 i = 0; i < n; ++i) {
+            openReporterChannel(vault, taskId, epoch, reporters[i], each, unlockAt, authorizedSlice);
+        }
+        if (total < bounty) {
+            openReporterChannel(vault, taskId, epoch, reporters[0], bounty - total, unlockAt, authorizedSlice);
+        }
+    }
+
+    /// @dev Reporter channels mirror the host's `_openChannel` without the headline write: the
+    ///      vault call, the slice authorisation and the event are identical, only the
+    ///      `_epochChannel` slot (the winner's) is left alone.
+    function openReporterChannel(
+        PaymentVault vault,
+        uint256 taskId,
+        uint32 epoch,
+        address node,
+        uint128 reward,
+        uint64 unlockAt,
+        mapping(uint256 => mapping(uint256 => uint128)) storage authorizedSlice
+    ) private {
+        if (reward == 0) return;
+        uint256 channelId = vault.openTaskChannel(taskId, node, reward, unlockAt);
+        authorizedSlice[channelId][0] = reward;
+        emit NodeRewardChannelOpened(taskId, epoch, node, channelId, reward, unlockAt, reward);
     }
 
     /// @notice Credit the buyer the escrow belonging to epochs that will never run.
