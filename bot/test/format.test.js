@@ -179,6 +179,7 @@ test("renderDispute covers every event the bot subscribes to", () => {
     ["EpochVerified", { taskId: 1n, epoch: 2n, node: ZERO20, ok: false }, "Epoch rejected"],
     ["TaskSettled", { taskId: 1n, userPool: 1n, nodePool: 2n, treasury: 0n }, "Task settled"],
     ["TaskStatusChanged", { taskId: 1n, from: 3, to: 9 }, "Status changed"],
+    ["NodeBondSlashed", { taskId: 1n, epoch: 2n, node: ZERO20, amount: 10000000n }, "Bond slashed"],
   ];
   for (const [name, args, expected] of cases) {
     const out = renderDispute({ name, args, blockNumber: 7, txHash: ZERO32 });

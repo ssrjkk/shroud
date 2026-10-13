@@ -244,6 +244,16 @@ export function renderDispute(ev) {
           `${htmlEscape(taskStatusName(Number(a.from)))} → ${htmlEscape(taskStatusName(Number(a.to)))}` +
           tail
       );
+    case "NodeBondSlashed":
+      return (
+        `${BAD} <b>Bond slashed</b>\n\n` +
+        `task ${mono(shortId(a.taskId))} — epoch ${mono(a.epoch)}\n` +
+        `node ${mono(shortAddr(a.node))}\n` +
+        `amount ${mono(a.amount.toString())}\n\n` +
+        `The dispute quorum rejected this epoch and the winner's registration bond went to the ` +
+        `buyer refund. Reporters keep theirs.` +
+        tail
+      );
     default:
       return null;
   }

@@ -32,7 +32,8 @@ services:
       test: ["CMD", "node", "/healthcheck.mjs"]
       interval: 5s
       timeout: 5s
-      retries: 20
+      # Cold deploy (compile + libraries + contracts) takes minutes; the check itself is cheap.
+      retries: 60
 
   shardstore:
     image: node:20-alpine
@@ -70,19 +71,25 @@ services:
       CM_TASK_ADDRESS: ""
       CM_VAULT_ADDRESS: ""
       CM_LOG: info
-    depends_on: [devnet]
+    depends_on:
+      devnet:
+        condition: service_healthy
     ports: ["7331:7331"]
 
   node-b:
     image: shroud-node:dev
     environment: *nodeenv
-    depends_on: [devnet]
+    depends_on:
+      devnet:
+        condition: service_healthy
     ports: ["7332:7331"]
 
   node-c:
     image: shroud-node:dev
     environment: *nodeenv
-    depends_on: [devnet]
+    depends_on:
+      devnet:
+        condition: service_healthy
     ports: ["7333:7331"]
 
 volumes:

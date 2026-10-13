@@ -362,6 +362,20 @@ export class ChainReader {
         // Not every build emits every event; absence is not an error.
       }
     }
+    // `NodeBondSlashed` is emitted by the vault, not the orchestrator: same topic the
+    // interface declares, different emitting address, so it needs its own query.
+    try {
+      const logs = await this.#queryLogs(
+        this.#ifaces.paymentVault,
+        "NodeBondSlashed",
+        this.#config.paymentVault,
+        fromBlock,
+        toBlock
+      );
+      out.push(...this.#decode(this.#ifaces.paymentVault, "NodeBondSlashed", logs));
+    } catch {
+      // Not every build emits every event; absence is not an error.
+    }
     return out.sort((a, b) => (a.blockNumber ?? 0) - (b.blockNumber ?? 0));
   }
 
