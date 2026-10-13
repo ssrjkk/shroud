@@ -116,7 +116,7 @@ sequenceDiagram
         CN1->>CN1: 16. ZK-STARK prove (Winterfell, ~2^20 trace)
         CN1->>DA: 17. PUT encWeights_{e+1} + proof + metrics
         CN1->>C: 18. commitEpoch{taskId, e, proof, encWeightsCid}
-        C->>C: 19. verify(publicInputs = (chainId, task, e, ctRoot, wDigest, nodeId))
+        C->>C: 19. verify(publicInputs = (chainId, this, task, e, ctRoot, wDigest, traceDigest))
         alt proof valid
             C->>C: 20. settle slice to node; open payment channel
             C-->>CN2: 21. EpochCommitted → honest-bond state advanced
@@ -324,7 +324,7 @@ Every transition emits an event; the Rust watcher is purely **reorg-safe and ide
 | `encWeights_e` | DA | 33 × 2 KB | per-epoch weight vector |
 | `proof` (STARK) | on chain (calldata) | ≤ 48 KB for 2^20 trace | must be verified in the EVM |
 | `ciphertextCid` | on chain | 32 B | pins the DA object |
-| `ctRoot` (Merkle over shard CIDs) | on chain | 32 B | single source of truth for the STARK public input |
+| `ctRoot` (hash chain over shard CIDs) | on chain | 32 B | single source of truth for the STARK public input |
 | `einput` `encState` | on chain (fhEVM) | — | encrypted accumulator for cross-node aggregation without reveal |
 | `euint32` `liveEpoch`, `sealFlag` | on chain (fhEVM) | — | encrypted orchestration state |
 
@@ -378,7 +378,7 @@ exactness and a tractable ZK trace.
 |---|---|---|---|
 | A1 | User uploads garbage / poison rows to drain escrow | Groth16 membership proof binds `rowCommitment` computed over a *shape Merkle root* published by the buyer; deposit + slashing on fraud quorum | `CipherTask._verifyContributionProof` |
 | A2 | Node returns a STARK for a different dataset | Public input includes `ctRoot`, `epoch`, `chainId`, `address(this)`; domain-separated transcript | `StarkVerifier` |
-| A3 | Node returns weights fitted on *some other* ciphertext set but not this one | Hash-chain in the AIR over per-shard ciphertext digests, ordered by `ctRoot` preimage path | `PoCCircuit` |
+| A3 | Node returns weights fitted on *some other* ciphertext set but not this one | Hash-chain in the AIR over per-shard ciphertext digests, folded in `leafIndex` order up to `ctRoot` | `PoCCircuit` |
 | A4 | Node lies about progress to farm micro-payments | Payment channel slices are only signed for epochs already `EPOCH_SETTLED`; contract settles before signing | `PaymentVault` |
 | A5 | Committee collusion (< t members) decrypts user rows | Shamir t-of-n; **partial decryptions are contract-restricted to output CIDs registered by a settled task** — you cannot ask the committee to decrypt a user shard at all | `DecryptionGate` |
 | A6 | Committee collusion (≥ t) decrypts user rows | Structurally possible; mitigated by (a) BLS-gated requests only for settled tasks, (b) public audit log, (c) economic bond slashing. **This is the documented residual trust assumption** | `docs/04-threat-model.md §5` |

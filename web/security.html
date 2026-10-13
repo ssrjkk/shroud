@@ -66,7 +66,7 @@
 
       <article class="row bad">
         <div class="row-h"><span class="pill pill-bad">not enforced</span><h3>Participants cannot detect a substituted FHE public key</h3></div>
-        <p><code>NetworkParams</code> pins the key correctly on chain, but nothing reads it. The SDK has no reference to <code>s_pub</code>, and the node's <code>enforce_key_pin</code> flag is dead code. A malicious sequencer can swap the key and harvest ciphertexts undetectably. The on-chain history does allow forensic detection afterwards.</p>
+        <p><code>NetworkParams</code> pins the key correctly on chain, but nothing reads it by default. The SDK refuses to upload only when the caller passes <code>networkParams</code> + <code>fhePublicKeyHash</code>, and the node's <code>enforce_key_pin</code> startup check is opt-in — off unless an operator turns it on, and even then it runs once at boot. A malicious sequencer can swap the key and harvest ciphertexts undetectably. The on-chain history does allow forensic detection afterwards.</p>
         <p class="ref">Threat model F-08</p>
       </article>
 

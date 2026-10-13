@@ -17,7 +17,7 @@ name = "shroud-node"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.94.1"
-description = "Shroud compute node: FHE epoch execution, ZK proof of compute, streaming payouts"
+description = "Shroud compute node: folds chain state, finalizes/settles/disputes epochs and redeems streaming payouts. No FHE engine or STARK prover is compiled in."
 license = "MIT"
 repository = "https://github.com/ssrjkk/shroud"
 
@@ -31,8 +31,12 @@ path = "src/main.rs"
 
 [dependencies]
 # --- async runtime / RPC -------------------------------------------------------------
-tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs"] }
+tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs", "io-util"] }
 tokio-util = { version = "0.7", features = ["compat"] }
+# `ReceiverStream`, which is the shape a tonic server-streaming response has to be, is behind
+# tokio-stream's `sync` feature. tonic itself depends on tokio-stream with `default-features =
+# false`, so asking through `tonic::codegen` is not enough — the feature has to be requested here.
+tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
 futures-util = "0.3"
 
@@ -73,12 +77,18 @@ tonic-prost = "0.14"
 # `shortint` gives the raw short-integer primitives (the production CPU path).
 # `integer` gives the high-level `FheUint32`-style API the optimiser is written against.
 # `avx512` is the default and is a large win, but it is opt-out on non-x86 targets.
-tfhe = { version = "1.8", default-features = false, features = ["shortint", "integer", "avx512"] }
+#
+# Optional and off by default: no code path imports `tfhe` yet, because the FHE engine is not
+# implemented (see the `worker` module docs). It stays declared here so the eventual engine has
+# its dependency pinned, without every ordinary node build paying the multi-minute `tfhe` compile.
+tfhe = { version = "1.8", default-features = false, features = ["shortint", "integer", "avx512"], optional = true }
 
 # --- ZK -------------------------------------------------------------------------------
 # winterfell 0.13 features: `std` (default), `concurrent`, `async`. There is no `nightly`.
-winterfell = { version = "0.13", default-features = false, features = ["std", "concurrent"] }
-winter-utils = "0.13"
+# Optional for the same reason as `tfhe`: the AIR and prover are not implemented, so nothing
+# imports winterfell in a default build.
+winterfell = { version = "0.13", default-features = false, features = ["std", "concurrent"], optional = true }
+winter_utils = { package = "winter-utils", version = "0.13", optional = true }
 rand_chacha = "0.3"
 sha3 = "0.10"
 sha2 = "0.10"
@@ -97,7 +107,10 @@ bytes = "1.7"
 # in a C dependency (aws-lc-rs by default, or `ring`), so a real `cargo build` needs MSVC build
 # tools or clang; `cargo check` does not.
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "http2", "rustls", "webpki-roots", "system-proxy"] }
-object_store = { version = "0.14", default-features = false, features = ["aws", "gcp", "http"] }
+# Remote content-addressed fetch (`file://`, `s3://`, `gs://`, `https://`) is not implemented: the
+# mesh server serves only the local `shard.cache_dir` through the filesystem, so nothing imports
+# `object_store` in a default build. Declared but optional until remote DA lands.
+object_store = { version = "0.14", default-features = false, features = ["aws", "gcp", "http"], optional = true }
 url = "2.5"
 
 # --- config / observability ------------------------------------------------------------
@@ -128,13 +141,21 @@ tempfile = "3.13"
 tokio = { version = "1.41", features = ["rt-multi-thread", "macros", "test-util"] }
 
 [features]
-default = ["grpc-server", "prover"]
+# A default node observes the chain, folds it, and runs the finalize/settle/dispute/payment path
+# with the peer mesh up. The compute and remote-DA stacks are opt-in because they are not
+# implemented yet (see the `worker` and `mesh::server` module docs).
+default = ["grpc-server"]
 # Serve the gRPC peer mesh. A stateless worker that only talks to the sequencer can turn this
 # off; `build.rs` still runs but the server module is not compiled in.
 grpc-server = []
-# Build the ZK proof of compute. Turn this off on bandwidth-constrained re-executor nodes that
-# only re-derive digests for the dispute window.
-prover = []
+# Reserve the FHE execution + STARK proving dependency stack. Nothing in this crate imports it
+# until the engine and AIR land; enabling it only pulls the declared crates so they still resolve
+# and compile, so a `--all-features` CI run keeps them from rotting rather than building code
+# paths that use them.
+prover = ["dep:tfhe", "dep:winterfell", "dep:winter_utils"]
+# Reserve the remote content-addressed DA stack (`object_store`). Off by default because the node
+# currently serves and reads shards only from its local `shard.cache_dir`.
+da = ["dep:object_store"]
 
 [profile.release]
 opt-level = 3

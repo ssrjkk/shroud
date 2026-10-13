@@ -58,8 +58,8 @@ several parts are stubbed and are called out there explicitly.
 
 | path | what |
 |------|------|
-| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (69 tests) |
-| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, hardened DA client, on-chain key-pin check (20 tests) |
+| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (96 tests incl. the byte-layout vectors) |
+| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, hardened DA client, on-chain key-pin check (32 tests) |
 | `node/` | Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE) — compiles clean; see the note below |
 | `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (22 tests) |
 | `web/` | Project site — landing page and the full honest security posture |
@@ -71,11 +71,11 @@ several parts are stubbed and are called out there explicitly.
 ```sh
 # contracts — the only fully working path
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 69 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 96 passing
 
 # sdk
 cd packages/sdk
-npm ci && npm test                                                       # 20 passing
+npm ci && npm test                                                       # 32 passing
 
 # ops bot (no token and no chain needed for the tests)
 cd bot
@@ -138,7 +138,7 @@ What is actually enforced on chain today, and what is not:
 | The winner's digest is the dispute target | **Enforced.** A losing committer cannot redirect the dispute and get an honest epoch rejected for free. |
 | Re-executors are paid, so disputing is rational | **Enforced.** `reexecutionBps` of the disputed lock is split between the reporters. |
 | `Disclosed` means the committee decrypted the output | **Enforced.** `withdraw` requires the gate to have reached threshold. |
-| A substituted FHE public key is detected before upload | **Enforced in the SDK, not in the node.** Pass `networkParams` + `fhePublicKeyHash` and `uploadAndMonetize` refuses on `isCurrentKey === false`. The node's `enforce_key_pin` flag is still dead code. |
+| A substituted FHE public key is detected before upload | **Enforced in the SDK when configured.** Pass `networkParams` + `fhePublicKeyHash` and `uploadAndMonetize` refuses on `isCurrentKey === false`. The node's twin, `enforce_key_pin` (with `fhe.public_key_hash`), compares the on-chain key hash at startup — but it is off by default. |
 | The SDK cannot upload cleartext by omission | **Enforced.** `Encryptor.providesConfidentiality` is required, and the `NoopEncryptor` default is refused unless `allowUnencrypted` is set. |
 | The SDK checks the chain it signs against | **Enforced.** A configured `chainId` that disagrees with the provider is a hard error. |
 | The DA client treats CIDs and responses as hostile | **Enforced.** CIDs are validated before entering a request path (they come from on-chain data any contributor controls), responses are size-capped, timed out, and the store's address and digest are never trusted — `getVerified` re-hashes the bytes with keccak256 against the on-chain `ctDigest`. |
@@ -149,7 +149,7 @@ What is actually enforced on chain today, and what is not:
 | A slashable contribution bond deters fake rows | **NOT implemented.** `contributionBond` does not exist anywhere in the tree. Sybil farming is mitigated only by `sqrt(rows)` weighting plus one-shard-per-address. F-01 in the threat model previously claimed otherwise and has been corrected. |
 | The chain fully verifies the STARK | **NOT implemented.** Verification is sampled on chain and completed off-chain. See §3 of the limitations doc. |
 | Committee majority cannot decrypt user rows | **NOT mitigated, by design.** Documented as residual F-10. |
-| Participants detect a substituted FHE public key | **NOT enforced.** `NetworkParams` pins the key correctly on chain, but nothing reads it: the SDK has no reference to `s_pub`, and the node's `enforce_key_pin` flag is never used. A malicious sequencer can swap the key and harvest ciphertexts undetectably. The on-chain history allows *forensic* detection after the fact. See F-08. |
+| Participants detect a substituted FHE public key | **NOT enforced by default.** `NetworkParams` pins the key correctly on chain, and the SDK check runs only when the caller passes the pin fields. The node check (`enforce_key_pin = true` + `fhe.public_key_hash`) exists but is off unless an operator turns it on, and even then it runs once at startup. A malicious sequencer can swap the key and harvest ciphertexts undetected. The on-chain history allows *forensic* detection after the fact. See F-08. |
 
 `docs/05-honest-limitations.md` is the document to read before trusting any of this.
 

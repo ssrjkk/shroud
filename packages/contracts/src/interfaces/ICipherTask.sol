@@ -69,7 +69,7 @@ interface ICipherTask {
         uint32 contributors; // distinct accepted contributors
         uint32 shards; // accepted shard count == ctRoot leaf count
         uint32 nextEpoch; // next epoch index to open
-        bytes32 ctRoot; // incremental SHA-256 over shard CIDs (in leaf order)
+        bytes32 ctRoot; // keccak256 accumulation chain over the shard CIDs, in leaf order
         bytes32 lastWeightsCid; // encWeights_e for the open epoch
         bytes32 lastWeightsDigest; // bound into the next STARK's public input
         TaskStatus status;

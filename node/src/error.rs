@@ -1,8 +1,10 @@
 //! Error types for the Shroud compute node.
 //!
 //! One enum, because every fallible operation in an epoch must be attributable to a stage
-//! when it fails: a node that cannot say *which* step of a 41-second FHE epoch broke is
-//! operationally useless.
+//! when it fails: a node that cannot say *which* step of an epoch broke is operationally
+//! useless. The `Fhe` and `Stark` arms carry the error vocabulary of the execution engine and
+//! the prover, neither of which is compiled into this build (see the `worker` module docs), so
+//! nothing constructs them yet.
 
 use thiserror::Error;
 
@@ -118,8 +120,8 @@ pub enum StarkError {
     #[error("trace length {got} is not a power of two >= {min}")]
     TraceLength { got: usize, min: usize },
 
-    #[error("merkle path for shard leaf {leaf_index} does not reach ctRoot {expected:#x} (got {got:#x})")]
-    BadMerklePath {
+    #[error("shard fold for leaf {leaf_index} does not reach ctRoot {expected:#x} (got {got:#x})")]
+    BadShardFold {
         leaf_index: u32,
         expected: alloy::primitives::B256,
         got: alloy::primitives::B256,
@@ -197,6 +199,9 @@ pub enum MeshError {
 
     #[error("gossip: {0}")]
     Gossip(String),
+
+    #[error("mesh server on {addr}: {reason}")]
+    Server { addr: String, reason: String },
 }
 
 #[derive(Debug, Error)]
@@ -205,6 +210,13 @@ pub enum PaymentError {
     NoChannel {
         task_id: alloy::primitives::B256,
         epoch: u32,
+    },
+
+    #[error("channel {channel_id:#x} belongs to {node}, not to the operator ({ours}); its reward is not ours to draw")]
+    NotOurs {
+        channel_id: alloy::primitives::U256,
+        node: alloy::primitives::Address,
+        ours: alloy::primitives::Address,
     },
 
     #[error("operator key {address} has no funds to pay the gas for {purpose}")]

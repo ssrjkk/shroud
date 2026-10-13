@@ -36,13 +36,20 @@ entirely on the weighting and the one-shard-per-address rule. A bond is genuinel
 not a completed mitigation.
 
 ### F-02 — Proof replay across tasks (ADV2) — **Mitigated**
-STARK public inputs include `chainId`, `taskId`, `epoch`, `nodeId` and `address(this)`.
-`ProofVerifier` recomputes the transcript binding in Solidity. A proof lifted from another task
-fails binding.
+The STARK transcript (`CipherTask.proofTranscript`) is bound to `chainId`, `address(this)`,
+`taskId`, `epoch`, `ctRoot`, `lastWeightsDigest` and the trace digest itself. `ProofVerifier`
+recomputes that binding in Solidity, so a proof lifted from another task fails binding. The
+committing node's identity is *not* one of the bound values: whoever holds a valid proof for
+these inputs can be its committer, which the dispute protocol has to absorb instead of the
+binding.
 
-### F-03 — Trained-on-wrong-dataset (ADV2) — **Mitigated**
-`ctRoot` is a public input and the AIR enforces ordered, single-consumption Merkle traversal
-over shard digests. Reaching the dispute quorum rejects the epoch and pays nobody.
+### F-03 — Trained-on-wrong-dataset (ADV2) — **Partially mitigated**
+`ctRoot` is bound into the transcript, so an epoch proved against a different dataset fails the
+binding check. What does **not** exist is the AIR constraint that re-folds the shard digests in
+`leafIndex` order: the chain verifies a transcript, not a fold, and the ordered re-fold lives in
+`node/src/chain/transcript.rs`, which nothing on chain checks. Reaching the dispute quorum
+rejects the epoch and pays nobody, so a wrong-dataset epoch is recoverable, but only by
+re-execution — see §3 of the limitations doc for the sampled-verification caveat.
 
 *Known deviation from the original design:* re-executors are **not** assigned from a staked set
 with a seeded, stake-weighted selection. `reportDispute` accepts any node that called
@@ -435,34 +442,41 @@ Contributors whose shards are censored lose `liveness` credit and their reward s
 `maxContributors`/`windowEnd` bounds cap the damage. Full censorship resistance needs
 fair-ordering L3s (e.g. based encrypted sequencing) — post-MVP.
 
-### F-08 — `s_pub` substitution (ADV5) — **NOT mitigated (pin published, never checked)**
+### F-08 — `s_pub` substitution (ADV5) — **NOT mitigated by default (pin published, checked only if asked)**
 *Corrected, and this one matters:* this finding was marked **Mitigated** on the strength of
 "the SDK refuses to encrypt with params whose hash mismatches; compute nodes refuse to start".
-**Neither check exists.**
+**Neither check exists by default.**
 
 What is real: `NetworkParams` does publish and pin the parameters correctly. `initialize` is
 one-shot, and `proposeRotation` → `approveRotation` → `executeRotation` enforces a ≥ 7-day
 timelock plus a distinct approver, with the key version forced to increment and the hash forced
 to change. That part is genuinely well built, and it means a key swap is *visible after the fact*.
 
-What is missing: nothing consumes it. The SDK has **zero** references to `s_pub`,
-`NetworkParams`, `isCurrentKey` or `fhePublicKeyHash` — it will happily encrypt with whatever
-public key it is handed. The node declares `enforce_key_pin`, a `KeyPinMismatch` error and an
-`isCurrentKey` binding, and then **never calls any of them**; the flag is dead configuration.
+What is missing: nothing consumes it by default. The SDK only refuses to encrypt when the caller
+passes `networkParams` + `fhePublicKeyHash`; without them the check is skipped, not failed. The
+node only checks when `enforce_key_pin = true`, which is off unless an operator turns it on — and
+even then the check happens once, at startup.
 
-Consequence: a malicious sequencer substituting `s_pub` is **not** detected. It is not an
-availability failure, which is what this finding used to claim — there is no participant that
-would notice. The sequencer can publish its own key, harvest the ciphertexts submitted under it,
-and decrypt them, and every participant will treat the result as normal. The on-chain pin still
-gives you *forensic* detection after the fact (the old hash is preserved in history), which is
-worth something, but it is detection, not prevention, and it requires someone to go and look.
+Consequence: a malicious sequencer substituting `s_pub` is **not** detected by anything that is
+on by default. It is not an availability failure, which is what this finding used to claim —
+there is no participant that would notice. The sequencer can publish its own key, harvest the
+ciphertexts submitted under it, and decrypt them, and every participant will treat the result as
+normal. The on-chain pin still gives you *forensic* detection after the fact (the old hash is
+preserved in history), which is worth something, but it is detection, not prevention, and it
+requires someone to go and look.
 
 Closing this needs a `NetworkParams` client in the SDK that refuses to encrypt on a hash mismatch
 before upload, and a real key-pin check at node startup. **The SDK half is now done:**
 `NetworkParamsClient` plus `SdkConfig.networkParams` / `fhePublicKeyHash` make
 `uploadAndMonetize` verify `isCurrentKey` before it builds a payload, and the error names the
-on-chain hash and key version, flags a pending rotation, and explains the consequence. The node
-startup check is still missing — `enforce_key_pin` remains dead configuration.
+on-chain hash and key version, flags a pending rotation, and explains the consequence. **The node
+half now exists but is opt-in:** with `node.enforce_key_pin = true` (plus `fhe.public_key_hash`
+and `contracts.network_params`) the node compares the on-chain key hash at startup and refuses to
+run on a mismatch. It defaults to off — the devnet config sets neither field — and it is a
+startup check, not a continuous one: a rotation that lands mid-epoch is not caught until the next
+restart. So the finding stands as **not mitigated for any default configuration**; an operator
+who opts in buys detection of a substituted key at boot, which is real but narrower than the
+original claim.
 
 ### F-09 — Committee minority decryption (ADV6) — **Mitigated**
 Shamir t-of-n. `DecryptionGate` additionally restricts *what* may be decrypted: a member's

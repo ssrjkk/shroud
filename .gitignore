@@ -33,6 +33,11 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# --- Scratch / tool-cache dirs ---
+# A PyManager cache directory left by tooling on the author's machine: nothing in the repo
+# references it (no workflow, no README instruction), so it is local state, not source.
+Python/
+
 # --- ShardStore (DA) ---
 # Content-addressed objects are hex-named files with no extension. Anything that lands next to
 # server.mjs is shard data from a misconfigured DATA_DIR, not source, and committing it would put

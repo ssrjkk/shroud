@@ -122,7 +122,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => mapping(uint32 => address)) private _epochWinner;
     mapping(uint256 => mapping(uint32 => uint256)) private _epochChannel;
 
-    mapping(uint256 => bytes32) private _ctAcc;
     mapping(uint256 => uint256) private _totalWeight;
     /// @dev Keyed by epoch, not just by task: a quorum reached while disputing epoch 0 must not
     ///      carry over and auto-reject epoch 1, which would let one round of disputes poison every
@@ -385,8 +384,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
         _contributionByLeaf[taskId][leafIndex] = msg.sender;
         _totalWeight[taskId] += w;
-        _ctAcc[taskId] = _appendLeaf(_ctAcc[taskId], leafIndex, ciphertextCid);
-        t.ctRoot = _ctAcc[taskId];
+        t.ctRoot = _appendLeaf(t.ctRoot, leafIndex, ciphertextCid);
         _contributorList[taskId].push(msg.sender);
 
         unchecked {
@@ -418,7 +416,6 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
         t.isSealed = true;
         t.sealAt = uint64(block.timestamp);
-        t.ctRoot = _ctAcc[taskId];
         t.epochDeadline = 0;
 
         _setStatus(taskId, TaskStatus.Sealed);
@@ -1094,9 +1091,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     /// @dev `keccak(prev – leafIndex – ciphertextCid)`, byte-identical to
-    ///      `node/src/fhe/dataset.rs::ct_root_step`. Keeping the two implementations
+    ///      `node/src/chain/transcript.rs::ct_root_step`. Keeping the two implementations
     ///      byte-for-byte equal is what makes `ctRoot` usable as a STARK public input, so the
-    ///      encoding is spelled out here rather than left to a struct hash.
+    ///      encoding is spelled out here rather than left to a struct hash. The chain is seeded
+    ///      with `_EMPTY_ROOT` by `createTask`; a node that folded the same leaves from a
+    ///      different seed would derive a different root and refuse to execute the task.
     function _appendLeaf(bytes32 acc, uint32 leafIndex, bytes32 ciphertextCid) private pure returns (bytes32) {
         return keccak256(abi.encodePacked(acc, leafIndex, ciphertextCid));
     }

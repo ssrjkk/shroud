@@ -35,7 +35,7 @@ the STARK trace stays in `u32` fields.
 | Use | Function | Rationale |
 |---|---|---|
 | DA object addressing | SHA-256 (BLAKE3 in node for speed, SHA-256 for the on-chain pin) | Ethereum-native |
-| `ctRoot` | incremental SHA-256 over `(shardCid ‖ leafIndex)` sorted ascending | cheap, recomputable by all nodes |
+| `ctRoot` | `keccak256` chain: `H(prev ‖ leafIndex_u32 ‖ shardCid)`, seeded with `H("SHROUD/CTROOT/v1")`, leaves in submission order | one SSTORE per leaf on chain, and every node can re-fold it from the contribution logs |
 | STARK transcript | Winterfell Fiat–Shamir (Poseidon2, 8-byte field elements) | domain separated from SHA-256 |
 | Row shape proof | Poseidon2 over `(salt, label, lanes, scale)` | cheap inside a Groth16 circuit |
 | EIP-712 binding | `keccak256` | ERC-712 standard |

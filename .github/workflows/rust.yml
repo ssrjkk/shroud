@@ -31,7 +31,12 @@ jobs:
           workspaces: node -> target
       - run: cargo fmt --all -- --check
       - run: cargo check --all-features
+      # The pure chain-follower build: this is the only place `main.rs`'s
+      # `#[cfg(not(feature = "grpc-server"))]` branch is ever compiled, so without it a break in
+      # the no-mesh configuration would reach a release image unnoticed.
+      - run: cargo check --no-default-features
       - run: cargo clippy --all-features -- -D warnings
+      - run: cargo clippy --no-default-features -- -D warnings
 
   test:
     name: cargo test
@@ -48,6 +53,7 @@ jobs:
         with:
           workspaces: node -> target
       - run: cargo test --all-features
+      - run: cargo test --no-default-features
 
   build:
     name: cargo build --release

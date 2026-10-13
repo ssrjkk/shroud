@@ -6,7 +6,7 @@
     "license":  "MIT",
     "scripts":  {
                     "build":  "hardhat compile",
-                    "test":  "hardhat test",
+                    "test":  "hardhat test && hardhat test test-vectors/vectors.spec.ts",
                     "typecheck":  "tsc --noEmit",
                     "clean":  "hardhat clean",
                     "deploy:devnet":  "hardhat run scripts/deploy.ts"

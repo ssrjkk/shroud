@@ -1,9 +1,12 @@
 //! gRPC peer mesh.
 //!
-//! The generated protobuf types are `include!`d rather than gated, because `build.rs` runs
-//! before feature resolution is visible to it and a missing module is a much worse error than a
-//! little unused code. [`proto`] is the generated code; the hand-written logic lives in the
-//! sibling modules.
+//! The generated *message* types are `include!`d unconditionally, because `build.rs` cannot see
+//! the crate's own features through `cfg!` and a missing type is a much worse error than a little
+//! unused code. The generated *server* stub is not: `build.rs` only emits it when
+//! `CARGO_FEATURE_GRPC_SERVER` is set, so `mesh_server` and [`server`] are gated on the same
+//! feature and a `--no-default-features` build stays compilable.
+//!
+//! [`proto`] is the generated code; [`server`] is the hand-written service that implements it.
 
 /// Generated from `proto/mesh.proto` by `build.rs`.
 pub mod proto {
@@ -12,7 +15,13 @@ pub mod proto {
     tonic::include_proto!("shroud.mesh.v1");
 }
 
-pub use proto::{mesh_client, mesh_server};
+pub use proto::mesh_client;
+
+#[cfg(feature = "grpc-server")]
+pub use proto::mesh_server;
+
+#[cfg(feature = "grpc-server")]
+pub mod server;
 
 use alloy::primitives::U256;
 use thiserror::Error;
@@ -41,7 +50,7 @@ impl std::str::FromStr for DecimalU256 {
         }
         U256::from_str_radix(s, 10)
             .map(DecimalU256)
-            .map_err(|e| ParseIdError::Overflow(e.to_string()))
+            .map_err(|e| ParseIdError::Overflow(s.to_string(), e.to_string()))
     }
 }
 
@@ -63,8 +72,8 @@ pub enum ParseIdError {
     Empty,
     #[error("`{0}` is not a plain decimal integer")]
     NotDecimal(String),
-    #[error("`0` overflows uint256: {0}")]
-    Overflow(String),
+    #[error("`{0}` is too large for a uint256: {1}")]
+    Overflow(String, String),
 }
 
 #[cfg(test)]

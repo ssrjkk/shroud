@@ -1,0 +1,20 @@
+# Build contexts are the repository root (see infra/docker-compose.yml). Host build outputs and
+# VCS state must never enter an image: each Dockerfile installs dependencies inside the build, so
+# copying node_modules, target/, or .git/ only bloats and slows the context.
+.git
+node_modules
+**/node_modules
+**/target
+**/dist
+**/cache
+**/artifacts
+**/typechain-types
+# Secrets outlive the layer that carried them: with a root build context, anything not excluded
+# here is baked into an image once a future Dockerfile grows a broad COPY.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+node/data/
+infra/shardstore-data/

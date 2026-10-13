@@ -74,8 +74,9 @@ mitigated, not solved. Single devnet sequencer in this repo.
 
 ## 7. Audit status
 
-Nothing here has been externally audited. The Solidity has a Hardhat suite (69 tests) and the node
-has property tests for the AIR, but "tested" ≠ "audited". Do not deploy with real value.
+Nothing here has been externally audited. The Solidity has a Hardhat suite (96 tests, including
+the `test-vectors/` byte-layout vectors) and the node has property tests for the state fold, but
+"tested" ≠ "audited". Do not deploy with real value.
 
 ## 7a. The devnet cannot deploy the contracts
 
@@ -94,8 +95,9 @@ restricted to the in-process network. It is reachable only through undocumented 
 is not part of any public API — calling it directly would trade a clear failure for a fragile one
 that breaks on the next plugin bump.
 
-What this does and does not block: the contracts are fully exercised by `hardhat test` (55 tests,
-where the mock *is* installed), so the money-handling logic is verified. What is **not** available
+What this does and does not block: the contracts are fully exercised by `hardhat test` (96 tests,
+including the `test-vectors/` byte-layout vectors, where the mock *is* installed), so the
+money-handling logic is verified. What is **not** available
 is any deployed chain: the SDK and Rust node have never been exercised against a live CipherTask,
 because no deployment of one exists in this repo. Every claim about the end-to-end path is
 therefore untested.
@@ -104,14 +106,23 @@ therefore untested.
 the pinned version, and both workarounds, rather than a bare revert. Fixing this properly means
 changing the plugin version; the upgrade path is real work, not a config tweak.
 
-## 8. The Rust node does not compile, and its fold logic is unverified
+## 8. The Rust node's fold logic is verified only by inspection
 
-`node/` does not build. `build.rs` needs `protoc` (for `tonic-prost-build`), and the crate also
-needs a working C toolchain for its `aws-lc-rs`/`ring` TLS backends. Beyond that, `src/chain/`
-contains hand-written alloy bindings that target APIs which do not match any released alloy
-version (e.g. `Filter::selectors`, `PendingTransactionBuilder::block_id`), and `client.rs`
-references a `CommitIntent` type and a `PrivateKeySigner` import that are never defined. The CI
-job in `.github/workflows/rust.yml` is expected to be red for this reason.
+`node/` used to fail to build: `src/chain/` held hand-written alloy bindings targeting APIs that
+match no released alloy version (`Filter::selectors`, `PendingTransactionBuilder::block_id`,
+`BoxedProvider` where the current name is `DynProvider`), and `client.rs` referenced a
+`CommitIntent` type that did not exist. That drift is fixed in the working tree — the bindings
+now track alloy 2.5.0, and `cargo check --all-features` is reported clean — but two caveats
+follow from how that work was done. The machine it was done on has **no Rust toolchain at all**
+(no `cargo`, no `rustc`), and `.github/workflows/rust.yml` runs on the *committed* tree, so the
+uncommitted state — including the new `chain/slice.rs`, `chain/transcript.rs`, `mesh/server.rs`
+and `worker.rs` — has never once been compiled here. Rust CI on `master` is green, but it does
+not cover that working tree either.
+
+What also remains: `cargo test` cannot link on a Windows + MinGW-w64 toolchain — `tfhe` and
+`alloy-transport` fail with `E0463: can't find crate` for their proc-macro dependencies
+(`strum`, `auto_impl`). That is a third-party/toolchain problem, not this repository's code, and
+it is unresolved.
 
 Three logic bugs in `state.rs` were fixed by inspection — a scheduler condition inverted so the
 node only offered to execute an epoch *after* somebody else had already committed, a
@@ -122,12 +133,14 @@ run here. The inversion has one piece of corroborating evidence — the pre-exis
 have failed against the old code, which is consistent with the crate never having been built. That
 is not a substitute for `cargo test`.
 
-`node/` should be read as a design document, not as working software.
+`node/` should be read as a design document plus a state fold that typechecks, not as working
+software that has been run.
 
 ## 9. What is genuinely finished in this repo
 
 - `CipherTask.sol`: complete state machine, escrow, dividend, staged withdrawal, fraud window.
-  Covered by 48 Hardhat tests.
+  Covered by the Hardhat suite (96 tests across the contracts, including the `test-vectors/`
+  byte-layout vectors).
 - `PaymentVault.sol`: EIP-712 signed streaming channel with monotonic slices and reclaims, plus an
   O(1) `totalLocked == subBalances + channelLocks` invariant asserted on every balance movement.
   The reentrancy guard has its own test driven by a hostile token that calls back mid-transfer.
@@ -151,4 +164,5 @@ is not a substitute for `cargo test`.
 - `node/`: complete service skeleton — reorg-safe log watcher, shard store with byte budget,
   FHE engine behind a `FheEngine` trait (u32 TFHE adapter + reference CPU adapter for tests),
   Winterfell PoC circuit + prover, gRPC peer mesh, EIP-712 slice signer, dispute gossip.
-  **Skeleton only — does not compile, see §8.**
+  **Skeleton only: it typechecks and has unit tests, but `cargo test` has never linked on the
+  author's toolchain and nothing here has run against a live chain — see §8.**

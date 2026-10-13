@@ -4,26 +4,28 @@
 //!
 //!   1. parse and validate the configuration — a bad key or a zero contract address is a
 //!      configuration error, not a runtime surprise ten minutes into an epoch;
-//!   2. initialise tracing, so step 3's failures are visible;
+//!   2. initialise tracing, so every step below is visible when it fails;
 //!   3. verify the RPC serves the chain we were configured for, before any key is used;
-//!   4. restore the watcher checkpoint, validating it against the canonical chain;
-//!   5. start the watcher.
+//!   4. verify the local FHE params against the pinned on-chain key, because a stale key produces
+//!      work that only fails after the task is sealed;
+//!   5. restore the watcher checkpoint, validating it against the canonical chain;
+//!   6. start the watcher, the work loop, and the peer mesh on one shutdown signal.
 //!
-//! A node that cannot prove which chain it is on should not start at all. Spending a real
-//! balance on the wrong network is a worse outcome than refusing to boot.
+//! A node that cannot prove which chain it is on should not start at all. Spending a real balance
+//! on the wrong network is a worse outcome than refusing to boot.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use clap::Parser;
 use shroud_node::{
     chain::{OrchestratorClient, Watcher},
     config::{Cli, Config},
-    error::{ConfigError, Result},
+    error::Result,
     state::NodeState,
+    worker::Worker,
     VERSION,
 };
-use tokio::sync::watch;
+use tokio::{sync::watch, task::JoinHandle};
 use tracing::{error, info, warn};
 
 #[tokio::main]
@@ -62,51 +64,89 @@ async fn run() -> Result<()> {
         warn!("a contract address is zero; the watcher will match nothing");
     }
 
-    let client = OrchestratorClient::new(&cfg)?;
+    let client = Arc::new(OrchestratorClient::new(&cfg)?);
     client.verify_chain(cfg.chain.chain_id).await?;
+    client.verify_key_pin(&cfg).await?;
 
     let state = Arc::new(NodeState::new());
     state.set_chain_id(cfg.chain.chain_id);
+    // The fold only emits payment work once it knows which address the operator controls; without
+    // this the node watches, and never redeems.
+    state.set_operator(client.operator());
 
-    // A provider for the watcher, separate from the client's. The watcher is a long-lived
-    // poller and the client issues bursty writes; sharing one pool lets a slow `eth_getLogs`
-    // window starve a commit that is racing an epoch deadline.
-    let rpc_url = cfg
-        .chain
-        .rpc_url
-        .parse::<url::Url>()
-        .map_err(|e| ConfigError::Invalid {
-            field: "chain.rpc_url",
-            reason: format!("{e}"),
-        })?;
-    let watcher_provider: DynProvider = ProviderBuilder::new().connect_http(rpc_url).erased();
+    // The watcher builds its own provider. That is a rule rather than a convenience: the watcher is
+    // a long-lived poller and the client issues bursty writes, so sharing one pool lets a slow
+    // `eth_getLogs` window starve a commit that is racing an epoch deadline.
+    let watcher = Arc::new(Watcher::new(&cfg, state.clone())?);
 
-    let watcher = Arc::new(Watcher::new(watcher_provider, &cfg, state.clone())?);
-
-    // Restoring is what makes a restart cheap, and it is also a correctness gate: a checkpoint
-    // from another chain, or naming a block that is no longer canonical, is rejected here and
-    // the watcher falls back to a full replay rather than silently forking its view.
-    match state.read_checkpoint().await? {
-        Some(cp) => {
-            info!(block = cp.last_scanned, "found a watcher checkpoint");
+    // Hydrating the derived fold is what makes a restart cheap, and restoring the cursor is a
+    // correctness gate: a checkpoint from another chain, or naming a block that is no longer
+    // canonical, is rejected and the watcher falls back to a full replay rather than silently
+    // forking its view. The cursor is only resumed when a snapshot came with it - otherwise the
+    // fold would rebuild with every pre-checkpoint task missing, and the node would neither
+    // redeem, finalize nor reclaim until the chain moved on its own.
+    if state.restore_snapshot(&cfg.node.data_dir).await? {
+        info!("hydrated the derived fold from a snapshot");
+        if let Some(cp) = state.last_checkpoint() {
+            info!(block = cp.last_scanned, "resuming the watcher at the snapshot's checkpoint");
             watcher.restore(&cp, cfg.chain.chain_id).await?;
         }
-        None => {
-            let start = cfg.chain.start_block.unwrap_or_else(|| {
-                warn!(
-                    "no checkpoint and no chain.start_block; backfilling from the configured depth"
-                );
-                0
-            });
-            info!(start, "no checkpoint; starting a fresh backfill");
-        }
+    } else {
+        info!(
+            backfill = cfg.chain.backfill_blocks,
+            start_block = ?cfg.chain.start_block,
+            "no usable snapshot; the watcher derives its own start and rebuilds the fold"
+        );
     }
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
     let watcher_task = {
         let watcher = watcher.clone();
-        let shutdown_rx = shutdown_rx.clone();
-        tokio::spawn(async move { watcher.run(shutdown_rx).await })
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move { watcher.run(shutdown).await })
+    };
+    let worker_task = {
+        let worker = Arc::new(Worker::new(cfg.clone(), client.clone(), state.clone()));
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move { worker.run(shutdown).await })
+    };
+    // A node built without `grpc-server` is a pure chain follower: it still executes every write
+    // arm, it just cannot be asked for shards by anybody.
+    #[cfg(feature = "grpc-server")]
+    let mesh_task: Option<JoinHandle<Result<()>>> = {
+        let shutdown = shutdown_rx.clone();
+        Some(tokio::spawn(async move {
+            shroud_node::mesh::server::serve(cfg.clone(), state.clone(), shutdown).await
+        }))
+    };
+    #[cfg(not(feature = "grpc-server"))]
+    let mesh_task: Option<JoinHandle<Result<()>>> = None;
+
+    // Snapshots on a timer, so the next restart can skip the backfill. Best-effort by design: a
+    // failed write only costs the next restart its shortcut - the fold still rebuilds from the
+    // chain, which is exactly the fallback the startup path above takes.
+    let snapshot_task = {
+        let state = state.clone();
+        let dir = cfg.node.data_dir.clone();
+        let shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            const EVERY: Duration = Duration::from_secs(30);
+            let mut tick = tokio::time::interval(EVERY);
+            // The first tick fires immediately; at that point the fold has nothing in it that
+            // is worth a file write, so burn it before entering the loop.
+            tick.tick().await;
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        if let Err(e) = state.snapshot(&dir).await {
+                            warn!(error = %e, "could not write the derived snapshot");
+                        }
+                    }
+                    _ = shutdown.changed() => return Ok(()),
+                }
+            }
+        })
     };
 
     info!("node running; press Ctrl-C to stop");
@@ -115,14 +155,28 @@ async fn run() -> Result<()> {
     info!("shutting down");
     let _ = shutdown_tx.send(true);
 
-    match tokio::time::timeout(std::time::Duration::from_secs(10), watcher_task).await {
-        Ok(Ok(Ok(()))) => info!("watcher stopped cleanly"),
-        Ok(Ok(Err(e))) => error!(error = %e, "watcher stopped with an error"),
-        Ok(Err(e)) => error!(error = %e, "watcher task panicked"),
-        Err(_) => warn!("watcher did not stop within 10s; exiting anyway"),
+    finish("watcher", watcher_task).await;
+    finish("worker", worker_task).await;
+    finish("snapshot", snapshot_task).await;
+    if let Some(task) = mesh_task {
+        finish("mesh", task).await;
     }
 
     Ok(())
+}
+
+/// Report how one background task exited, with a bounded wait.
+///
+/// A stuck task must not hang the process after a container stop: the deadline is what turns
+/// "shutdown is slow" into a log line the operator can act on.
+async fn finish(name: &'static str, task: JoinHandle<Result<()>>) {
+    const GRACE: Duration = Duration::from_secs(10);
+    match tokio::time::timeout(GRACE, task).await {
+        Ok(Ok(Ok(()))) => info!(stage = name, "stopped cleanly"),
+        Ok(Ok(Err(e))) => error!(stage = name, error = %e, "stopped with an error"),
+        Ok(Err(e)) => error!(stage = name, error = %e, "task panicked"),
+        Err(_) => warn!(stage = name, "did not stop within the grace period; exiting anyway"),
+    }
 }
 
 fn init_tracing(cli: &Cli) -> Result<()> {

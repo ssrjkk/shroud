@@ -6,11 +6,11 @@ exactly what Shroud proves, and what it does not.
 
 ## 1. Statement
 
-For task `T`, epoch `e`, dataset Merkle root `R = ctRoot`, and prover `P`:
+For task `T`, epoch `e`, dataset commitment `R = ctRoot`, and prover `P`:
 
 > There exists a computation with trace `π` such that
 > 1. `π` starts from the `u32` plaintext weight vector `w_e` decoded from `encWeightsCid`,
-> 2. for every shard leaf `ℓ` in the preimage path of `R` (in ascending `leafIndex` order),
+> 2. for every shard leaf `ℓ` of the chain that folds to `R` (in ascending `leafIndex` order),
 >    the shard digest is `d(ℓ)` and the prover consumed it exactly once,
 > 3. the trace computes `w_{e+1} = w_e - η · ∇_w L(w_e, D)` over the *cleartext* images of
 >    the shard features, where each `L` evaluation is reproduced by the AIR's arithmetic
@@ -18,21 +18,32 @@ For task `T`, epoch `e`, dataset Merkle root `R = ctRoot`, and prover `P`:
 > 4. `digest(π) = traceDigest` and the prover's constant-`w_e` commitment matches
 >    `wDigest` in the public input.
 
-Public inputs (all in BabyBear, 8 bytes each, plus SHA-256 word for the root):
+### What the chain actually binds
+
+`CipherTask.proofTranscript(taskId, epoch, traceDigest)` — and therefore `StarkVerifier` — takes
+exactly these values, in this `abi.encode` order (the layout `node/src/chain/transcript.rs`
+reproduces byte for byte, and `packages/contracts/test-vectors/vectors.spec.ts` re-derives from a
+live deployment of these contracts):
 
 ```
-0: domain_separator        = keccak("SHROUD/PoC/v1")
-1: chainId
-2: taskId
-3: epoch
-4: ctRoot[0..4]            (4 field elements)
-5: w_e_digest[0..4]
-6: w_{e+1}_digest[0..4]
-7: nodeId_lo, nodeId_hi
-8: n_shards
-9: lr (fixed-point Q16.16)
-10: update_mode (0 = batch, 1 = minibatch, 2 = full-batch+accum)
+0: "SHROUD/PoC/v1"          (the string head, length and padded data)
+1: chainid
+2: address(this)            (the CipherTask instance)
+3: taskId
+4: epoch
+5: ctRoot                   (leaf chain over the sealed dataset)
+6: lastWeightsDigest        (w_e)
+7: traceDigest              (digest of the trace)
 ```
+
+### What the circuit would additionally bind
+
+`nodeId`, `n_shards`, `lr`, `update_mode` and `w_{e+1}` belong to the intended statement, but the
+contract cannot check them: they are not in the list above, and **no prover and no AIR for this
+statement are implemented in this repository** (see `docs/05-honest-limitations.md`). A proof
+verified today therefore attests to those eight values and nothing else; binding the rest means
+either extending the transcript or committing them inside the proof's public-input vector and
+checking that commitment on chain.
 
 ## 2. AIR
 
@@ -40,20 +51,23 @@ Trace columns (main trace, width 12), one row per *micro-step*:
 
 | col | name | description |
 |---|---|---|
-| 0–1 | `s0,s1` | Merkle path bit: `0` = left, `1` = right |
-| 2–3 | `node_lo,node_hi` | current Merkle node digest (as 2 field elements, low/high 64-bit halves) |
-| 4–5 | `hash_lo,hash_lo2` | output digest after the path step |
-| 6 | `shard_digest_lo` | digest of the leaf actually consumed |
+| 0–1 | `s0,s1` | leaf-fold selector: which words of the 68-byte `_appendLeaf` preimage this row advances |
+| 2–3 | `node_lo,node_hi` | current chain value `prev` (as 2 field elements, low/high 64-bit halves) |
+| 4–5 | `hash_lo,hash_lo2` | output digest after the fold step |
+| 6 | `shard_digest_lo` | digest of the leaf being folded in |
 | 7 | `feat[0]` | feature 0 of the current micro-batch |
 | 8 | `feat[1]` | feature 1 |
 | 9 | `acc` | running accumulator `∑ feat·w` (mod p) |
 | 10 | `step_sel` | 1 on the row where a shard boundary is crossed |
 | 11 | `is_last` | 1 on the final row |
 
-Constraints implemented in `node/src/stark/circuit.rs`:
+Constraints of the AIR **as designed** — no prover and no circuit for them exist in this
+repository (see `docs/05-honest-limitations.md`); this section is the specification the
+`nodeId`-binding decision in §1 refers back to, not a description of running code:
 
-1. **Merkle path integrity** — for each of the 32 levels: `hash(a,b) == node` by the
-   Poseidon2 permutation, with `a = prev` or `b = prev` chosen by `s0/s1`.
+1. **Leaf-fold integrity** — for each folded leaf: `keccak(prev ‖ leafIndex ‖ cid)`, the same
+   68-byte preimage `CipherTask._appendLeaf` hashes on chain, with the leaf's words selected by
+   `s0/s1` as the row advances the chain.
 2. **Ordered consumption** — cumulative `shard_digest` chain:
    `chain_{i+1} = poseidon2(chain_i, shard_digest_i)`; this forbids skipping, duplicating
    or reordering shards.

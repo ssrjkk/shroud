@@ -24,5 +24,8 @@ jobs:
           cache-dependency-path: packages/contracts/package-lock.json
       - run: npm ci
       - run: npx hardhat compile
-      - run: npx hardhat test
+      # `npm test` runs `hardhat test` and then the `test-vectors/` parity spec in its own process.
+      # Invoking `hardhat test` alone would skip the vectors: they live outside `paths.tests` so they
+      # get a fresh chain, which is what makes their pinned addresses meaningful.
+      - run: npm test
       - run: npx tsc --noEmit

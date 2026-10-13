@@ -13,6 +13,6 @@
     "outDir": "dist",
     "types": ["node", "mocha"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "hardhat.config.ts", "typechain-types/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "test-vectors/**/*.ts", "scripts/**/*.ts", "hardhat.config.ts", "typechain-types/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

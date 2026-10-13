@@ -8,7 +8,8 @@
 #   docker compose up -d devnet shardstore
 #
 # Build the node image where Rust compiles (CI / a dev machine - not on a host whose App Control
-# policy blocks Cargo build scripts), then:
+# policy blocks Cargo build scripts):
+#   docker compose build node-a                    # tags shroud-node:dev, reused by node-b/c
 #   docker compose up -d --scale node-a=0 node-b=0 node-c=0  # chain + DA only
 #   docker compose up -d node-a node-b node-c                # attach nodes
 #
@@ -51,6 +52,9 @@ services:
       - "127.0.0.1:8080:8080"
 
   node-a:
+    build:
+      context: ..
+      dockerfile: infra/node/Dockerfile
     image: shroud-node:dev
     environment: &nodeenv
       CM_RPC_URL: http://devnet:8545

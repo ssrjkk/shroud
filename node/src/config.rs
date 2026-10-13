@@ -36,10 +36,13 @@ pub struct Cli {
     #[arg(long, env = "CM_OPERATOR_KEY")]
     pub operator_key: Option<String>,
 
-    /// Private key of the node's BLS key (hex). In production this comes from a KMS/HSM and
-    /// only the derived public key is configured.
-    #[arg(long, env = "CM_BLS_KEY")]
-    pub bls_key: Option<String>,
+    /// The node's BLS public key (32 bytes of hex), which is what `registerNode` stores.
+    ///
+    /// The secret half never reaches this process: in production it lives in the KMS that signs
+    /// committee share updates, and a compute node only ever needs to *present* the public key.
+    /// Configuring a private key here would be a way to leak it.
+    #[arg(long, env = "CM_BLS_PUB_KEY")]
+    pub bls_pub_key: Option<String>,
 
     /// Address of the CipherTask orchestrator.
     #[arg(long, env = "CM_TASK_ADDRESS")]
@@ -122,17 +125,11 @@ pub struct ContractsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeConfig {
     pub operator_key: String,
-    pub bls_key: Option<String>,
-    pub id: B256,
-    /// Max epochs to execute concurrently. FHE is CPU-bound, so this is usually 1.
-    pub max_concurrent_epochs: usize,
-    /// Rayon threads for the FHE engine. `0` = all cores.
-    pub threads: usize,
+    /// `bytes32` handed to `registerNode`, hex-encoded. `None` means the node will refuse to
+    /// register for a task, and so can neither commit nor dispute on it.
+    pub bls_pub_key: Option<String>,
     /// Skip an epoch if the remaining window is shorter than this.
     pub min_epoch_window: Duration,
-    /// Per-epoch wall-clock budget after which the node gives up and lets a peer win.
-    pub epoch_timeout: Duration,
-    pub metrics_listen: Option<SocketAddr>,
     pub data_dir: PathBuf,
     /// Refuse to start unless the on-chain `fhePublicKeyHash` matches the local params.
     pub enforce_key_pin: bool,
@@ -143,6 +140,13 @@ pub struct NodeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FheConfig {
     pub backend: FheBackend,
+    /// `NetworkParams.current.fhePublicKeyHash`, which the contract defines as
+    /// `keccak256(abi.encode(s_pub))`.
+    ///
+    /// Required whenever `node.enforce_key_pin` is set: a pin with nothing to compare against
+    /// would be a switch that looks protective and does nothing, which is worse than not having
+    /// it, because it would be audited as if it worked.
+    pub public_key_hash: Option<B256>,
     /// u32 message width. Bleve batches 8 lanes per ciphertext.
     pub lanes_per_ciphertext: usize,
     pub scale: u32,
@@ -261,19 +265,19 @@ impl Default for Config {
             },
             node: NodeConfig {
                 operator_key: String::new(),
-                bls_key: None,
-                id: B256::ZERO,
-                max_concurrent_epochs: 1,
-                threads: 0,
+                bls_pub_key: None,
                 min_epoch_window: Duration::from_secs(300),
-                epoch_timeout: Duration::from_secs(1_800),
-                metrics_listen: None,
                 data_dir: PathBuf::from("./data"),
-                enforce_key_pin: true,
+                // Off by default: turning it on without `fhe.public_key_hash` +
+                // `contracts.network_params` makes the node refuse to start (see `validate`),
+                // and the devnet config sets neither. The SDK-side pin check stays the alert
+                // that is on out of the box; this is the opt-in node-side twin.
+                enforce_key_pin: false,
                 task_filter: None,
             },
             fhe: FheConfig {
                 backend: FheBackend::TfheShortInteger,
+                public_key_hash: None,
                 lanes_per_ciphertext: 8,
                 scale: 10_000,
                 lr_q16: 65_536, // 1.0
@@ -409,29 +413,114 @@ impl Config {
             }
             .into());
         }
-        if self.node.max_concurrent_epochs == 0 {
+        // The three numbers below are divisors, subtrahends and `step_by` arguments in the
+        // watcher's scan loop. A zero is not a slow configuration: it is an arithmetic panic (or
+        // a wrapped range that never terminates) ten minutes after start-up, so it is a
+        // configuration error and belongs here.
+        if self.finality.checkpoint_interval == 0 {
             return Err(ConfigError::Invalid {
-                field: "node.max_concurrent_epochs",
-                reason: "must be >= 1".into(),
+                field: "finality.checkpoint_interval",
+                reason: "must be >= 1; the cursor is written every N blocks".into(),
+            }
+            .into());
+        }
+        if self.chain.get_logs_window == 0 {
+            return Err(ConfigError::Invalid {
+                field: "chain.get_logs_window",
+                reason: "must be >= 1 blocks".into(),
+            }
+            .into());
+        }
+        if self.chain.get_logs_chunk == 0 {
+            return Err(ConfigError::Invalid {
+                field: "chain.get_logs_chunk",
+                reason: "must be >= 1 blocks".into(),
+            }
+            .into());
+        }
+        if self.chain.get_logs_chunk > self.chain.get_logs_window {
+            return Err(ConfigError::Invalid {
+                field: "chain.get_logs_chunk",
+                reason: format!(
+                    "{} must not exceed chain.get_logs_window ({})",
+                    self.chain.get_logs_chunk, self.chain.get_logs_window
+                ),
+            }
+            .into());
+        }
+        // A pin that cannot be compared is not a pin. Rejecting it here is the difference between
+        // "the operator forgot a field" and "the node ran an epoch under a superseded key".
+        if self.node.enforce_key_pin && self.fhe.public_key_hash.is_none() {
+            return Err(ConfigError::Missing("fhe.public_key_hash").into());
+        }
+        if self.node.enforce_key_pin && self.contracts.network_params == Address::ZERO {
+            return Err(ConfigError::Missing("contracts.network_params").into());
+        }
+        // Parse the key at load rather than at the first `registerNode`: a typo in the one value
+        // the contract stores as this node's identity should stop the node, not cost gas later.
+        if let Some(src) = &self.node.bls_pub_key {
+            if parse_bls_pub_key(src).is_none() {
+                return Err(ConfigError::Invalid {
+                    field: "node.bls_pub_key",
+                    reason: "expected 32 bytes of hex, with or without `0x`".into(),
+                }
+                .into());
+            }
+        }
+        // A peer-facing range of zero would make `fetch_shard` answer with empty chunks forever:
+        // the caller's `next_offset` never moves, so it retries until its own deadline. Same class
+        // of bug as the divisors above, but it surfaces as a mesh that looks alive and serves
+        // nothing.
+        if self.shard.range_bytes == 0 {
+            return Err(ConfigError::Invalid {
+                field: "shard.range_bytes",
+                reason: "must be >= 1; it is the chunk size peers are served".into(),
+            }
+            .into());
+        }
+        if self.mesh.index_capacity == 0 {
+            return Err(ConfigError::Invalid {
+                field: "mesh.index_capacity",
+                reason: "must be >= 1; at zero the node cannot remember any peer's shard".into(),
+            }
+            .into());
+        }
+        if self.mesh.request_timeout.is_zero() {
+            return Err(ConfigError::Invalid {
+                field: "mesh.request_timeout",
+                reason: "must be > 0; it bounds how long one range read may hold a peer".into(),
+            }
+            .into());
+        }
+        // Two of three mTLS paths is not a configuration, it is a mistake, and the mistake would
+        // show up as a mesh that accepts every caller. Either all three or none.
+        let have_cert = self.mesh.mtls_cert.is_some();
+        let have_key = self.mesh.mtls_key.is_some();
+        let have_ca = self.mesh.ca_cert.is_some();
+        if (have_cert || have_key || have_ca) && !(have_cert && have_key && have_ca) {
+            return Err(ConfigError::Invalid {
+                field: "mesh.mtls_cert",
+                reason: "the three mesh TLS paths must be set together".into(),
             }
             .into());
         }
         Ok(())
     }
+}
 
-    /// Q16.16 -> f64, for the optimiser and for the model spec sanity checks.
-    pub fn lr(&self) -> f64 {
-        self.fhe.lr_q16 as f64 / 65_536.0
+/// Parse the configured BLS public key: 32 bytes of hex, `0x` prefix optional.
+///
+/// Deliberately lenient about the prefix and strict about everything else, because this value is
+/// what `registerNode` records as the node's identity — a silently truncated key would register a
+/// node that no committee signature ever validates for.
+pub fn parse_bls_pub_key(src: &str) -> Option<B256> {
+    let hex_str = src.strip_prefix("0x").unwrap_or(src);
+    if hex_str.len() != 64 || !hex_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
     }
-
-    pub fn l2(&self) -> f64 {
-        self.fhe.l2_q16 as f64 / 65_536.0
-    }
-
-    /// How many shards fit in one trace segment.
-    pub fn shards_per_segment(&self) -> usize {
-        self.stark.segment_shards as usize
-    }
+    let mut out = [0u8; 32];
+    hex::decode_to_slice(hex_str, &mut out).ok()?;
+    Some(B256::from(out))
 }
 
 /// Turn the CLI into a figment provider.
@@ -478,7 +567,7 @@ struct NodeOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     operator_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    bls_key: Option<String>,
+    bls_pub_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_filter: Option<B256>,
 }
@@ -511,7 +600,7 @@ fn cli_overrides(cli: &Cli) -> figment::providers::Serialized<CliOverrides> {
         },
         node: NodeOverride {
             operator_key: cli.operator_key.clone(),
-            bls_key: cli.bls_key.clone(),
+            bls_pub_key: cli.bls_pub_key.clone(),
             task_filter: cli.task_filter,
         },
         mesh: MeshOverride {
@@ -549,7 +638,23 @@ mod tests {
 
         [node]
         operator_key = "0xdeadbeef"
+
+        [fhe]
+        public_key_hash = "0x4444444444444444444444444444444444444444444444444444444444444444"
     "#;
+
+    /// A config that passes every check in [`Config::validate`], for tests that only care about
+    /// one of them. Built by mutation so a new required field shows up as a compile error here
+    /// rather than as twelve unrelated test failures.
+    fn base() -> Config {
+        let mut cfg = Config::default();
+        cfg.contracts.cipher_task = Address::repeat_byte(0x11);
+        cfg.contracts.payment_vault = Address::repeat_byte(0x22);
+        cfg.contracts.network_params = Address::repeat_byte(0x33);
+        cfg.node.operator_key = "0xdeadbeef".into();
+        cfg.fhe.public_key_hash = Some(B256::repeat_byte(0x44));
+        cfg
+    }
 
     #[test]
     fn defaults_apply_when_the_file_omits_a_section() {
@@ -573,6 +678,9 @@ mod tests {
 
             [node]
             operator_key = "0xdeadbeef"
+
+            [fhe]
+            public_key_hash = "0x4444444444444444444444444444444444444444444444444444444444444444"
             "#,
         )
         .expect("valid config");
@@ -590,6 +698,9 @@ mod tests {
 
             [node]
             operator_key = "0xdeadbeef"
+
+            [fhe]
+            public_key_hash = "0x4444444444444444444444444444444444444444444444444444444444444444"
             "#,
         )
         .expect_err("zero task address must be rejected");
@@ -610,6 +721,9 @@ mod tests {
             cipher_task = "0x1111111111111111111111111111111111111111"
             payment_vault = "0x2222222222222222222222222222222222222222"
             network_params = "0x3333333333333333333333333333333333333333"
+
+            [fhe]
+            public_key_hash = "0x4444444444444444444444444444444444444444444444444444444444444444"
             "#,
         )
         .expect_err("missing operator key must be rejected");
@@ -624,10 +738,7 @@ mod tests {
 
     #[test]
     fn lanes_per_ciphertext_must_be_a_power_of_two() {
-        let mut cfg = Config::default();
-        cfg.contracts.cipher_task = Address::repeat_byte(0x11);
-        cfg.contracts.payment_vault = Address::repeat_byte(0x22);
-        cfg.node.operator_key = "0xdeadbeef".into();
+        let mut cfg = base();
         cfg.fhe.lanes_per_ciphertext = 3;
         let err = cfg
             .validate()
@@ -646,10 +757,7 @@ mod tests {
 
     #[test]
     fn zero_confirmations_are_rejected() {
-        let mut cfg = Config::default();
-        cfg.contracts.cipher_task = Address::repeat_byte(0x11);
-        cfg.contracts.payment_vault = Address::repeat_byte(0x22);
-        cfg.node.operator_key = "0xdeadbeef".into();
+        let mut cfg = base();
         cfg.finality.confirmations = 0;
         cfg.validate()
             .expect_err("acting on unconfirmed logs must be rejected");
@@ -657,21 +765,64 @@ mod tests {
 
     #[test]
     fn unsupported_security_bits_are_rejected() {
-        let mut cfg = Config::default();
-        cfg.contracts.cipher_task = Address::repeat_byte(0x11);
-        cfg.contracts.payment_vault = Address::repeat_byte(0x22);
-        cfg.node.operator_key = "0xdeadbeef".into();
+        let mut cfg = base();
         cfg.stark.security_bits = 256;
         assert!(cfg.validate().is_err());
     }
 
     #[test]
-    fn q16_fixed_point_conversions() {
-        let mut cfg = Config::default();
-        cfg.fhe.lr_q16 = 32_768; // 0.5
-        cfg.fhe.l2_q16 = 65; // 0.000992...
-        assert!((cfg.lr() - 0.5).abs() < f64::EPSILON);
-        assert!((cfg.l2() - 65.0 / 65_536.0).abs() < 1e-12);
+    fn a_zero_watcher_divisor_is_rejected_at_load_not_at_runtime() {
+        // Each of these is a `%`, a `- 1`, or a chunk size in `Watcher::scan`. A zero would be an
+        // arithmetic panic minutes into a backfill, with an epoch commit in flight.
+        let cases: [fn(&mut Config); 4] = [
+            |c: &mut Config| c.finality.checkpoint_interval = 0,
+            |c: &mut Config| c.chain.get_logs_window = 0,
+            |c: &mut Config| c.chain.get_logs_chunk = 0,
+            |c: &mut Config| c.chain.get_logs_chunk = c.chain.get_logs_window + 1,
+        ];
+        for case in cases {
+            let mut cfg = base();
+            case(&mut cfg);
+            let err = cfg.validate().expect_err("zero-sized scan arithmetic");
+            assert!(
+                matches!(err, Error::Config(ConfigError::Invalid { .. })),
+                "got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_pin_needs_something_to_compare_against() {
+        let mut cfg = base();
+        cfg.node.enforce_key_pin = true;
+        cfg.fhe.public_key_hash = None;
+        let err = cfg
+            .validate()
+            .expect_err("enforce_key_pin without a local hash cannot enforce anything");
+        assert!(
+            matches!(
+                err,
+                Error::Config(ConfigError::Missing("fhe.public_key_hash"))
+            ),
+            "got {err:?}"
+        );
+
+        // Opting out of the pin is an explicit operator choice, and then the missing hash is
+        // allowed.
+        cfg.node.enforce_key_pin = false;
+        cfg.validate().expect("an un-pinned node may start");
+
+        let mut cfg = base();
+        cfg.node.enforce_key_pin = true;
+        cfg.contracts.network_params = Address::ZERO;
+        assert!(
+            matches!(
+                cfg.validate()
+                    .expect_err("the pin has no contract to read"),
+                Error::Config(ConfigError::Missing("contracts.network_params"))
+            ),
+            "the pin needs an address"
+        );
     }
 
     #[test]
@@ -725,5 +876,54 @@ mod tests {
             .extract()
             .expect("extract succeeds");
         assert!(cfg.stark.digest_only);
+    }
+
+    #[test]
+    fn bls_pub_key_maps_onto_node_config_and_parses_both_spellings() {
+        let cli = Cli::parse_from(["shroud-node", "--bls-pub-key", &"ab".repeat(32)]);
+        let cfg: Config = Figment::from(Serialized::defaults(Config::default()))
+            .merge(cli_overrides(&cli))
+            .extract()
+            .expect("extract succeeds");
+        assert_eq!(
+            cfg.node.bls_pub_key.as_deref(),
+            Some("ab".repeat(32).as_str()),
+            "--bls-pub-key must reach node.bls_pub_key"
+        );
+
+        let unprefixed = parse_bls_pub_key(&"ab".repeat(32)).expect("parses");
+        let prefixed = parse_bls_pub_key(&format!("0x{}", "ab".repeat(32))).expect("parses");
+        assert_eq!(unprefixed, prefixed);
+        assert_eq!(unprefixed.0, [0xab; 32]);
+    }
+
+    #[test]
+    fn a_malformed_bls_pub_key_is_rejected_at_load() {
+        for bad in [
+            "0xdeadbeef".to_string(),
+            "zz".repeat(32),
+            String::new(),
+            "0x".to_string(),
+        ] {
+            let mut cfg = base();
+            cfg.node.bls_pub_key = Some(bad.clone());
+            let err = cfg
+                .validate()
+                .expect_err(&format!("{bad} is not a 32-byte key"));
+            assert!(
+                matches!(
+                    err,
+                    Error::Config(ConfigError::Invalid {
+                        field: "node.bls_pub_key",
+                        ..
+                    })
+                ),
+                "got {err:?} for {bad:?}"
+            );
+        }
+        // Unset is legal: the node simply refuses to register, which the worker reports.
+        let cfg = base();
+        assert_eq!(cfg.node.bls_pub_key, None);
+        cfg.validate().expect("a node without a BLS key may still start");
     }
 }
