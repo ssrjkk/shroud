@@ -1,6 +1,6 @@
 # Shroud devnet.
 #
-#   devnet      fhEVM hardhat node + contract deployment (in-process FHE mock coprocessor)
+#   devnet      fhEVM hardhat node + contract deployment (mock coprocessor etched by the plugin)
 #   shardstore  content-addressed DA (ShardStore)
 #   node-a/b/c  Shroud compute nodes (Rust) - requires `shroud-node:dev` to exist
 #
@@ -13,17 +13,19 @@
 #   docker compose up -d --scale node-a=0 node-b=0 node-c=0  # chain + DA only
 #   docker compose up -d node-a node-b node-c                # attach nodes
 #
-# After `devnet` is healthy, its addresses are in infra/devnet/addresses.json; pass the contract
-# addresses to the nodes via CM_TASK_ADDRESS / CM_VAULT_ADDRESS env below.
+# After `devnet` is healthy, its addresses are in infra/devnet/addresses.json (and the
+# shell-sourcable infra/devnet/addresses.env); copy CM_TASK_ADDRESS / CM_VAULT_ADDRESS from
+# there into the node env below.
 
 services:
   devnet:
     build:
       context: ..
       dockerfile: infra/devnet/Dockerfile
-    environment:
-      HARDHAT_NETWORK: devnet
-      CM_DEPLOYER_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" # hardhat#0
+    volumes:
+      # The deploy writes infra/devnet/addresses.{json,env} here so the host (and the operator
+      # wiring the nodes) can read them; without the mount they stay inside the container layer.
+      - ./devnet:/infra/devnet
     ports:
       - "8545:8545"
     healthcheck:
@@ -58,7 +60,7 @@ services:
     image: shroud-node:dev
     environment: &nodeenv
       CM_RPC_URL: http://devnet:8545
-      CM_CHAIN_ID: "31338"
+      CM_CHAIN_ID: "31337"
       CM_MESH_LISTEN: 0.0.0.0:7331
       CM_MESH_PEERS: node-b:7331,node-c:7331
       CM_OPERATOR_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" # hardhat#1

@@ -45,6 +45,13 @@ Python/
 infra/shardstore/0x*
 infra/shardstore-data/
 
+# --- Devnet generated output ---
+# Written by `npm run deploy:devnet` inside the devnet container (bind-mounted to the host).
+# Contract addresses for a throwaway chain: committing them would pin every checkout to one
+# machine's deployment.
+infra/devnet/addresses.json
+infra/devnet/addresses.env
+
 # --- Shroud ops bot -------------------------------------------------------
 # The bot's token and the operator's Telegram id are secrets; never commit them.
 bot/.env

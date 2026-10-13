@@ -2,12 +2,15 @@
  * Deploy the Shroud devnet contracts and write their addresses to
  * `infra/devnet/addresses.json` so the sequencer, SDK and Rust nodes can find them.
  *
- * Run against the hardhat network:
- *   npx hardhat run scripts/deploy.ts
+ * Run against a standalone node (started separately: `npx hardhat node`):
+ *   npx hardhat run scripts/deploy.ts --network localhost
  *
- * The devnet uses the in-process FHE mock coprocessor (the `@fhevm/hardhat-plugin` devnet), so
- * no external KMS is required. In production the same bytecode runs against the Zama coprocessor
- * with a KMS back end.
+ * `--network localhost` is load-bearing, not a preference: the plugin recognises a standalone
+ * node only under the `localhost` name (port 8545, chainId 31337) and etches the mock
+ * coprocessor into it via the `hardhat_node` provider hook. Any other network name resolves to
+ * provider type Unknown and the mocks are never installed. The devnet uses the in-process FHE
+ * mock coprocessor (the `@fhevm/hardhat-plugin` devnet), so no external KMS is required. In
+ * production the same bytecode runs against the Zama coprocessor with a KMS back end.
  */
 import { ethers, network } from "hardhat";
 import { deployLinked } from "./libraries";
@@ -30,20 +33,16 @@ const LOCAL_COPROCESSOR_ADDRESS = "0xe3a9105a3a932253A70F126eb1E3b589C643dD24";
 /**
  * Fail early, and legibly, if the FHE mock coprocessor is not present.
  *
- * `@fhevm/hardhat-plugin@0.4.2` installs the mocks only through a Hardhat *subtask*
- * (`fhevm:install-solidity`), which Hardhat refuses to run from the CLI (HH312) and `hre.run`
- * cannot resolve. It is also restricted to the in-process network: running against a standalone
- * `hardhat node` fails with "Provider type mismatch". `hardhat run` on the in-process network does
- * not install the mocks either, so `CipherTask`'s constructor reverts inside `FHE.asEuint32` with
- * no reason string, because the Coprocessor address `ZamaConfig` points at has no code.
+ * The mocks land on a standalone node only through the plugin's `hardhat_node` provider hook,
+ * which fires for the `localhost` network (and only it). Running this script without `--network`
+ * targets the ephemeral in-process network where no mocks are installed, and a custom network
+ * name resolves to provider type Unknown with the same result: in both cases `CipherTask`'s
+ * constructor reverts inside `FHE.asEuint32` with no reason string, because the Coprocessor
+ * address `ZamaConfig` points at has no code.
  *
  * This check turns that opaque revert into an actionable message. It does *not* install anything:
  * the installer is not reachable from a script without depending on plugin internals that change
  * between releases, which is a worse trade than a clear error.
- *
- * Consequence: the contracts are fully exercised by `hardhat test` (which does install the
- * mocks), but `docker compose up devnet` cannot deploy them with the pinned plugin version. See
- * docs/05.
  */
 async function assertFheMocksPresent(): Promise<void> {
   const coprocessor = LOCAL_COPROCESSOR_ADDRESS;
@@ -141,7 +140,15 @@ async function main() {
 
   mkdirSync(join(__dirname, "../../../infra/devnet"), { recursive: true });
   writeFileSync(OUT, JSON.stringify(addresses, null, 2));
-  console.log(`deployed Shroud devnet contracts; addresses written to ${OUT}`);
+  const envOut = join(__dirname, "../../../infra/devnet/addresses.env");
+  const envLines = [
+    `CM_CHAIN_ID=${addresses.chainId}`,
+    `CM_RPC_URL=http://devnet:8545`,
+    `CM_TASK_ADDRESS=${addresses.cipherTask}`,
+    `CM_VAULT_ADDRESS=${addresses.vault}`,
+  ];
+  writeFileSync(envOut, envLines.join("\n") + "\n");
+  console.log(`deployed Shroud devnet contracts; addresses written to ${OUT} and ${envOut}`);
   console.warn("WARNING: MockStarkVerifier and MockBLS are installed as the real verifiers.");
   console.warn("         Proofs are not verified and committee signatures are owner-approved.");
 }

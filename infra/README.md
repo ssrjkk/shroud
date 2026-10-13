@@ -16,8 +16,9 @@ DA (ShardStore), and (optionally) three Rust compute nodes.
 docker compose up -d --build devnet shardstore
 ```
 
-- `devnet` starts a hardhat fhEVM node (in-process FHE mock coprocessor) and deploys the
-  contracts, writing addresses to `infra/devnet/addresses.json`.
+- `devnet` starts a hardhat fhEVM node (the plugin etches the mock coprocessor into the
+  standalone node) and deploys the contracts, writing addresses to `infra/devnet/addresses.json`
+  (plus the shell-sourcable `addresses.env`).
 - `shardstore` serves the content-addressed store the SDK talks to (`PUT /objects`, `GET /objects/:cid`).
 
 The SDK smoke tests cross-check their embedded ABIs against the compiled contracts, so the

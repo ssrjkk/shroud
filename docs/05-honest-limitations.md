@@ -77,33 +77,30 @@ Nothing here has been externally audited. The Solidity has a Hardhat suite (96 t
 the `test-vectors/` byte-layout vectors) and the node has property tests for the state fold, but
 "tested" ≠ "audited". Do not deploy with real value.
 
-## 7a. The devnet cannot deploy the contracts
+## 7a. The devnet deploys through `--network localhost` — nothing else works
 
-`docker compose up devnet` is broken with the pinned `@fhevm/hardhat-plugin@0.4.2`, in two
-independent ways:
+`docker compose up devnet` deploys the full contract set to a standalone `hardhat node` with
+the mock coprocessor etched into it, and `scripts/devnet-e2e-check.ts` drives create → contribute
+→ seal → registerNode-with-bond against that deployment. Two selection details are load-bearing,
+and both have bitten before:
 
-- `hardhat run` on the in-process network does not install the FHE mock coprocessor, so
-  `CipherTask`'s constructor reverts inside `FHE.asEuint32` with no reason string.
-- `hardhat run --network devnet` against a standalone `hardhat node` fails with
-  `FhevmError: Provider type mismatch`.
+- The plugin recognises a standalone node **only under the `localhost` network name** (port
+  8545, chainId forced 31337). A custom `devnet:` network entry resolves to provider type
+  `Unknown`, on which mock setup refuses — so there is deliberately no `devnet` network in
+  `hardhat.config.ts`, and `deploy:devnet` passes `--network localhost` explicitly.
+- `hardhat run` without `--network` targets the ephemeral in-process network, where no mocks
+  are installed and `CipherTask`'s constructor reverts with no reason string. `deploy.ts`
+  asserts mock presence up front (`assertFheMocksPresent`) so that mis-selection fails with a
+  diagnosis instead of a bare revert.
 
-The plugin installs the mocks only through the Hardhat subtask `fhevm:install-solidity`, which
-Hardhat refuses to run from the CLI (HH312), which `hre.run` cannot resolve, and which is
-restricted to the in-process network. It is reachable only through undocumented plugin internals
-(`setupMockUsingHostContractsArtifacts(mockProvider, addresses, signers, paths)`), whose signature
-is not part of any public API — calling it directly would trade a clear failure for a fragile one
-that breaks on the next plugin bump.
+`infra/devnet/addresses.{json,env}` (gitignored) carry the deployment to operators and to
+`CM_TASK_ADDRESS` / `CM_VAULT_ADDRESS`. The contracts workflow runs the same deploy + E2E
+against a background node, so a regression here fails CI rather than surprising an operator.
 
-What this does and does not block: the contracts are fully exercised by `hardhat test` (96 tests,
-including the `test-vectors/` byte-layout vectors, where the mock *is* installed), so the
-money-handling logic is verified. What is **not** available
-is any deployed chain: the SDK and Rust node have never been exercised against a live CipherTask,
-because no deployment of one exists in this repo. Every claim about the end-to-end path is
-therefore untested.
-
-`deploy.ts` now checks for code at the Coprocessor address up front and fails with the diagnosis,
-the pinned version, and both workarounds, rather than a bare revert. Fixing this properly means
-changing the plugin version; the upgrade path is real work, not a config tweak.
+What this does not give you: the verifier and BLS contracts on devnet are **mocks**
+(`MockStarkVerifier` checks a magic prefix, `MockBLS` is an owner allowlist), the chain is a
+single-node EDR with unlocked accounts, and the SDK/Rust node still prove themselves against
+this devnet only as far as their own test suites reach — see §8.
 
 ## 8. The Rust node now builds and tests green on CI — with caveats
 

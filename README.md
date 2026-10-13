@@ -94,11 +94,13 @@ cd infra
 docker compose up -d --build shardstore
 ```
 
-> **The `devnet` service does not currently deploy.** `hardhat run` does not install the FHE mock
-> coprocessor (so `CipherTask`'s constructor reverts with no reason), and the plugin refuses to
-> deploy to a standalone `hardhat node` (`Provider type mismatch`). `deploy.ts` now detects this and
-> prints the diagnosis and workarounds instead of a bare revert. The contracts are still fully
-> exercised by `hardhat test`; see [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md).
+> **The `devnet` service deploys through `--network localhost`.** The fhevm plugin instruments
+> a standalone node only under the `localhost` name (port 8545, chainId 31337); any other network
+> name — including a custom `devnet:` entry — resolves to provider type `Unknown` and the mock
+> coprocessor is never installed, so `CipherTask`'s constructor reverts with no reason.
+> `deploy:devnet` passes the flag explicitly, `deploy.ts` asserts mock presence up front, and the
+> contracts workflow re-runs the deploy plus a lifecycle smoke on every push. The contracts are
+> also fully exercised by `hardhat test`; see [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) §7a.
 
 > **Note on the Rust node:** `node/`'s own source now **compiles and typechecks with zero
 > warnings** — `cargo check --all-features` reported no errors and no warnings in `shroud-node`

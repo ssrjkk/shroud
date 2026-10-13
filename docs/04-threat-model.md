@@ -265,26 +265,26 @@ rather than test-only conveniences:
 
 Both are owner-only now, and `deploy.ts` marks the mocks in `addresses.json` and prints a warning.
 
-### F-31 — Devnet deployment path is broken with the pinned plugin (ADV5) — **Known, documented**
-`docker compose up devnet` cannot deploy the contracts, for two independent reasons:
+### F-31 — Devnet deployment path with the pinned plugin (ADV5) — **Mitigated**
+`docker compose up devnet` deploys the contracts to a standalone `hardhat node` today. The two
+failure modes documented here turned out to share one root cause: network *selection*, not the
+plugin version.
 
-1. `hardhat run` on the in-process network does not install the FHE mock coprocessor, so
-   `CipherTask`'s constructor reverts inside `FHE.asEuint32` with no reason string — the Coprocessor
-   address `ZamaConfig` points at has no code.
-2. `hardhat run --network devnet` against a separate `hardhat node` is rejected by
-   `@fhevm/hardhat-plugin@0.4.2` with `FhevmError: Provider type mismatch`.
+1. `hardhat run` without `--network` targets the ephemeral in-process network, where no mocks
+   are installed — so `CipherTask`'s constructor reverts inside `FHE.asEuint64` with no reason
+   string.
+2. A custom `devnet:` network entry resolves to provider type `Unknown` in the plugin's
+   `__guessDefaultProvider`, on which mock setup refuses. The plugin recognises a standalone
+   node only under the `localhost` name (port 8545, chainId forced 31337) and etches the mocks
+   into it through its `hardhat_node` provider hook.
 
-The plugin exposes the installer only as the Hardhat *subtask* `fhevm:install-solidity`, which
-Hardhat refuses to run from the CLI (HH312) and which `hre.run` cannot resolve; it is also
-restricted to the in-process network. The installer is reachable only through plugin internals
-(`setupMockUsingHostContractsArtifacts`) whose signature is not part of any public API, so calling
-it directly would trade a clear failure for a fragile one.
-
-`deploy.ts` now checks for code at the Coprocessor address up front and fails with the diagnosis,
-the pinned version, and the two workarounds, instead of a bare revert. **The contracts are fully
-exercised by `hardhat test`** — the mock *is* installed there — so this blocks the devnet and the
-SDK/node integration path, not the test suite. Fixing it properly means changing the
-`@fhevm/hardhat-plugin` version; see `05-honest-limitations.md`.
+So there is deliberately no `devnet` network in `hardhat.config.ts`, `deploy:devnet` passes
+`--network localhost` explicitly, and `deploy.ts` asserts mock presence up front
+(`assertFheMocksPresent`) so a mis-selection fails with a diagnosis instead of a bare revert.
+`scripts/devnet-e2e-check.ts` drives create → contribute → seal → registerNode-with-bond against
+the deployment, and the contracts workflow re-runs deploy + E2E on every push. Verified
+end-to-end against a local node; `infra/devnet/addresses.{json,env}` (gitignored) carry the
+deployment to operators.
 
 ### F-32 — `settle` could be un-executable at the advertised contributor cap (ADV1, ADV4) — **Mitigated**
 `settle` looped over every accepted contributor and made an external call into the vault for each,

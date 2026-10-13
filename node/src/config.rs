@@ -247,7 +247,9 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             chain: ChainConfig {
-                chain_id: 31_338,
+                // `hardhat node` always serves 31337 (the plugin asserts it), so the devnet
+                // default matches the chain an operator actually gets from `docker compose up`.
+                chain_id: 31_337,
                 rpc_url: "http://127.0.0.1:8545".into(),
                 ws_url: None,
                 start_block: None,

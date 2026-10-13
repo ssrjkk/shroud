@@ -35,11 +35,14 @@ const config: HardhatUserConfig = {
       blockGasLimit: 300_000_000,
       chainId: 31_337
     },
-    devnet: {
-      url: process.env.CM_RPC_URL ?? "http://127.0.0.1:8545",
-      chainId: Number(process.env.CM_CHAIN_ID ?? 31338),
-      accounts: process.env.CM_DEPLOYER_KEY ? [process.env.CM_DEPLOYER_KEY] : []
-    }
+    // No named devnet network on purpose. The fhevm plugin recognises exactly three local
+    // shapes - in-process 'hardhat', a standalone node reached as 'localhost' (port 8545,
+    // chainId forced 31337), and 'anvil' - and any other network name resolves to provider
+    // type Unknown, on which mock setup refuses. A 'devnet:' entry with its own URL/chainId
+    // therefore deploys against a chain the plugin cannot instrument, and the constructor
+    // reverts on the missing mock coprocessor. Deploy to a standalone node with '--network
+    // localhost' (see 'deploy:devnet'); Hardhat's built-in 'localhost' network needs no
+    // configuration.
   },
   paths: {
     sources: "./src",

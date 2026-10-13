@@ -29,3 +29,25 @@ jobs:
       # get a fresh chain, which is what makes their pinned addresses meaningful.
       - run: npm test
       - run: npx tsc --noEmit
+
+  devnet:
+    name: deploy to a standalone node + lifecycle smoke
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json
+      - run: npm ci
+      # `--network localhost` is the only selection the fhevm plugin can instrument on a
+      # standalone node (see docs/05 §7a): any other name deploys against mocks that were
+      # never installed, and the constructor reverts with no reason string.
+      - run: npx hardhat node --hostname 127.0.0.1 --port 8545 &
+      - run: sleep 12
+      - run: npm run deploy:devnet
+      - run: npm run devnet:e2e
