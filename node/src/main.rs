@@ -114,25 +114,16 @@ async fn run() -> Result<()> {
         let shutdown = shutdown_rx.clone();
         tokio::spawn(async move { worker.run(shutdown).await })
     };
-    // A node built without `grpc-server` is a pure chain follower: it still executes every write
-    // arm, it just cannot be asked for shards by anybody.
-    #[cfg(feature = "grpc-server")]
-    let mesh_task: Option<JoinHandle<Result<()>>> = {
-        let shutdown = shutdown_rx.clone();
-        Some(tokio::spawn(async move {
-            shroud_node::mesh::server::serve(cfg.clone(), state.clone(), shutdown).await
-        }))
-    };
-    #[cfg(not(feature = "grpc-server"))]
-    let mesh_task: Option<JoinHandle<Result<()>>> = None;
-
     // Snapshots on a timer, so the next restart can skip the backfill. Best-effort by design: a
     // failed write only costs the next restart its shortcut - the fold still rebuilds from the
     // chain, which is exactly the fallback the startup path above takes.
+    //
+    // Spawned before the mesh task on purpose: the mesh block's `async move` closure takes
+    // `cfg` and `state` with it, so anything needing either has to be set up first.
     let snapshot_task = {
         let state = state.clone();
         let dir = cfg.node.data_dir.clone();
-        let shutdown = shutdown_rx.clone();
+        let mut shutdown = shutdown_rx.clone();
         tokio::spawn(async move {
             const EVERY: Duration = Duration::from_secs(30);
             let mut tick = tokio::time::interval(EVERY);
@@ -151,6 +142,18 @@ async fn run() -> Result<()> {
             }
         })
     };
+
+    // A node built without `grpc-server` is a pure chain follower: it still executes every write
+    // arm, it just cannot be asked for shards by anybody.
+    #[cfg(feature = "grpc-server")]
+    let mesh_task: Option<JoinHandle<Result<()>>> = {
+        let shutdown = shutdown_rx.clone();
+        Some(tokio::spawn(async move {
+            shroud_node::mesh::server::serve(cfg.clone(), state.clone(), shutdown).await
+        }))
+    };
+    #[cfg(not(feature = "grpc-server"))]
+    let mesh_task: Option<JoinHandle<Result<()>>> = None;
 
     info!("node running; press Ctrl-C to stop");
     wait_for_shutdown().await;
