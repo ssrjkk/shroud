@@ -114,9 +114,12 @@ and both have bitten before:
 against a background node, so a regression here fails CI rather than surprising an operator.
 
 What this does not give you: the verifier and BLS contracts on devnet are **mocks**
-(`MockStarkVerifier` checks a magic prefix, `MockBLS` is an owner allowlist), the chain is a
-single-node EDR with unlocked accounts, and the SDK/Rust node still prove themselves against
-this devnet only as far as their own test suites reach — see §8.
+(`MockStarkVerifier` checks a magic prefix, `MockBLS` is an owner allowlist) and the chain is a
+single-node EDR with unlocked accounts. What it *does* give you, proven on every push: the real
+SDK uploads a real contribution to a real deployed task (`devnet:sdk` in the contracts
+workflow), and the real node binary follows a real deployed chain, approves, registers and
+bonds (`devnet-live` in the rust workflow). The FHE execution and STARK proving legs remain
+unstubbed only in unit tests — see §8.
 
 ## 8. The Rust node now builds and tests green on CI — with caveats
 
