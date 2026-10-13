@@ -106,35 +106,26 @@ therefore untested.
 the pinned version, and both workarounds, rather than a bare revert. Fixing this properly means
 changing the plugin version; the upgrade path is real work, not a config tweak.
 
-## 8. The Rust node's fold logic is verified only by inspection
+## 8. The Rust node now builds and tests green on CI — with caveats
 
-`node/` used to fail to build: `src/chain/` held hand-written alloy bindings targeting APIs that
-match no released alloy version (`Filter::selectors`, `PendingTransactionBuilder::block_id`,
-`BoxedProvider` where the current name is `DynProvider`), and `client.rs` referenced a
-`CommitIntent` type that did not exist. That drift is fixed in the working tree — the bindings
-now track alloy 2.5.0, and `cargo check --all-features` is reported clean — but two caveats
-follow from how that work was done. The machine it was done on has **no Rust toolchain at all**
-(no `cargo`, no `rustc`), and `.github/workflows/rust.yml` runs on the *committed* tree, so the
-uncommitted state — including the new `chain/slice.rs`, `chain/transcript.rs`, `mesh/server.rs`
-and `worker.rs` — has never once been compiled here. Rust CI on `master` is green, but it does
-not cover that working tree either.
+`node/` builds and passes its suite on GitHub Actions (`cargo check` all-features and
+no-default-features, `fmt --check`, `clippy -D warnings`, `cargo test` both feature sets,
+`cargo build --release`): 160 tests, all passing. The old alloy API drift (`Filter::selectors`,
+`PendingTransactionBuilder::block_id`, `BoxedProvider`, figment 0.10) is fixed, and the three
+`state.rs` logic bugs fixed by inspection are now covered by tests that run green
+(`our_own_commit_queues_only_the_finalize`, the dispute/claim tests, the `ctRoot` round-trip
+tests).
 
-What also remains: `cargo test` cannot link on a Windows + MinGW-w64 toolchain — `tfhe` and
-`alloy-transport` fail with `E0463: can't find crate` for their proc-macro dependencies
-(`strum`, `auto_impl`). That is a third-party/toolchain problem, not this repository's code, and
-it is unresolved.
+What remains true:
 
-Three logic bugs in `state.rs` were fixed by inspection — a scheduler condition inverted so the
-node only offered to execute an epoch *after* somebody else had already committed, a
-cross-epoch digest consensus compared against a single epoch's claim, and a self-assignment that
-silently pinned `opened_at` to zero. **These fixes are unverified**: they could not be compiled or
-run here. The inversion has one piece of corroborating evidence — the pre-existing unit test
-`task_sealed_for_a_registered_node_produces_execute_work` asserts the correct behaviour and would
-have failed against the old code, which is consistent with the crate never having been built. That
-is not a substitute for `cargo test`.
-
-`node/` should be read as a design document plus a state fold that typechecks, not as working
-software that has been run.
+- The machine this was developed on has **no Rust toolchain at all** (no `cargo`, no `rustc`),
+  and Windows + MinGW-w64 cannot link `cargo test` (`tfhe` and `alloy-transport` fail with
+  `E0463: can't find crate` for proc-macro deps `strum`, `auto_impl`). So every Rust change
+  here is verified by CI, never locally. If CI is red, the tree is unverified — treat it as
+  such.
+- Nothing here has run against a live chain: the fold, watcher, worker and mesh server are
+  exercised by unit tests with captured fixtures, not by a node following a real CipherTask
+  (§7a explains why no such deployment exists in this repo).
 
 ## 9. What is genuinely finished in this repo
 
@@ -164,5 +155,5 @@ software that has been run.
 - `node/`: complete service skeleton — reorg-safe log watcher, shard store with byte budget,
   FHE engine behind a `FheEngine` trait (u32 TFHE adapter + reference CPU adapter for tests),
   Winterfell PoC circuit + prover, gRPC peer mesh, EIP-712 slice signer, dispute gossip.
-  **Skeleton only: it typechecks and has unit tests, but `cargo test` has never linked on the
-  author's toolchain and nothing here has run against a live chain — see §8.**
+  **Builds and tests green on CI (160 tests), but nothing here has run against a live chain —
+  see §8.**
