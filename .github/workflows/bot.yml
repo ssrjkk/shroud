@@ -1,0 +1,26 @@
+name: bot
+
+on:
+  push:
+    branches: [master]
+    paths: ["bot/**", ".github/workflows/bot.yml"]
+  pull_request:
+    paths: ["bot/**", ".github/workflows/bot.yml"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bot
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: bot/package-lock.json
+      - run: npm ci
+      - run: npm test
