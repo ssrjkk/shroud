@@ -59,8 +59,8 @@
 
     <div class="rows">
       <article class="row bad">
-        <div class="row-h"><span class="pill pill-bad">not enforced</span><h3>The dispute quorum is not Sybil-resistant</h3></div>
-        <p><code>registerNode</code> is permissionless and takes no stake. The quorum is a flat count of three distinct registered addresses, so three cheap addresses can deny a node its reward for an epoch. It cannot steal the reward, and it cannot accept a dishonest one — only refuse an honest node.</p>
+        <div class="row-h"><span class="pill pill-bad">priced, not prevented</span><h3>The dispute quorum is not Sybil-resistant</h3></div>
+        <p><code>registerNode</code> pulls a registration bond (vault custody) and rejects reused BLS keys, and a dispute quorum slashes the winner's bond into the buyer refund. The quorum is still a flat count of three distinct registered addresses and locked capital returns after terminality, so three funded addresses can deny a node its reward for an epoch and burn its bond with it. It cannot steal the reward, and it cannot accept a dishonest one — only refuse an honest node.</p>
         <p class="ref">Threat model F-01, F-19 · limitations §2a</p>
       </article>
 

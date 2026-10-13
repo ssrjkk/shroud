@@ -158,12 +158,13 @@
 
     <div class="grid-3">
       <article class="card warn">
-        <span class="pill pill-bad">not enforced</span>
+        <span class="pill pill-bad">priced, not prevented</span>
         <h3>The dispute quorum is not Sybil-resistant</h3>
         <p>
-          <code>registerNode</code> is permissionless and takes no stake. The quorum is a flat count
-          of three registered addresses, so a ring of three cheap addresses can deny a node its
-          reward. It cannot steal it.
+          <code>registerNode</code> pulls a registration bond and rejects reused BLS keys, and a
+          quorum slashes the winner's bond — but locked capital returns after terminality and the
+          quorum is still a flat count of three, so a ring of three funded addresses can deny a
+          node its reward and burn its bond with it. It cannot steal the reward.
         </p>
       </article>
       <article class="card warn">
