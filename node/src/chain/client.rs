@@ -439,7 +439,7 @@ impl OrchestratorClient {
         let local = cfg
             .fhe
             .public_key_hash
-            .ok_or_else(|| ConfigError::Missing("fhe.public_key_hash"))?;
+            .ok_or(ConfigError::Missing("fhe.public_key_hash"))?;
         if self.network_params.is_zero() {
             return Err(ConfigError::Missing("contracts.network_params").into());
         }

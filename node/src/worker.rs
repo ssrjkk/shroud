@@ -785,8 +785,12 @@ mod tests {
 
     fn worker() -> Worker {
         let state = Arc::new(NodeState::new());
-        state.set_operator(Address::repeat_byte(0x99));
-        worker_with(state)
+        let w = worker_with(state);
+        // The fold attributes commits and channels to this address; if it disagrees with the
+        // client's key-derived operator the worker would redeem nobody's channels. Tests that
+        // need a fixed address set it explicitly — the default here is agreement.
+        w.state.set_operator(w.client.operator());
+        w
     }
 
     #[test]

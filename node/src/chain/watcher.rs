@@ -534,7 +534,7 @@ impl Watcher {
             self.contract,
             self.vault,
             log.address(),
-            &log.topics(),
+            log.topics(),
             &log.data().data[..],
         );
         Ok(ev.filter(|e| self.passes_filter(e)))

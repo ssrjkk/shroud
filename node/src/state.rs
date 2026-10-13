@@ -436,30 +436,36 @@ impl NodeState {
                 shards,
                 contributors,
             } => {
-                let t = g.tasks.entry(*task_id).or_default();
-                t.task_id = *task_id;
-                // Both cross-checks only *decide* whether to taint here. The flag itself is
-                // written at the end of the arm: `t` borrows `g.tasks`, and writing `g.tainted`
-                // while that borrow is still live is a second mutable borrow of the same guard.
-                let root_changed = t.ct_root != B256::ZERO && t.ct_root != *ct_root;
-                let derived = t.derived_ct_root();
-                let derived_mismatch = derived.is_some_and(|d| d != *ct_root);
-                t.ct_root = *ct_root;
-                t.shards = *shards;
-                t.contributors = *contributors;
-                t.status = TaskStatus::Sealed;
+                // `t` borrows `g.tasks`, so the taint flag (which lives on `g` itself) cannot
+                // be written while `t` is alive. Decide everything inside the block, write the
+                // flag after the borrow ends. The order matters the other way too: `derived`
+                // must be computed *after* `shards`/`contributors` land, or the fold compares
+                // the leaves against a zeroed count, derives `None`, and never taints.
+                let (root_changed, derived, needs_register) = {
+                    let t = g.tasks.entry(*task_id).or_default();
+                    t.task_id = *task_id;
+                    let root_changed = t.ct_root != B256::ZERO && t.ct_root != *ct_root;
+                    t.ct_root = *ct_root;
+                    t.shards = *shards;
+                    t.contributors = *contributors;
+                    t.status = TaskStatus::Sealed;
+                    // Cross-check the seal against the contributions we saw. This is the only
+                    // place the node can catch a wrong `ctRoot` before it executes against it.
+                    let derived = t.derived_ct_root();
+                    (root_changed, derived, !t.registered)
+                };
 
                 // The seal is the last moment registration is still early: `registerNode` is
                 // documented as "once per task before the first epoch opens", and until it lands
                 // the node can neither commit nor dispute anything on this task.
-                if !t.registered {
+                if needs_register {
                     work.push(Work::Register { task_id: *task_id });
                 }
                 if root_changed {
                     g.tainted = true;
                     warn!(task = %task_id, "ctRoot changed for an already-seen task; state is tainted");
                 }
-                if let Some(derived) = derived.filter(|_| derived_mismatch) {
+                if let Some(derived) = derived.filter(|d| d != ct_root) {
                     g.tainted = true;
                     warn!(
                         task = %task_id,
@@ -1107,12 +1113,22 @@ mod tests {
     }
 
     #[test]
-    fn our_own_commit_produces_no_work() {
+    fn our_own_commit_queues_only_the_finalize() {
         let s = state();
         s.mark_registered(U256::from(5), true);
         opened(&s, 5, 0);
         s.take_work();
-        assert!(committed(&s, 5, 0, NODE, 0xaa).is_empty());
+        // Our own commit is verified by inclusion (`commitEpoch` reverts on a bad proof, and a
+        // revert takes the log with it), and somebody still has to close the window:
+        // `finalizeEpoch` is permissionless, so the fold nudges it. No dispute: the claim is
+        // ours, and no re-execution: there is nothing to re-derive an opinion about.
+        assert_eq!(
+            committed(&s, 5, 0, NODE, 0xaa),
+            vec![Work::Finalize {
+                task_id: U256::from(5),
+                epoch: 0
+            }]
+        );
     }
 
     #[test]
@@ -1144,17 +1160,28 @@ mod tests {
         let s = state();
         s.mark_registered(U256::from(7), true);
         opened(&s, 7, 0);
-        // We commit first, so ours is the claim.
+        // We commit first, so ours is the claim until the lower address takes it.
         committed(&s, 7, 0, NODE, 0xaa);
         s.take_work();
-        // A peer commits a different digest, but our proof is not verified yet: reporting now
-        // would revert with DisputeWithoutVerifiedCommit.
+        // A peer commits a different digest. Our commit is verified by inclusion —
+        // `commitEpoch` emits `EpochCommitted` only after the verifier said yes, and a revert
+        // takes the log with it — so there is nothing to wait for: the claim (the lower
+        // address, the peer's `0xbb`) disagrees with our verified `0xaa`, and `reportDispute`
+        // is callable.
         let work = committed(&s, 7, 0, OTHER, 0xbb);
-        assert!(
-            !work.iter().any(|w| matches!(w, Work::FileDispute { .. })),
-            "an unverified commit cannot dispute: {work:?}"
+        assert_eq!(
+            work,
+            vec![Work::FileDispute {
+                task_id: U256::from(7),
+                epoch: 0,
+                // The contract requires the reported digest to equal our own commit, not the
+                // peer's claim.
+                our_digest: B256::repeat_byte(0xaa)
+            }],
+            "a verified commit against a foreign claim disputes at once: {work:?}"
         );
-        // Verification lands.
+        // Verification re-lands (same-transaction log order on replay, or a re-read window):
+        // an idempotent re-nudge, which the worker dedups rather than double-filing.
         let work = s.apply(&ChainEvent::EpochVerified {
             task_id: U256::from(7),
             epoch: 0,
