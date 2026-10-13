@@ -24,7 +24,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "export-abi": "node scripts/export-abi.cjs",
-    "test": "npm run build && node --test --experimental-strip-types test/smoke.test.ts"
+    "test": "npm run build && node --test --experimental-strip-types test/smoke.test.ts",
+    "devnet:sdk": "node scripts/devnet-check.mjs"
   },
   "dependencies": {
     "ethers": "^6.13.0"

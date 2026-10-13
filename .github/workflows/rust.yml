@@ -3,9 +3,9 @@ name: rust
 on:
   push:
     branches: [master]
-    paths: ["node/**", ".github/workflows/rust.yml"]
+    paths: ["node/**", "packages/contracts/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["node/**", ".github/workflows/rust.yml"]
+    paths: ["node/**", "packages/contracts/**", ".github/workflows/rust.yml"]
   workflow_dispatch:
 
 env:
@@ -70,3 +70,69 @@ jobs:
         with:
           workspaces: node -> target
       - run: cargo build --release
+
+  devnet-live:
+    name: live node registers + bonds on devnet
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: node -> target
+      # Chain + contracts first: the node needs something sealed to register for.
+      - run: npm ci
+        working-directory: packages/contracts
+      - run: npx hardhat node --hostname 127.0.0.1 --port 8545 &
+        working-directory: packages/contracts
+      - run: sleep 12
+      - run: npm run deploy:devnet
+        working-directory: packages/contracts
+      - run: npx hardhat run scripts/devnet-e2e-check.ts --network localhost
+        working-directory: packages/contracts
+      - run: npx hardhat run scripts/prepare-node-operator.ts --network localhost
+        working-directory: packages/contracts
+      - run: cargo build --release
+        working-directory: node
+      # The operator is hardhat#1 (funded above); the BLS key is a throwaway devnet identity,
+      # distinct from every key the contract scripts use. Config goes through a generated TOML
+      # rather than nested CM_ env vars so there is exactly one mapping to audit (see
+      # `Config::load`); flat overrides like CM_RPC_URL would work too, but the file is explicit
+      # about every field the node actually starts with, and it is dumped to the log below.
+      - run: |
+          node -e "
+            const fs = require('fs');
+            const a = require('./infra/devnet/addresses.json');
+            const toml = [
+              '[chain]',
+              'rpc_url = \"http://127.0.0.1:8545\"',
+              'chain_id = 31337',
+              '',
+              '[contracts]',
+              \`cipher_task = \"\${a.cipherTask}\"\`,
+              \`payment_vault = \"\${a.vault}\"\`,
+              '',
+              '[node]',
+              'operator_key = \"0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d\"',
+              'bls_pub_key = \"0xabababababababababababababababababababababababababababababababab\"',
+              \`data_dir = \"\${process.env.RUNNER_TEMP}/shroud-data\"\`,
+              '',
+              '[mesh]',
+              'listen = \"127.0.0.1:17331\"',
+            ].join('\n');
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/shroud.toml', toml);
+            console.log(toml.replace(/operator_key = .*/, 'operator_key = \"0x…\"'));
+          "
+          ./target/release/shroud-node --config $RUNNER_TEMP/shroud.toml &
+        working-directory: node
+      - run: sleep 90
+      - run: npx hardhat run scripts/assert-node-registered.ts --network localhost
+        working-directory: packages/contracts

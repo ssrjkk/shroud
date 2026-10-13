@@ -3,9 +3,9 @@ name: contracts
 on:
   push:
     branches: [master]
-    paths: ["packages/contracts/**", ".github/workflows/contracts.yml"]
+    paths: ["packages/contracts/**", "packages/sdk/scripts/devnet-check.mjs", "packages/sdk/package.json", ".github/workflows/contracts.yml"]
   pull_request:
-    paths: ["packages/contracts/**", ".github/workflows/contracts.yml"]
+    paths: ["packages/contracts/**", "packages/sdk/scripts/devnet-check.mjs", "packages/sdk/package.json", ".github/workflows/contracts.yml"]
   workflow_dispatch:
 
 jobs:
@@ -42,7 +42,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: packages/contracts/package-lock.json
+          cache-dependency-path: |
+            packages/contracts/package-lock.json
+            packages/sdk/package-lock.json
       - run: npm ci
       # `--network localhost` is the only selection the fhevm plugin can instrument on a
       # standalone node (see docs/05 §7a): any other name deploys against mocks that were
@@ -51,3 +53,12 @@ jobs:
       - run: sleep 12
       - run: npm run deploy:devnet
       - run: npm run devnet:e2e
+      # The SDK speaks to the same chain this job just deployed: real `uploadAndMonetize`
+      # (explicit dev-only `allowUnencrypted`) with on-chain verification, not mocks. Runs
+      # after the contracts smoke so a red SDK never masks a red deploy.
+      - run: npm ci
+        working-directory: packages/sdk
+      - run: npm run build
+        working-directory: packages/sdk
+      - run: npm run devnet:sdk
+        working-directory: packages/sdk
