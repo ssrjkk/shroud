@@ -19,7 +19,7 @@ pub mod slice;
 pub mod transcript;
 pub mod watcher;
 
-use alloy::providers::{DynProvider, ProviderBuilder};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 
 use crate::{
     config::Config,
@@ -41,5 +41,5 @@ pub(crate) fn parse_rpc_url(src: &str) -> std::result::Result<url::Url, ConfigEr
 pub(crate) fn read_provider(cfg: &Config) -> Result<DynProvider> {
     Ok(ProviderBuilder::new()
         .connect_http(parse_rpc_url(&cfg.chain.rpc_url)?)
-        .red())
+        .erased())
 }
