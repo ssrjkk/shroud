@@ -110,7 +110,7 @@ jobs:
       - run: |
           node -e "
             const fs = require('fs');
-            const a = require('./infra/devnet/addresses.json');
+            const a = require('../infra/devnet/addresses.json');
             const toml = [
               '[chain]',
               'rpc_url = \"http://127.0.0.1:8545\"',
