@@ -27,8 +27,9 @@ is `sqrt(rows)·liveness` rather than linear, so splitting one row into 400 sybi
 preventable by any of this and is not a vulnerability — that is a bulk data purchase.
 
 *Corrected:* this finding previously claimed "a deposit of `contributionBond` is slashable on a
-fraud quorum". **No such deposit exists** — `contributionBond` appears nowhere in the tree, and the
-`BondInsufficient` / `ContributionRejected` declarations in `ICipherTask` are never used.
+fraud quorum". **No such deposit exists** — `contributionBond` appears nowhere in the tree, and
+`ContributionRejected` is never used. (`BondInsufficient` is a live error again, but it belongs
+to *node* registration bonds in the vault, not to contributors.)
 `Contribution.slashed` is read by `settle` but never set. So there is currently **no slashing and
 no economic penalty for a fraudulent shard**: a bad shard is detected only if a node re-executes
 and disputes, and a buyer cannot slash the contributor even then. Mitigating sybil farming rests
@@ -63,21 +64,26 @@ assignment and a bond are still genuinely missing and are called out in
 ### F-04 — Sybil node ring defeating the dispute quorum (ADV3) — **Partially mitigated**
 *Corrected:* this finding previously described stake-weighted, contract-assigned re-executors
 (`keccak(taskId, epoch, salt)` selection, a bond, "≥ 3/5 of the assigned re-executors", attack
-cost `≥ 0.6 × epochBudget`). **None of that is implemented.** What the contracts actually do:
+cost `≥ 0.6 × epochBudget`). **The assignment half is still not implemented.** What the contracts
+now do about the cost half:
 
-- `registerNode(taskId, blsPubKey)` is permissionless, takes no stake, and stores only a boolean
-  plus an unvalidated BLS key. Nothing checks that the key is unique, well-formed, or backed by
-  anything.
-- `reportDispute` accepts any registered address for the task. The quorum is a flat
-  `_disputeCount >= 3` over *distinct* registered addresses, and `_epochReporters` records who.
+- `registerNode(taskId, blsPubKey)` pulls `REGISTRATION_BOND` (10 CMUSD at 6 dp, vault custody
+  as its own invariant term) and rejects zero and already-used BLS keys for the task.
+- A dispute quorum slashes the *winner's* bond into the task sub-balance (buyer refund);
+  reporters keep theirs.
+- `reportDispute` still accepts any registered address, and the quorum is still a flat
+  `_disputeCount >= 3` over distinct registered addresses.
 
-So a ring of three cheap addresses reaches quorum. It cannot **steal** a payout — the winner is
-decided by STARK validity, not by the dispute outcome — but it can **deny** an honest node its
-epoch reward, repeatedly, for the cost of three `registerNode` calls. It also cannot exclude Sybil
-reporters, because there is nothing to weight.
+So a ring of three addresses now locks 3× the bond for the task's whole life *plus* gas and
+compute (each reporter still needs its own verified commit), and a lying winner additionally
+forfeits its bond on rejection. What the bond does **not** do: it is locked capital, not burned
+capital — an attacker gets it back after terminality. It prices grief; it does not prevent it.
+A ring can still deny an honest node its reward, and now also burn the honest winner's bond
+alongside the reward (the chain cannot tell a lying winner from a lying quorum). Seeded or
+stake-weighted re-executor assignment is still genuinely missing and is called out in
+`05-honest-limitations.md` rather than papered over here.
 
-F-15 removes the variant where the attack is free. Making it economically unattractive needs real
-work: a bond per registration, seeded or stake-weighted assignment, and BLS-key uniqueness.
+F-15 removes the variant where the attack is free.
 
 ### F-15 — Dispute-target hijack by a losing committer (ADV2) — **Mitigated**
 `_claimedDigest` is the digest the dispute window is measured against, and it must therefore be

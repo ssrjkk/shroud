@@ -26,25 +26,24 @@ The FHE layer's honesty comes from the **dispute re-execution quorum**, which is
 deterministic-recomputation, not cryptography. A full "verify TFHE bootstraps inside a ZKVM"
 design is a research project (see AUs 2024/2025 work on verifiable FHE); it is not in this repo.
 
-## 2a. The re-executor set is unweighted and unbonded
+## 2a. The re-executor set is unweighted; the bond prices Sybils without stopping them
 
-The threat model's F-04 cost argument ("a ring must bond stake, so the attack costs
-`≥ 0.6 × epochBudget`") describes a design that is **not** what the contracts implement.
-`registerNode(taskId, blsPubKey)` is permissionless and takes no stake, and `reportDispute`
-accepts any registered address; the quorum is a flat count of 3. `BLS` keys are recorded but
-never checked for uniqueness or stake behind them.
+`registerNode(taskId, blsPubKey)` pulls a flat `REGISTRATION_BOND` into vault custody, rejects
+zero and reused BLS keys per task, and a dispute quorum slashes the *winner's* bond into the
+buyer refund. `reportDispute` still accepts any registered address and the quorum is still a
+flat count of 3 — there is no seeded or stake-weighted re-executor assignment.
 
 Consequences, stated plainly:
-- A ring of 3 cheap addresses can reach quorum and reject a valid epoch. It cannot *steal* the
-  payout — the winner is still chosen by STARK validity, not by the dispute outcome — but it can
-  deny a node its reward, repeatedly, at the cost of three `registerNode` calls.
-- Conversely, an honest node cannot exclude Sybil reporters.
+- A ring of 3 addresses now locks 3× the bond for the task's life, plus gas and one verified
+  commit each. It cannot *steal* the payout — the winner is still chosen by STARK validity —
+  but it can deny a node its reward and burn the honest winner's bond with it, at the cost of
+  three bonds locked and three commits computed.
+- Conversely, an honest node cannot exclude Sybil reporters, and locked capital returns to the
+  attacker after terminality: the bond is a spam price, not a burn.
 
-F-15 removes the version of this where the attack is *free* (a losing node redirecting the
-dispute target). Making it economically unattractive still requires real work: a bond per
-registered node, stake-weighted or seeded re-executor assignment, and BLS-key uniqueness. Until
-that lands, treat the quorum as a liveness check against a single bad claimant, not as a
-Sybil-resistant economic guarantee.
+Making it economically unattractive still requires real work: stake-weighted or seeded
+re-executor assignment. Until that lands, treat the quorum as a liveness check against a single
+bad claimant backed by a priced identity, not as a Sybil-resistant economic guarantee.
 
 ## 3. On-chain proof verification is sampled, not complete
 
