@@ -1515,24 +1515,27 @@ mod tests {
                 rows: 1_000,
             });
         }
-        let expected = s
+        // `derived_ct_root` is gated on the sealed contributor count (a prefix of the leaves
+        // must not read as a mismatch for a watcher that joined mid-chain), so the comparison
+        // happens after the seal lands — with the fixture root the chain reported.
+        let fixture: B256 = "0xa3d7329343c8b278393d3e6d990e99e514d3474f8d4f4df834630ecbdf9d0827"
+            .parse()
+            .expect("fixture root");
+        s.apply(&ChainEvent::TaskSealed {
+            task_id: U256::from(13),
+            ct_root: fixture,
+            shards: 3,
+            contributors: 3,
+        });
+        let derived = s
             .task(U256::from(13))
             .unwrap()
             .derived_ct_root()
             .expect("three contiguous leaves");
         assert_eq!(
-            expected,
-            "0xa3d7329343c8b278393d3e6d990e99e514d3474f8d4f4df834630ecbdf9d0827"
-                .parse::<B256>()
-                .expect("fixture root"),
+            derived, fixture,
             "the fold must reproduce the root the chain sealed"
         );
-        s.apply(&ChainEvent::TaskSealed {
-            task_id: U256::from(13),
-            ct_root: expected,
-            shards: 3,
-            contributors: 3,
-        });
         assert!(!s.is_tainted(), "a matching ctRoot must not taint");
     }
 
