@@ -49,3 +49,63 @@ cargo build --release
 ```
 
 then `docker build -t shroud-node:dev -f infra/node/Dockerfile .` from the repo root.
+
+## 3. Node configuration
+
+The node reads `shroud.toml` (plus `CM_*` env and CLI flags — see `node/src/config.rs`,
+the only authority). The knobs that decide what the node actually *does*:
+
+```toml
+[chain]
+rpc_url = "http://127.0.0.1:8545"
+chain_id = 31337          # verified against the RPC at startup; mismatch refuses to boot.
+                          # `--chain-id` / `CM_CHAIN_ID` set the same value (the compose
+                          # devnet relies on this) and win over TOML when passed.
+
+[contracts]
+cipher_task = "0x..."     # zero address = watcher matches nothing (warns, still runs)
+payment_vault = "0x..."
+network_params = "0x..."  # only needed with enforce_key_pin
+
+[node]
+operator_key = "0x..."    # pays gas, receives rewards; NEVER commit a funded key
+bls_pub_key = "0x..."     # per-task registration identity (must be unique per task)
+# Durations below use serde's map form, e.g. min_epoch_window = { secs = 300, nanos = 0 }.
+# A bare "300s" string does NOT parse, and neither env vars nor CLI flags can set
+# durations today (there is no humantime layer and no duration flag): omit them and the
+# built-in defaults apply. In particular min_epoch_window defaults to 300 s, so tasks
+# with shorter epoch windows than that can never be committed to — plan epochDuration
+# accordingly.
+min_epoch_window = { secs = 300, nanos = 0 }  # refuse commits with less time left (a
+                          # commit that cannot finish before the deadline is burned gas)
+enforce_key_pin = false   # opt-in: refuse to start unless fhe.public_key_hash equals
+                          # the on-chain pin (one check at boot, not per epoch)
+
+[fhe]
+backend = "reference"     # reference | tfhe-short-integer | tfhe-concrete | accelerator
+scale = 10000             # fixed-point scale; must match the shards' quantization
+lr_q16 = 65536            # learning rate, Q16.16 (65536 = 1.0)
+l2_q16 = 65               # L2 shrinkage, Q16.16
+minibatch = 8
+# server_key_path = "/keys/network.skey"  # REQUIRED for tfhe-* backends: a
+                          # safe_serialized CompressedServerKey from the key ceremony.
+                          # Without it tfhe executions fail loudly with NoKeyShare while
+                          # the node keeps watching, finalizing and redeeming.
+
+[shard]
+cache_dir = "./data/cache"      # content-addressed store this node also serves to peers
+da_endpoint = "file://./data/da" # file:// = local-dev; s3://, gs://, https:// need
+                                # `--features da`, otherwise remote reads refuse loudly
+max_ciphertext_bytes = 8589934592
+
+[stark]
+digest_only = false       # true = dispute-only watchdog: never join the commit race,
+                          # only re-execute, report and collect payment duties
+```
+
+Backend choice is a privacy decision, not just a performance one: `reference`
+executes over development (`shroud/noop/v1`) shards whose rows are visible — it
+refuses anything else rather than training on bytes it cannot read. Point it at real
+encrypted shards and every epoch errors out loudly with no gas spent. Encrypted data
+needs a `tfhe-*` backend **plus** `server_key_path`, on a binary built with
+`--features prover`.

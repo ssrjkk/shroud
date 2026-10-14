@@ -108,6 +108,9 @@ pub enum FheError {
     #[error("value out of range for a u32 lane: {0}")]
     LaneOverflow(u64),
 
+    #[error("fixed-point overflow in {stage}: {detail}")]
+    Overflow { stage: &'static str, detail: String },
+
     #[error("gradient diverged: |loss| = {loss} exceeds the divergence cap after {epoch} epochs")]
     Diverged { epoch: u32, loss: f64 },
 }

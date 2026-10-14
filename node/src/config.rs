@@ -32,6 +32,13 @@ pub struct Cli {
     #[arg(long, env = "CM_WS_URL")]
     pub ws_url: Option<String>,
 
+    /// Chain id the RPC must serve (checked at startup). Without this flag the
+    /// `CM_CHAIN_ID` variable silently had no effect: figment lowercases it to a
+    /// top-level `chain_id` key that `Config` ignores, so only TOML `chain.chain_id`
+    /// or this flag moves it. The compose devnet sets it, and now it lands.
+    #[arg(long, env = "CM_CHAIN_ID")]
+    pub chain_id: Option<u64>,
+
     /// Operator EOA that signs payment slices and pays gas.
     #[arg(long, env = "CM_OPERATOR_KEY")]
     pub operator_key: Option<String>,
@@ -147,6 +154,11 @@ pub struct FheConfig {
     /// would be a switch that looks protective and does nothing, which is worse than not having
     /// it, because it would be audited as if it worked.
     pub public_key_hash: Option<B256>,
+    /// File holding the `safe_serialize`d `CompressedServerKey` the tfhe backends compute
+    /// under. Provisioned out of band by the key ceremony; `None` means the node has no key
+    /// material and its tfhe executions fail with `NoKeyShare` (the node keeps watching,
+    /// disputing nothing it cannot recompute, and collecting its other duties).
+    pub server_key_path: Option<PathBuf>,
     /// u32 message width. Bleve batches 8 lanes per ciphertext.
     pub lanes_per_ciphertext: usize,
     pub scale: u32,
@@ -163,7 +175,11 @@ pub struct FheConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FheBackend {
-    /// `tfhe-rs` short-integer keys. The production CPU path.
+    /// Deterministic fixed-point SGD over development (`shroud/noop/v1`) shards.
+    /// Byte-for-byte reproducible across nodes, which is what the dispute quorum needs.
+    /// Refuses any shard it cannot decode — including real encrypted shards — loudly.
+    Reference,
+    /// `tfhe-rs` short-integer keys. The production CPU path (feature `prover`).
     TfheShortInteger,
     /// `tfhe-rs` Concrete, fully deterministic. Used by tests and by the re-executor so
     /// that a dispute digest is reproducible across builds.
@@ -278,8 +294,14 @@ impl Default for Config {
                 task_filter: None,
             },
             fhe: FheConfig {
-                backend: FheBackend::TfheShortInteger,
+                // Reference first: it runs without key material on development shards, so a
+                // fresh node closes the whole loop (register → execute → commit → finalize →
+                // settle → redeem) out of the box. Encrypted shards need a tfhe backend plus
+                // `fhe.server_key_path`, and the reference engine refuses those loudly rather
+                // than training on bytes it cannot read.
+                backend: FheBackend::Reference,
                 public_key_hash: None,
+                server_key_path: None,
                 lanes_per_ciphertext: 8,
                 scale: 10_000,
                 lr_q16: 65_536, // 1.0
@@ -553,6 +575,8 @@ struct ChainOverride {
     #[serde(skip_serializing_if = "Option::is_none")]
     ws_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    chain_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     start_block: Option<u64>,
 }
 
@@ -594,6 +618,7 @@ fn cli_overrides(cli: &Cli) -> figment::providers::Serialized<CliOverrides> {
         chain: ChainOverride {
             rpc_url: cli.rpc_url.clone(),
             ws_url: cli.ws_url.clone(),
+            chain_id: cli.chain_id,
             start_block: cli.start_block,
         },
         contracts: ContractsOverride {
@@ -662,7 +687,7 @@ mod tests {
     fn defaults_apply_when_the_file_omits_a_section() {
         let cfg = from_toml_str(MINIMAL).expect("valid config");
         assert_eq!(cfg.chain.chain_id, Config::default().chain.chain_id);
-        assert_eq!(cfg.fhe.backend, FheBackend::TfheShortInteger);
+        assert_eq!(cfg.fhe.backend, FheBackend::Reference);
         assert_eq!(cfg.finality.confirmations, 2);
     }
 
@@ -867,6 +892,26 @@ mod tests {
             .extract()
             .expect("extract succeeds");
         assert_eq!(cfg.chain.rpc_url, "http://from-file:8545");
+    }
+
+    #[test]
+    fn cli_chain_id_maps_onto_chain_config() {
+        // The regression this guards: `CM_CHAIN_ID` reached figment as a top-level
+        // `chain_id` key that `Config` ignores, so the variable silently had no effect
+        // (the compose devnet sets it). Now the flag carries it to `chain.chain_id`.
+        let cli = Cli::parse_from(["shroud-node", "--chain-id", "97"]);
+        let cfg: Config = Figment::from(Serialized::defaults(Config::default()))
+            .merge(cli_overrides(&cli))
+            .extract()
+            .expect("extract succeeds");
+        assert_eq!(cfg.chain.chain_id, 97);
+
+        let plain = Cli::parse_from(["shroud-node"]);
+        let kept: Config = Figment::from(Serialized::defaults(Config::default()))
+            .merge(cli_overrides(&plain))
+            .extract()
+            .expect("extract succeeds");
+        assert_eq!(kept.chain.chain_id, Config::default().chain.chain_id);
     }
 
     #[test]

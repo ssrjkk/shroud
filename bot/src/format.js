@@ -167,8 +167,9 @@ export function renderTask(view, taskId) {
     lines.push("  none yet");
   } else {
     for (const c of commits) {
+      const proof = c.proof ? `  ${mono(`proof ${shortHash(c.proof)}`)}` : "";
       lines.push(
-        `  ${c.verified ? OK : WARN} ${mono(shortAddr(c.node))}  ${mono(shortHash(c.traceDigest))}`
+        `  ${c.verified ? OK : WARN} ${mono(shortAddr(c.node))}  ${mono(shortHash(c.traceDigest))}${proof}`
       );
     }
     const digests = new Set(commits.map((c) => c.traceDigest));
@@ -185,7 +186,7 @@ export function renderTask(view, taskId) {
     lines.push(`<b>Winner</b>       ${mono(shortAddr(winner))}`);
   }
   if (quorum) {
-    lines.push(`<b>Disputes</b>    ${mono(quorum)} on record`);
+    lines.push(`<b>Disputes</b>    ${mono(`${quorum.have}/${quorum.need}`)} recorded`);
   }
 
   return lines.join("\n");

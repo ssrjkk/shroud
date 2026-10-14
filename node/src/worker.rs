@@ -24,14 +24,17 @@
 //! start-up. A reorg replay re-fires every event in its window, and a log line per replayed event
 //! would be indistinguishable from a node that is working.
 //!
-//! # What this loop does *not* do
+//! # What this loop does
 //!
-//! **FHE epoch execution and the STARK prover are not implemented in this build.** There is no
-//! engine here that turns shards and encrypted weights into a trace, and no AIR that turns a trace
-//! into a proof, so the node cannot produce a `commitEpoch` payload. [`Work::Execute`] and
-//! [`Work::Reexecute`] are consumed and reported, not performed. Every other arm is real and does
-//! move money and status on chain: a node running this build is a finalize/settle/dispute/payment
-//! node and nothing more.
+//! Every arm moves money or status on chain: registration, epoch execution and
+//! re-execution, dispute filing, finalization, settlement, redemption, reclamation,
+//! claiming and bond release. Epoch execution runs through the [`fhe`](crate::fhe)
+//! engine (`reference-cpu` by default, `tfhe-rs` behind the `prover` feature) on a
+//! blocking thread, publishes the weight and metrics artefacts to the
+//! content-addressed store, and commits the resulting digests with `commitEpoch`.
+//! Re-execution recomputes the same digest and, on a mismatch with the claim, re-arms
+//! the commit race so this node's own commit becomes the dispute material the fold
+//! files `reportDispute` from.
 
 use std::{
     collections::VecDeque,
@@ -44,10 +47,12 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    chain::client::{ChannelOnChain, CommitOnChain, OrchestratorClient, TaskOnChain},
+    chain::client::{ChannelOnChain, CommitIntent, CommitOnChain, OrchestratorClient, TaskOnChain},
     chain::slice::{self, Slice},
     config::{parse_bls_pub_key, Config},
-    error::{ConfigError, Error, Result},
+    da,
+    error::{ConfigError, Error, FheError, Result},
+    fhe::{self, EpochInputs, ShardInput},
     state::{NodeState, TaskStatus, Work},
 };
 
@@ -57,9 +62,6 @@ use crate::{
 /// configuration problem, which will fail identically forever. Bounding the retries keeps the
 /// second class from spending gas on every poll while still riding out the first.
 const MAX_ATTEMPTS: u32 = 5;
-
-/// The sentence the node says whenever it is asked for compute it does not have.
-const NOT_IMPLEMENTED: &str = "no FHE engine and no STARK prover are compiled into this build";
 
 /// The verdict of a gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,7 +275,7 @@ impl Worker {
                 task_id,
                 epoch,
                 claimed_digest,
-            } => Ok(self.on_reexecute(*task_id, *epoch, *claimed_digest)),
+            } => self.on_reexecute(*task_id, *epoch, *claimed_digest).await,
             Work::FileDispute {
                 task_id,
                 epoch,
@@ -358,7 +360,12 @@ impl Worker {
         }
     }
 
-    /// The epoch is ours to execute — if this build could execute anything.
+    /// The epoch is ours to execute: gather the sealed inputs, run the engine off the
+    /// async runtime, publish the artefacts and commit the digests.
+    ///
+    /// Gas is spent only after two gates (before the engine runs and after it finishes,
+    /// against a fresh chain read) and a duplicate-commit check: the engine may take a
+    /// minute, and a peer may have committed — or the window may have closed — while it ran.
     async fn on_execute(&self, task_id: U256, epoch: u32, chain_now: u64) -> Result<Outcome> {
         let task = self.client.task(task_id).await?;
         if !self.client.is_registered(task_id).await? {
@@ -379,30 +386,275 @@ impl Worker {
             );
             return Ok(Outcome::Done);
         }
-        // The gate said we could commit, and the engine to do it is not here. This is the place a
-        // reader should find out what this build cannot do.
-        error!(
+        // A commit of ours may have landed while the fold was behind (restart, replay):
+        // `commitEpoch` reverts `DuplicateCommit` on a second one, so check first.
+        let me = self.client.operator();
+        if self.client.commit_of(task_id, epoch, me).await?.is_some() {
+            debug!(task = %task_id, epoch, "already committed; the fold will catch up");
+            return Ok(Outcome::Done);
+        }
+        // A fold that flagged itself as inconsistent must not drive execution: the
+        // Execute nudge would send the node off to compute an epoch against state it has
+        // already declared wrong. Wait for the re-anchored replay instead.
+        if self.state.is_tainted() {
+            debug!(task = %task_id, epoch, "fold is tainted; waiting for a re-anchored replay");
+            return Ok(Outcome::Retry(self.cfg.chain.poll_interval));
+        }
+        let engine = fhe::select_engine(&self.cfg.fhe);
+        let engine_name = engine.name();
+        let inputs = match self.execute_inputs(task_id, epoch, &task).await {
+            Ok(inputs) => inputs,
+            Err(e) if is_retryable(&e) => {
+                if !matches!(e, Error::Io(_)) {
+                    error!(task = %task_id, epoch, error = %e, "worker: inputs unavailable; retrying");
+                }
+                return Ok(Outcome::Retry(self.cfg.chain.poll_interval));
+            }
+            Err(e) => {
+                error!(task = %task_id, epoch, error = %e, "worker: epoch has no executable inputs; no commit will be sent");
+                return Ok(Outcome::Done);
+            }
+        };
+        let output = match tokio::task::spawn_blocking(move || engine.execute_epoch(&inputs)).await
+        {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                error!(task = %task_id, epoch, engine = engine_name, error = %e, "worker: epoch execution failed; no commit will be sent");
+                return Ok(Outcome::Done);
+            }
+            Err(e) => return Err(Error::Other(e.into())),
+        };
+        let max = self.cfg.shard.max_ciphertext_bytes;
+        let dir = &self.cfg.shard.cache_dir;
+        let endpoint = &self.cfg.shard.da_endpoint;
+        let enc_weights_cid = da::store(dir, endpoint, &output.weights_bytes, max).await?;
+        let metrics_cid = da::store(dir, endpoint, &output.metrics_bytes, max).await?;
+        // The engine may have taken a minute: re-read the chain before spending gas.
+        let (_, fresh_now) = self.client.latest_block().await?;
+        let task = self.client.task(task_id).await?;
+        if commit_gate(&task, epoch, fresh_now, min_window) != Gate::Ready {
+            debug!(task = %task_id, epoch, "window closed while the engine ran; artefacts stay in the store");
+            return Ok(Outcome::Done);
+        }
+        let intent = CommitIntent {
+            task_id,
+            epoch,
+            proof: fhe::proof_reference(output.trace_digest),
+            enc_weights_cid,
+            weights_digest: output.weights_digest,
+            metrics_cid,
+            trace_digest: output.trace_digest,
+        };
+        self.client.commit_epoch(&intent).await?;
+        info!(
             task = %task_id,
             epoch,
-            reason = NOT_IMPLEMENTED,
-            "worker: no commit will be sent"
+            engine = engine_name,
+            trace = %output.trace_digest,
+            rows = output.rows,
+            "epoch committed"
         );
         Ok(Outcome::Done)
     }
 
     /// Re-derive a peer's trace digest to check a claim.
     ///
-    /// Advisory work: it produces no transaction of its own, and its output is what would make
-    /// [`Work::FileDispute`] callable by a node that had no commit of its own.
-    fn on_reexecute(&self, task_id: U256, epoch: u32, claimed_digest: B256) -> Outcome {
-        debug!(
-            task = %task_id,
+    /// Advisory work: it produces no transaction of its own. On a mismatch with the claim
+    /// it re-arms the commit race — this node's own commit, once it lands, is the verified
+    /// material the fold files `reportDispute` from. An agreement is silence.
+    async fn on_reexecute(
+        &self,
+        task_id: U256,
+        epoch: u32,
+        claimed_digest: B256,
+    ) -> Result<Outcome> {
+        let me = self.client.operator();
+        // Our own commit is the dispute material; the fold files from it without us.
+        if let Some(t) = self.state.task(task_id) {
+            if t.our_commit(epoch, me).is_some() {
+                debug!(task = %task_id, epoch, "already committed; the fold disputes from our commit");
+                return Ok(Outcome::Done);
+            }
+        }
+        let task = self.client.task(task_id).await?;
+        // Only a committing epoch is disputable: settled or rejected history needs no opinion.
+        if chain_status(&task) != TaskStatus::EpochCommitting {
+            return Ok(Outcome::Done);
+        }
+        if self.state.is_tainted() {
+            debug!(task = %task_id, epoch, "fold is tainted; waiting for a re-anchored replay");
+            return Ok(Outcome::Retry(self.cfg.chain.poll_interval));
+        }
+        let inputs = match self.execute_inputs(task_id, epoch, &task).await {
+            Ok(inputs) => inputs,
+            Err(e) if is_retryable(&e) => {
+                debug!(task = %task_id, epoch, error = %e, "inputs unavailable; retrying");
+                return Ok(Outcome::Retry(self.cfg.chain.poll_interval));
+            }
+            Err(e) => {
+                error!(task = %task_id, epoch, error = %e, "worker: cannot form an opinion about this claim");
+                return Ok(Outcome::Done);
+            }
+        };
+        let engine = fhe::select_engine(&self.cfg.fhe);
+        let ours = match tokio::task::spawn_blocking(move || engine.digest_epoch(&inputs)).await {
+            Ok(Ok(digest)) => digest,
+            Ok(Err(e)) => {
+                error!(task = %task_id, epoch, error = %e, "worker: cannot form an opinion about this claim");
+                return Ok(Outcome::Done);
+            }
+            Err(e) => return Err(Error::Other(e.into())),
+        };
+        if ours == claimed_digest {
+            debug!(task = %task_id, epoch, "claim reproduces locally; no dispute");
+        } else {
+            info!(
+                task = %task_id,
+                epoch,
+                claimed = %claimed_digest,
+                ours = %ours,
+                "claim differs from local re-execution; re-arming the commit race"
+            );
+            self.state.nudge(Work::Execute { task_id, epoch });
+        }
+        Ok(Outcome::Done)
+    }
+
+    /// Gather everything the engine needs for `epoch` of `task_id`.
+    ///
+    /// The dataset comes from the *chain*: leaf contributors and digests are contract views,
+    /// and the fold only supplies the order it saw. Every payload is verified
+    /// (`keccak256(bytes)` against the pin) before the engine runs, so a DA layer that
+    /// serves wrong bytes is caught here, not in a dispute.
+    ///
+    /// A DA layer that has not synced yet surfaces as [`Error::Io`], a fold that is
+    /// still backfilling as [`Error::Chain`], and a failing remote backend as
+    /// [`Error::Other`]: all three may resolve on their own. Anything else
+    /// is a permanent refusal that costs no gas.
+    async fn execute_inputs(
+        &self,
+        task_id: U256,
+        epoch: u32,
+        task: &TaskOnChain,
+    ) -> Result<EpochInputs> {
+        if task.features == 0 {
+            return Err(Error::Fhe(FheError::ShapeMismatch {
+                got_rows: 0,
+                got_cols: 0,
+                want_rows: 0,
+                want_cols: 1,
+            }));
+        }
+        let fold = self.state.task(task_id).ok_or_else(|| {
+            Error::Chain(format!("task {task_id:#x} is not in the derived fold yet"))
+        })?;
+        // The fold must imply exactly the sealed root: executing on a partial history
+        // would commit a digest no complete node reproduces.
+        let derived = fold.derived_ct_root().ok_or_else(|| {
+            Error::Chain(format!(
+                "task {task_id:#x}: fold holds a partial contribution history"
+            ))
+        })?;
+        if derived != task.ct_root {
+            return Err(Error::Chain(format!(
+                "task {task_id:#x}: derived ctRoot {derived:#x} disagrees with the sealed {:#x}",
+                task.ct_root
+            )));
+        }
+        let max = self.cfg.shard.max_ciphertext_bytes;
+        let dir = self.cfg.shard.cache_dir.clone();
+        let endpoint = self.cfg.shard.da_endpoint.clone();
+        let mut shards = Vec::with_capacity(fold.leaves.len());
+        let mut indexes: Vec<u32> = fold.leaves.keys().copied().collect();
+        indexes.sort_unstable();
+        for index in indexes {
+            let leaf = fold.leaves.get(&index).expect("keyed");
+            let contributor = self.client.contribution_of(task_id, index).await?;
+            let c = self.client.contribution(task_id, contributor).await?;
+            if !c.accepted {
+                return Err(Error::Shard(crate::error::ShardError::Malformed {
+                    offset: index as usize,
+                    reason: format!(
+                        "contribution of {contributor} at leaf {index} is not accepted"
+                    ),
+                }));
+            }
+            if c.ciphertext_cid != leaf.cid {
+                return Err(Error::Chain(format!(
+                    "task {task_id:#x}: leaf {index} is {:#x} on chain but {:#x} in the fold",
+                    c.ciphertext_cid, leaf.cid
+                )));
+            }
+            let bytes = da::fetch(&dir, &endpoint, &c.ciphertext_cid, max).await?;
+            da::verify_bytes(&c.ct_digest, &bytes)?;
+            shards.push(ShardInput {
+                leaf_index: index,
+                cid: c.ciphertext_cid,
+                ct_digest: c.ct_digest,
+                bytes,
+            });
+        }
+        if task.last_weights_cid.is_zero() {
+            return Err(Error::Fhe(FheError::Backend(
+                "openEpoch pinned no seed weights; the engine cannot start from nothing".into(),
+            )));
+        }
+        let prev_weights_bytes = da::fetch(&dir, &endpoint, &task.last_weights_cid, max).await?;
+        let reference = matches!(self.cfg.fhe.backend, crate::config::FheBackend::Reference);
+        let prev_weights = if reference {
+            Some(self.decode_prev_weights(&prev_weights_bytes, task)?)
+        } else {
+            None
+        };
+        Ok(EpochInputs {
+            task_id,
             epoch,
-            claimed = %claimed_digest,
-            reason = NOT_IMPLEMENTED,
-            "worker: cannot form an opinion about this claim"
-        );
-        Outcome::Done
+            chain_id: self.cfg.chain.chain_id,
+            cipher_task: self.client.cipher_task(),
+            ct_root: task.ct_root,
+            prev_weights_digest: task.last_weights_digest,
+            features: task.features,
+            scale: self.cfg.fhe.scale,
+            lr_q16: self.cfg.fhe.lr_q16,
+            l2_q16: self.cfg.fhe.l2_q16,
+            minibatch: self.cfg.fhe.minibatch,
+            seed: self.cfg.fhe.seed,
+            prev_weights,
+            prev_weights_bytes,
+            shards,
+        })
+    }
+
+    /// Decode the seed weights `openEpoch` pinned.
+    ///
+    /// Buyer tooling publishes `shroud/weights/v1` files; anything else (the test suite
+    /// pins arbitrary words, early buyers may pin their own convention) falls back to
+    /// genesis zeros with a warning that names the foreign pin. The trace always binds
+    /// the *chain's* digest, so every node running this code agrees either way — and a
+    /// node that understands the buyer's convention will disagree through the dispute
+    /// protocol, which is exactly what it is for.
+    fn decode_prev_weights(&self, bytes: &[u8], task: &TaskOnChain) -> Result<fhe::Weights> {
+        match fhe::Weights::decode(bytes, task.features) {
+            Ok(w) => {
+                if w.digest() != task.last_weights_digest {
+                    warn!(
+                        digest = %task.last_weights_digest,
+                        "seed weights decode but their digest differs from the chain pin; \
+                         executing from the file and binding the chain pin in the trace"
+                    );
+                }
+                Ok(w)
+            }
+            Err(_) => {
+                warn!(
+                    cid = %task.last_weights_cid,
+                    digest = %task.last_weights_digest,
+                    "seed weights are not a shroud/weights/v1 file; executing from genesis \
+                     zeros and binding the chain pin in the trace"
+                );
+                fhe::Weights::zeros(task.features)
+            }
+        }
     }
 
     /// `reportDispute` for a claim we can prove wrong.
@@ -616,6 +868,15 @@ fn outcome_of(gate: Gate) -> Outcome {
     }
 }
 
+/// Failures that may resolve on their own: a DA layer that has not synced yet, a fold
+/// that is still backfilling, or a remote backend that is temporarily unreachable. The
+/// caller requeues those without spending gas; the epoch window bounds the wait, because
+/// the gate turns `Ready` into `Skip` once it closes. Data and configuration errors
+/// (`Fhe`, `Shard`) are permanent and must be loud instead.
+fn is_retryable(e: &Error) -> bool {
+    matches!(e, Error::Io(_) | Error::Chain(_) | Error::Other(_))
+}
+
 /// The task's status byte as the node's own enum, with an unknown value collapsing to `None`.
 ///
 /// A status this crate does not name is treated as `TaskStatus::None`, which every gate below
@@ -798,6 +1059,7 @@ mod tests {
             contributors: 2,
             shards: 2,
             is_sealed: true,
+            features: 3,
         }
     }
 

@@ -204,6 +204,41 @@ test("every ShardStore must verify, not just hand back bytes", async () => {
   );
 });
 
+test("relayer quantization is exact and refuses the unrepresentable", async () => {
+  const { quantizeRows, relayerRowCommitment, encodeRelayerPayload, decodeRelayerPayload } = await import(
+    "../dist/relayer-encryptor.js"
+  );
+  assert.deepEqual(quantizeRows([1.5, 2.25], 2, 10_000), [15000n, 22500n]);
+  assert.deepEqual(quantizeRows(new Float64Array([0]), 1, 1), [0n]);
+  for (const bad of [[-1], [NaN], [Infinity]]) {
+    assert.throws(() => quantizeRows(bad as number[], 1, 10_000), /negative|finite/);
+  }
+  assert.throws(() => quantizeRows([1e20], 1, 10_000), /overflows uint64/);
+  assert.throws(() => quantizeRows([1, 2, 3], 2, 10_000), /not a multiple/);
+  assert.throws(() => quantizeRows([1], 0, 10_000), /positive/);
+
+  // Codec round-trips arbitrary handle sizes and rejects truncation and trailing bytes.
+  const shard = {
+    handles: [new Uint8Array([1, 2, 3]), new Uint8Array(32).fill(7)],
+    inputProof: new Uint8Array([9, 9]),
+  };
+  const enc = encodeRelayerPayload(shard);
+  const back = decodeRelayerPayload(enc);
+  assert.deepEqual(back.handles.map((h) => Array.from(h)), [[1, 2, 3], Array(32).fill(7)]);
+  assert.deepEqual(Array.from(back.inputProof), [9, 9]);
+  assert.throws(() => decodeRelayerPayload(enc.slice(0, enc.length - 1)), /truncat/);
+  assert.throws(
+    () => decodeRelayerPayload(Buffer.concat([enc, Buffer.from([0])])),
+    /trailing bytes/
+  );
+  assert.throws(() => decodeRelayerPayload(new Uint8Array([1, 2, 3])), /header|magic/);
+
+  // The commitment binds the quantized integers, and changes when they do.
+  const c1 = relayerRowCommitment([15000n, 22500n]);
+  assert.equal(c1, relayerRowCommitment([15000n, 22500n]));
+  assert.notEqual(c1, relayerRowCommitment([15001n, 22500n]));
+});
+
 test("FileShardStore persists across instances and verifies like the memory store", async () => {
   const { FileShardStore } = await import("../dist/file-store.js");
   const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-"));
@@ -653,4 +688,56 @@ test("domainSeparator is deterministic", () => {
   const a = domainSeparator("0x0000000000000000000000000000000000000001", 31337n);
   const b = domainSeparator("0x0000000000000000000000000000000000000001", 31337n);
   assert.equal(a, b);
+});
+
+test("weights files match the node's shroud/weights/v1 layout byte for byte", async () => {
+  const { encodeWeights, decodeWeights, weightsDigest, zeroWeights } = await import(
+    "../dist/weights.js"
+  );
+  // The Rust golden vector (node/src/fhe.rs `one_gradient_step_is_exact`): features = 2,
+  // lanes = [60000, 30000]. Magic + u32-LE features + u32-LE count + u32-LE lanes.
+  const bytes = encodeWeights(2, [60000, 30000]);
+  assert.equal(
+    Buffer.from(bytes).toString("hex"),
+    "7368726f75642f776569676874732f763100" + "02000000" + "02000000" + "60ea0000" + "30750000"
+  );
+  assert.deepEqual(decodeWeights(bytes, 2), [60000, 30000]);
+  assert.deepEqual(zeroWeights(3), [0, 0, 0]);
+
+  // Signed lanes round-trip through the u32 words (the node's i32-in-u32 convention).
+  assert.deepEqual(decodeWeights(encodeWeights(2, [-1, -2147483648]), 2), [-1, -2147483648]);
+
+  // The digest commits to the lanes: deterministic and sensitive.
+  const d = weightsDigest([60000, 30000]);
+  assert.equal(d, weightsDigest([60000, 30000]));
+  assert.notEqual(d, weightsDigest([60000, 30001]));
+  assert.equal(ethers.dataLength(d), 32);
+
+  // Refusals, not coercions.
+  assert.throws(() => encodeWeights(1, [0]), />= 2/);
+  assert.throws(() => encodeWeights(2, [1.5, 0]), /integer/);
+  assert.throws(() => encodeWeights(2, [0, 2147483648]), /i32 lane range/);
+  assert.throws(() => encodeWeights(3, [0, 0]), /3 features/);
+  assert.throws(() => decodeWeights(bytes, 3), /expected 3/);
+  assert.throws(() => decodeWeights(bytes.slice(0, bytes.length - 1), 2), /expected/);
+  assert.throws(() => decodeWeights(new Uint8Array([9, 9, 9]), 2), /header|magic/);
+  assert.throws(() => zeroWeights(1), />= 2/);
+});
+
+test("ShroudSdk publishes seed weights the node decodes", async () => {
+  const { decodeWeights } = await import("../dist/weights.js");
+  const sdk = new ShroudSdk({
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    signer: new ethers.Wallet(ethers.id("test").slice(2, 66)),
+    provider: { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider,
+    chainId: 31337n,
+  });
+  const { cid, weightsDigest } = await sdk.publishWeights(2, [60000, 30000]);
+  // The CID pins the file, the digest pins the lanes: the pair openEpoch needs.
+  const stored = await sdk.shardStore.get(cid);
+  assert.equal(ethers.keccak256(stored), cid);
+  assert.deepEqual(decodeWeights(stored, 2), [60000, 30000]);
+  assert.equal(weightsDigest.length, 66);
+  await assert.rejects(() => sdk.publishWeights(2, [1.5, 0]), /integer/);
 });

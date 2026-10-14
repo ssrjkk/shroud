@@ -117,6 +117,9 @@ pub struct TaskOnChain {
     pub contributors: u32,
     pub shards: u32,
     pub is_sealed: bool,
+    /// `params.features`: lanes per row. The execution engine decodes shards against this;
+    /// a mismatch is a shape error, never a reinterpretation.
+    pub features: u32,
 }
 
 impl TaskOnChain {
@@ -128,6 +131,19 @@ impl TaskOnChain {
         self.epoch_deadline
             .saturating_add(self.dispute_window as u64)
     }
+}
+
+/// A `Contribution` as the chain holds it, reduced to what re-execution needs:
+///
+/// the CID locates the bytes in the DA layer and the digest proves they are the bytes the
+/// contributor committed. `accepted` is carried so the worker never executes on a shard
+/// the contract rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContributionOnChain {
+    pub contributor: Address,
+    pub ciphertext_cid: B256,
+    pub ct_digest: B256,
+    pub accepted: bool,
 }
 
 /// An `EpochCommit` as the chain holds it.
@@ -343,6 +359,42 @@ impl OrchestratorClient {
             contributors: t.contributors,
             shards: t.shards,
             is_sealed: t.isSealed,
+            features: t.params.features,
+        })
+    }
+
+    /// The contributor address recorded for `leafIndex` of `task_id`.
+    ///
+    /// Leaves are positional (`0..shards`), so the worker walks them in order and resolves
+    /// each one to the address whose `contributions` entry pins its bytes.
+    pub async fn contribution_of(&self, task_id: U256, leaf_index: u32) -> Result<Address> {
+        let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        c.contributionOf(task_id, U256::from(leaf_index))
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))
+    }
+
+    /// The contribution `contributor` made to `task_id`: CID, digest and acceptance.
+    ///
+    /// The worker verifies `keccak256(bytes) == ct_digest` after fetching from the DA
+    /// layer, so a store that serves wrong bytes is caught before the engine runs.
+    pub async fn contribution(
+        &self,
+        task_id: U256,
+        contributor: Address,
+    ) -> Result<ContributionOnChain> {
+        let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        let s = c
+            .contributions(task_id, contributor)
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))?;
+        Ok(ContributionOnChain {
+            contributor,
+            ciphertext_cid: s.ciphertextCid,
+            ct_digest: s.ctDigest,
+            accepted: s.accepted,
         })
     }
 

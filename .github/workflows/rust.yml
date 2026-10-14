@@ -74,7 +74,7 @@ jobs:
   devnet-live:
     name: live node registers + bonds on devnet
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -91,6 +91,12 @@ jobs:
       # Chain + contracts first: the node needs something sealed to register for.
       - run: npm ci
         working-directory: packages/contracts
+      # The execute-e2e script imports the SDK layouts (single source of truth), so the
+      # SDK must be built before any hardhat script runs.
+      - run: npm ci
+        working-directory: packages/sdk
+      - run: npm run build
+        working-directory: packages/sdk
       - run: npx hardhat node --hostname 127.0.0.1 --port 8545 &
         working-directory: packages/contracts
       - run: sleep 12
@@ -125,6 +131,9 @@ jobs:
               'bls_pub_key = \"0xabababababababababababababababababababababababababababababababab\"',
               \`data_dir = \"\${process.env.RUNNER_TEMP}/shroud-data\"\`,
               '',
+              '[shard]',
+              \`cache_dir = \"\${process.env.RUNNER_TEMP}/shroud-cache\"\`,
+              '',
               '[mesh]',
               'listen = \"127.0.0.1:17331\"',
             ].join('\n');
@@ -133,6 +142,47 @@ jobs:
           "
           ./target/release/shroud-node --config $RUNNER_TEMP/shroud.toml &
         working-directory: node
+      # Second operator for the execution e2e: a fresh key (never pasted into the repo),
+      # funded by the execute script itself. It must differ from node A's key and BLS.
+      - run: |
+          echo "OPERATOR_B_KEY=0x$(openssl rand -hex 32)" >> $GITHUB_ENV
+          echo "OPERATOR_B_BLS=0x$(openssl rand -hex 32)" >> $GITHUB_ENV
+      - run: |
+          node -e "
+            const fs = require('fs');
+            const a = require('../infra/devnet/addresses.json');
+            const toml = [
+              '[chain]',
+              'rpc_url = \"http://127.0.0.1:8545\"',
+              'chain_id = 31337',
+              '',
+              '[contracts]',
+              \`cipher_task = \"\${a.cipherTask}\"\`,
+              \`payment_vault = \"\${a.vault}\"\`,
+              '',
+              '[node]',
+              \`operator_key = \"\${process.env.OPERATOR_B_KEY}\"\`,
+              \`bls_pub_key = \"\${process.env.OPERATOR_B_BLS}\"\`,
+              \`data_dir = \"\${process.env.RUNNER_TEMP}/shroud-data-b\"\`,
+              '',
+              '[shard]',
+              \`cache_dir = \"\${process.env.RUNNER_TEMP}/shroud-cache\"\`,
+              '',
+              '[mesh]',
+              'listen = \"127.0.0.1:17332\"',
+            ].join('\n');
+            fs.writeFileSync(process.env.RUNNER_TEMP + '/shroud-b.toml', toml);
+            console.log(toml.replace(/operator_key = .*/, 'operator_key = \"0x…\"'));
+          "
+          ./target/release/shroud-node --config $RUNNER_TEMP/shroud-b.toml &
+        working-directory: node
       - run: sleep 90
       - run: npx hardhat run scripts/assert-node-registered.ts --network localhost
         working-directory: packages/contracts
+      # Execution e2e: a task with real pins, opened for epoch 0; both live nodes must
+      # independently commit the same verified digest. Polls internally, ~2-5 minutes.
+      - run: npx hardhat run scripts/devnet-execute-check.ts --network localhost
+        working-directory: packages/contracts
+        env:
+          NODE_CACHE_DIR: ${{ runner.temp }}/shroud-cache
+          OPERATOR_B_KEY: ${{ env.OPERATOR_B_KEY }}

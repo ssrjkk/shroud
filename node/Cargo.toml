@@ -17,7 +17,7 @@ name = "shroud-node"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.94.1"
-description = "Shroud compute node: folds chain state, finalizes/settles/disputes epochs and redeems streaming payouts. No FHE engine or STARK prover is compiled in."
+description = "Shroud compute node: folds chain state, executes epochs (reference fixed-point engine; tfhe-rs behind the `prover` feature), finalizes/settles/disputes epochs and redeems streaming payouts."
 license = "MIT"
 repository = "https://github.com/ssrjkk/shroud"
 

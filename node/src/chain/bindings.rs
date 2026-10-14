@@ -80,8 +80,24 @@ sol! {
             bool verified;
         }
 
+        /// Mirrors `ICipherTask.Contribution`. Bound in full so the decoding matches the
+        /// contract's layout; the node only reads `ciphertextCid`, `ctDigest` and `accepted`.
+        struct Contribution {
+            bytes32 ciphertextCid;
+            bytes32 ctDigest;
+            bytes32 shapeProof;
+            bytes32 rowCommitment;
+            uint32 rows;
+            uint32 leafIndex;
+            uint64 submittedAt;
+            uint96 weightQ16;
+            bool accepted;
+            bool slashed;
+        }
+
         function tasks(uint256 taskId) external view returns (Task memory);
         function commits(uint256 taskId, uint32 epoch, address node) external view returns (EpochCommit memory);
+        function contributions(uint256 taskId, address contributor) external view returns (Contribution memory);
         function statusOf(uint256 taskId) external view returns (uint8);
         function taskCount() external view returns (uint256);
         function settleCursor(uint256 taskId) external view returns (uint256);

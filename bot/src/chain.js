@@ -13,7 +13,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { Interface, JsonRpcProvider, id as keccakId, getAddress } from "ethers";
+import { Interface, JsonRpcProvider, Contract, id as keccakId, getAddress } from "ethers";
 import { ROOT } from "./config.js";
 
 const ABI_DIR = resolve(ROOT, "..", "packages", "sdk", "src", "abi");
@@ -210,7 +210,7 @@ export class ChainReader {
   /** Number of tasks the contract knows about. */
   async taskCount() {
     if (!this.#config.cipherTask) return 0;
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     return Number(await c.taskCount());
   }
 
@@ -223,7 +223,7 @@ export class ChainReader {
    */
   async task(taskId) {
     if (!this.#config.cipherTask) return null;
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       const t = await c.tasks(taskId);
       if (!t) return null;
@@ -258,7 +258,7 @@ export class ChainReader {
 
   async statusOf(taskId) {
     if (!this.#config.cipherTask) return null;
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       return Number(await c.statusOf(taskId));
     } catch {
@@ -278,7 +278,7 @@ export class ChainReader {
    */
   async contributors(taskId) {
     if (!this.#config.cipherTask) return [];
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       return [...(await c.contributorsOf(taskId))];
     } catch {
@@ -290,7 +290,7 @@ export class ChainReader {
   async commitsForEpoch(taskId, epoch) {
     const nodes = await this.contributors(taskId);
     if (!nodes.length) return [];
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     const out = [];
     for (const node of nodes) {
       try {
@@ -302,7 +302,9 @@ export class ChainReader {
           node,
           traceDigest: r.traceDigest,
           verified: Boolean(r.verified),
-          proofBytes: 4 + (r.proof === "0x" ? 0 : 0),
+          // The 32-byte proof reference as committed (STAR-prefixed on mock-verifier
+          // chains); rendered by /task so operators can eyeball it, never interpreted.
+          proof: r.proof,
         });
       } catch {
         // Read failure for one node must not hide the others.
@@ -313,7 +315,7 @@ export class ChainReader {
 
   async epochWinner(taskId, epoch) {
     if (!this.#config.cipherTask) return null;
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       return await c.epochWinner(taskId, epoch);
     } catch {
@@ -321,11 +323,20 @@ export class ChainReader {
     }
   }
 
+  /**
+   * Dispute quorum progress: how many distinct reporters have filed (`have`) out of
+   * the quorum the contract requires (`need`).
+   *
+   * The contract returns a pair, not a scalar — an earlier revision wrapped the pair
+   * in `Number()`, which is `NaN` for any task, and every /task screen showed
+   * "NaN on record" forever.
+   */
   async disputeQuorum(taskId) {
     if (!this.#config.cipherTask) return null;
-    const c = new this.#ifaces.cipherTask(this.#config.cipherTask, this.#provider);
+    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
-      return Number(await c.disputeQuorum(taskId));
+      const [need, have] = await c.disputeQuorum(taskId);
+      return { need: Number(need), have: Number(have) };
     } catch {
       return null;
     }
@@ -404,7 +415,7 @@ export class ChainReader {
   /** Current network parameters, including the pinned FHE key hash. */
   async networkParams() {
     if (!this.#config.networkParams) return null;
-    const c = new this.#ifaces.networkParams(this.#config.networkParams, this.#provider);
+    const c = new Contract(this.#config.networkParams, this.#ifaces.networkParams, this.#provider);
     try {
       const n = this.#named(this.#ifaces.networkParams, "current", await c.current());
       return {
@@ -427,7 +438,7 @@ export class ChainReader {
   /** The queued rotation, or `null` when none is pending. */
   async pendingRotation() {
     if (!this.#config.networkParams) return null;
-    const c = new this.#ifaces.networkParams(this.#config.networkParams, this.#provider);
+    const c = new Contract(this.#config.networkParams, this.#ifaces.networkParams, this.#provider);
     try {
       if (!(await c.rotationPending())) return null;
       const r = this.#named(this.#ifaces.networkParams, "pending", await c.pending());

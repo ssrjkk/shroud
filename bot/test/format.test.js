@@ -144,6 +144,38 @@ test("renderTask flags two different digests in one epoch", () => {
   assert.ok(split.includes("2 different digests for one epoch"));
 });
 
+test("renderTask shows the proof reference when the reader provides it", () => {
+  const proof = "0x53544152" + "ab".repeat(28);
+  const withProof = renderTask(
+    {
+      task,
+      commits: [{ node: "0x" + "1".repeat(40), traceDigest: ZERO32, verified: true, proof }],
+      winner: null,
+      quorum: null,
+    },
+    "42"
+  );
+  assert.ok(withProof.includes("proof"), "proof reference shown");
+  assert.ok(withProof.includes("0x53544152"), "STAR magic visible at a glance");
+  // Old fixtures without a proof render exactly as before: no dangling label.
+  const without = renderTask(
+    {
+      task,
+      commits: [{ node: "0x" + "1".repeat(40), traceDigest: ZERO32, verified: true }],
+      winner: null,
+      quorum: null,
+    },
+    "42"
+  );
+  assert.ok(!without.includes("proof"), "no proof label without a proof");
+});
+
+test("renderTask shows quorum progress as have over need", () => {
+  const out = renderTask({ task, commits: [], winner: null, quorum: { need: 3, have: 1 } }, "42");
+  assert.ok(out.includes("1/3"), "progress shown");
+  assert.ok(!out.includes("NaN"), "never NaN");
+});
+
 test("renderTask says 'no task' rather than rendering an empty task", () => {
   const out = renderTask({ task: null, commits: [], winner: null, quorum: null }, "999");
   assert.ok(out.includes("no task with id"));

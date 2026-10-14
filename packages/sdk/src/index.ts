@@ -10,6 +10,7 @@ import { ethers } from "ethers";
 import { CipherTaskClient, NetworkParamsClient, PaymentVaultClient } from "./cipher.js";
 import type { Encryptor, ShardStore, TaskParams, UploadResult, PreparedShard } from "./types.js";
 import { NoopEncryptor, pinPayload } from "./encrypt.js";
+import { encodeWeights, weightsDigest } from "./weights.js";
 import { MemoryShardStore } from "./da.js";
 import type { Hex } from "./types.js";
 
@@ -17,6 +18,7 @@ export * from "./types.js";
 export * from "./eip712.js";
 export * from "./encrypt.js";
 export * from "./da.js";
+export * from "./weights.js";
 export { CipherTaskClient, NetworkParamsClient, NETWORK_PARAMS_ABI, PaymentVaultClient, taskIdFromReceipt } from "./cipher.js";
 
 export interface SdkConfig {
@@ -307,6 +309,24 @@ export class ShroudSdk {
     const contributionTx = await this.cipherTask.submitContribution(resolvedId, shard);
 
     return { taskId: resolvedId, ...shard, contributionTx };
+  }
+
+  /**
+   * Publish a genesis seed-weight file for `openEpoch`.
+   *
+   * Buyer-side helper around `@shroud/sdk/weights`: encodes `lanes` (length `features`)
+   * as a `shroud/weights/v1` file, uploads it to the DA, and returns both pins the
+   * epoch opening needs — `cid` (`encWeightsCid`) and `weightsDigest` (`weightsDigest`).
+   * The node decodes the same layout (`node/src/fhe.rs`), so a digest mismatch here
+   * would only surface as a genesis-zeros fallback with a warning in the node's logs.
+   */
+  async publishWeights(
+    features: number,
+    lanes: number[]
+  ): Promise<{ cid: Hex; weightsDigest: Hex }> {
+    const bytes = encodeWeights(features, lanes);
+    const { cid } = await this.shardStore.put(bytes);
+    return { cid, weightsDigest: weightsDigest(lanes) };
   }
 
   private async resolveTask(taskId: bigint, opts: UploadOptions): Promise<bigint> {

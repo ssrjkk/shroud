@@ -121,26 +121,40 @@ workflow), and the real node binary follows a real deployed chain, approves, reg
 bonds (`devnet-live` in the rust workflow). The FHE execution and STARK proving legs remain
 unstubbed only in unit tests — see §8.
 
-## 8. The Rust node now builds and tests green on CI — with caveats
+## 8. The Rust node builds and tests green on CI — and now executes epochs
 
 `node/` builds and passes its suite on GitHub Actions (`cargo check` all-features and
 no-default-features, `fmt --check`, `clippy -D warnings`, `cargo test` both feature sets,
-`cargo build --release`): 160 tests, all passing. The old alloy API drift (`Filter::selectors`,
-`PendingTransactionBuilder::block_id`, `BoxedProvider`, figment 0.10) is fixed, and the three
-`state.rs` logic bugs fixed by inspection are now covered by tests that run green
+`cargo build --release`). The old alloy API drift (`Filter::selectors`,
+`PendingTransactionBuilder::block_id`, `BoxedProvider`, figment 0.10) is fixed, and the
+three `state.rs` logic bugs fixed by inspection are covered by tests that run green
 (`our_own_commit_queues_only_the_finalize`, the dispute/claim tests, the `ctRoot` round-trip
 tests).
 
+`Work::Execute` / `Work::Reexecute` are implemented, not stubbed: `node/src/fhe.rs` holds
+a deterministic fixed-point SGD engine (`reference-cpu`, golden-tested against a
+hand-computed gradient step) plus a `tfhe-rs` backend behind `--features prover`;
+`node/src/da.rs` is the content-addressed shard/weights store (local first, `s3://` /
+`gs://` / `https://` behind `--features da`); the worker verifies every payload against
+its chain pin, publishes the artefacts, and commits through the double-gated
+`commitEpoch` path. The 32-byte `proof` committed alongside is a `STAR`-prefixed
+reference that verifies on mock-verifier chains only — a real proving system is still
+Phase 3, and the reference engine trains on development (`NoopEncryptor`) shards, not
+on encrypted data. Neither property is hidden: both are in the module docs.
+
 What remains true:
 
-- The machine this was developed on has **no Rust toolchain at all** (no `cargo`, no `rustc`),
-  and Windows + MinGW-w64 cannot link `cargo test` (`tfhe` and `alloy-transport` fail with
-  `E0463: can't find crate` for proc-macro deps `strum`, `auto_impl`). So every Rust change
-  here is verified by CI, never locally. If CI is red, the tree is unverified — treat it as
-  such.
-- Nothing here has run against a live chain: the fold, watcher, worker and mesh server are
-  exercised by unit tests with captured fixtures, not by a node following a real CipherTask
-  (§7a explains why no such deployment exists in this repo).
+- The sandbox this was developed in cannot run `cargo check` or `cargo test` at all:
+  its Smart App Control policy blocks loading freshly compiled DLLs (proc-macro
+  `.dll`s included), so even `proc-macro2`'s build script fails to load. Every Rust
+  change here is verified by CI, never locally — `cargo fmt` (parse-only) is the one
+  Rust gate that runs in the sandbox. If CI is red, the tree is unverified — treat it
+  as such.
+- Nothing here has run against a live chain beyond the devnet-live CI job, which is
+  wired to go further than register + bond (a two-node execution agreement check on a
+  task with real pins) but has not reported green on that leg yet: the execution legs
+  are otherwise covered by unit tests with captured fixtures, and the first
+  *production* `commitEpoch` from this node is still ahead of us.
 
 ## 9. What is genuinely finished in this repo
 
@@ -157,9 +171,14 @@ What remains true:
   submission. It now refuses to upload through an encryptor that does not encrypt, verifies the
   pinned FHE public key against `NetworkParams` when configured, refuses to sign against a chain
   that disagrees with `chainId`, and pre-validates every condition `submitContribution` enforces.
-  Still stubbed: the default `Encryptor` is `NoopEncryptor` (there is no FHEWasm/relayer
-  implementation in this repo, so the FHE half of the SDK is an interface with no
-  implementation behind it), the default `ShardStore` is in-memory, and the reference DA server
+  Real encryption lives in `@shroud/sdk/relayer` (`src/relayer-encryptor.ts`, node-only):
+  quantization, `{handles, inputProof}` envelope codec and row commitment are covered by the
+  hermetic smoke suite, while actual TFHE encryption runs only in the gated live test
+  (`test/live-relayer.test.ts`, `SHROUD_LIVE_RELAYER=1`, CI job `relayer-live`) — it has never
+  passed in this sandbox (no route to the Sepolia relayer), so treat the live leg as
+  CI-verified, not locally verified. Seed-weight files (`shroud/weights/v1`, `src/weights.ts`) are byte-pinned against the node's golden vector.
+  Still stubbed: the default `Encryptor` is `NoopEncryptor` (there is no FHEWasm/browser
+  implementation in this repo), the default `ShardStore` is in-memory, and the reference DA server
   has no authentication — it is a development service and is published on `127.0.0.1` only.
 
 - `infra/shardstore`: a real, running service (content-addressed, size-capped, `Range`-capable,
@@ -170,8 +189,11 @@ What remains true:
   on-chain pin is keccak-256, which is why `HttpShardStore.getVerified` re-hashes locally instead
   of trusting the CID. No GC beyond LRU eviction: objects can still only be deleted explicitly or
   evicted, never expired by age.
-- `node/`: complete service skeleton — reorg-safe log watcher, shard store with byte budget,
-  FHE engine behind a `FheEngine` trait (u32 TFHE adapter + reference CPU adapter for tests),
-  Winterfell PoC circuit + prover, gRPC peer mesh, EIP-712 slice signer, dispute gossip.
-  **Builds and tests green on CI (160 tests), but nothing here has run against a live chain —
-  see §8.**
+- `node/`: chain follower, epoch executor and payment agent — reorg-safe log watcher,
+  shard store with byte budget and remote backends, deterministic reference fixed-point
+  engine plus `tfhe-rs` backend behind `prover`, `FheEngine`-trait execution wired into
+  `Work::Execute`/`Work::Reexecute` with duplicate-commit and taint gates, gRPC peer
+  mesh, EIP-712 slice signer, dispute gossip. **Builds and tests green on CI (160+
+  pre-existing tests plus the engine/DA suites), but the first live `commitEpoch` from
+  this node has not happened yet — see §8.** The `proof` it commits verifies on
+  mock-verifier chains only; the STARK prover is still Phase 3.

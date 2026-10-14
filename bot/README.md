@@ -91,13 +91,17 @@ know.
 npm test
 ```
 
-22 tests, no bot token and no chain required. They cover the parts that fail
+35 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
   into a chat
 - `not configured` vs `unreadable` vs `read` as three distinct states
 - the commit-mismatch condition actually being detected
+- chain reads against a stub JSON-RPC server with ABI-encoded responses — this is
+  what caught `new <Interface instance>` (every read threw, every read caught, so
+  the bot reported empty pools forever) and `Number()` of the dispute-quorum pair
+  (always `NaN`)
 - config validation, including that a missing or non-numeric allowlist stops
   the bot rather than opening it
 
@@ -113,7 +117,6 @@ quietly in production:
 - **It reports what the chain says, not whether the chain is honest.** Every
   caveat in `/limits` applies to the bot too: it is a better way to notice a key
   rotation, not a way to prove one did not happen.
-- **It has never been run against a live deployment.** The devnet does not
-  currently deploy (threat model F-31), so the chain path is verified against the
-  compiled ABIs and a real unreachable-RPC failure, not against running
+- **It has never been run against a live deployment.** Reads are pinned against a
+  stub JSON-RPC server returning ABI-encoded responses, not against running
   contracts. Formatting, config and access control are tested.

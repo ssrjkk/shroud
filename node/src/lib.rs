@@ -12,6 +12,8 @@
 //! | [`error`] | one error enum, tagged by pipeline stage |
 //! | [`state`] | the fold over chain events; derived, rebuildable, never authoritative |
 //! | [`worker`] | the work loop: gates each nudge against a fresh chain read, then spends the gas |
+//! | [`fhe`] | epoch execution engines (reference fixed-point, tfhe-rs) and digest layouts |
+//! | [`da`] | content-addressed shard/weights store, local first with remote backends |
 //! | [`chain::watcher`] | log ingestion, the finality cursor, and reorg detection |
 //! | [`chain::client`] | point reads and transactions |
 //! | [`chain::bindings`] | hand-checked Solidity ABI and event topics |
@@ -28,17 +30,17 @@
 //!
 //! # What this crate does not contain
 //!
-//! **FHE epoch execution and the STARK prover are not implemented.** There is no code here that
-//! turns encrypted shards and encrypted weights into a trace, and no AIR that turns a trace into a
-//! proof, so this node cannot produce a `commitEpoch` payload; [`worker`] says so in its log rather
-//! than bidding with an empty proof. Everything else on the write path is real: registration,
-//! dispute filing, finalization, settlement, redemption, reclamation and claiming all move money
-//! and status on chain. A node built from this crate is therefore an observer, a disputing
-//! watchdog and a payment node — not yet a compute node.
+//! A zkVM STARK prover: `commitEpoch` carries a 32-byte *proof reference* (see
+//! [`fhe::proof_reference`]), which verifies on mock-verifier chains and binds the trace
+//! without proving it. Full proving is Phase 3. Everything else on the write path is real:
+//! registration, epoch execution and re-execution, dispute filing, finalization,
+//! settlement, redemption, reclamation and claiming all move money and status on chain.
 
 pub mod chain;
 pub mod config;
+pub mod da;
 pub mod error;
+pub mod fhe;
 pub mod mesh;
 pub mod state;
 pub mod worker;

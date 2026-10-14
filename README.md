@@ -58,10 +58,10 @@ several parts are stubbed and are called out there explicitly.
 
 | path | what |
 |------|------|
-| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (96 tests incl. the byte-layout vectors) |
-| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, hardened DA client, on-chain key-pin check (32 tests) |
-| `node/` | Rust compute node (tonic gRPC, alloy JSON-RPC, winterfell STARK, tfhe-rs FHE) — compiles clean; see the note below |
-| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (22 tests) |
+| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (106 tests incl. fuzz, gas snapshot and byte-layout vectors) |
+| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (36 tests) |
+| `node/` | Rust compute node: chain follower + epoch executor (reference fixed-point engine, `tfhe-rs` behind `prover`), tonic gRPC mesh, alloy JSON-RPC, content-addressed DA (`da` feature for remote) — see the note below |
+| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (35 tests, incl. stub-RPC read coverage) |
 | `web/` | Project site — landing page and the full honest security posture |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA, size-capped + range-pull), 3 nodes |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |
@@ -71,15 +71,15 @@ several parts are stubbed and are called out there explicitly.
 ```sh
 # contracts — the only fully working path
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 96 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 106 + 2 passing
 
 # sdk
 cd packages/sdk
-npm ci && npm test                                                       # 32 passing
+npm ci && npm test                                                       # 36 passing
 
 # ops bot (no token and no chain needed for the tests)
 cd bot
-npm ci && npm test                                                       # 22 passing
+npm ci && npm test                                                       # 35 passing
 npm start                                                                # needs bot/.env
 
 # node — needs protoc and a C toolchain (MSVC build tools or MinGW-w64)
@@ -102,28 +102,33 @@ docker compose up -d --build shardstore
 > contracts workflow re-runs the deploy plus a lifecycle smoke on every push. The contracts are
 > also fully exercised by `hardhat test`; see [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) §7a.
 
-> **Note on the Rust node:** `node/`'s own source now **compiles and typechecks with zero
-> warnings** — `cargo check --all-features` reported no errors and no warnings in `shroud-node`
-> itself. Getting there meant fixing real API drift that had been sitting there because the crate
-> had never been built: `BoxedProvider` was renamed to `DynProvider`, `Filter::selectors` no longer
-> exists, `PendingTransactionBuilder` lost `block_id`, `get_chain_id` stopped returning `Option`,
-> figment 0.10 removed `Serialized::from` and made `select()` take a profile, and the RPC
-> `Connect` collided with tonic's generated `connect` constructor. Three latent bugs surfaced at
-> the same time: `TaskStatus::from_u8` returned a `TaskStatus` where an `Option` was required (a
-> variant named `None` shadowing `Option::None` under `use TaskStatus::*`), a double mutable
-> borrow made the reorg-taint flag uncompilable, and two call sites referenced a
-> `self_zero_address()` that was never defined — replaced with a real operator address carried on
-> `NodeState`.
->
-> **But the crate's tests have never run.** `cargo test` cannot link: `tfhe` and `alloy-transport`
-> fail with `E0463: can't find crate` for their *proc-macro* dependencies (`strum`, `auto_impl`)
-> on this Windows + MinGW-w64 toolchain. That is a dependency-graph or toolchain problem in
-> third-party crates, not in this repository's code, and it is unresolved. So the three state-fold
-> fixes above are **verified to typecheck but not verified to be correct** — treat them as
-> unproven until `cargo test` runs. See [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) §8.
->
-> Building it also needs a C toolchain and `protoc` (tonic's codegen shells out). On Windows that
-> means MinGW-w64 and protobuf; the rust CI job installs neither.
+> **Note on the Rust node:** `node/` executes epochs for real now. `Work::Execute`
+> gathers the sealed dataset (leaf CIDs and digests as contract views, bytes from the
+> content-addressed store, every payload re-hashed against its pin), runs the
+> `reference-cpu` fixed-point SGD engine (`node/src/fhe.rs`) on a blocking thread,
+> publishes the weight and metrics artefacts back to the store, and commits the digests
+> with `commitEpoch` behind the usual double gate plus a duplicate-commit check.
+> `Work::Reexecute` recomputes the same digest and re-arms the commit race on a
+> mismatch, so the fold files `reportDispute` from this node's own commit. The `tfhe-rs`
+> backend (`--features prover`, homomorphic SGD over `FheUint32` under a provisioned
+> `CompressedServerKey`) and remote DA (`s3://`/`gs://`/`https://` via `--features da`)
+> are implemented alongside, with their genuine constraints documented in the module
+> docs (u32 wrapping, PBS randomness vs. cross-node byte equality).
+> >
+> > Historical note: the crate previously only typechecked — `cargo check --all-features`
+> > was clean after fixing real API drift (`BoxedProvider` → `DynProvider`,
+> > `Filter::selectors` removal, figment 0.10, the `TaskStatus::None` shadowing and the
+> > reorg-taint double borrow), but `cargo test` could not link on Windows + MinGW-w64
+> > (`E0463` for proc-macro deps of `tfhe`/`alloy-transport`).
+> >
+> > Local verification status is unchanged in kind: this sandbox's Smart App Control
+> > policy blocks loading freshly compiled DLLs, so `cargo check`/`cargo test` cannot run
+> > here at all (not even for `proc-macro2`). Every Rust change in this tree — including
+> > the execution engine above — is verified by the `rust` CI job on Linux, never locally.
+> > `cargo fmt` (parse-only) is the one Rust gate that runs in this sandbox, and it is
+> > green. See [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) §8.
+> >
+> > Building still needs a C toolchain and `protoc` (tonic's codegen shells out).
 
 ## Security status
 
@@ -162,6 +167,87 @@ What is actually enforced on chain today, and what is not:
 - [`docs/03-proof-of-compute.md`](docs/03-proof-of-compute.md) — STARK + dispute protocol
 - [`docs/04-threat-model.md`](docs/04-threat-model.md) — security analysis
 - [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) — honest MVP scope
+
+## Roadmap
+
+### Phase 1: Protocol Core, SDK & Ops Skeleton (Done — see `docs/05-honest-limitations.md`)
+
+- [x] **fhEVM contracts:** `CipherTask` FSM + escrow, `PaymentVault` streaming channels
+  (EIP-712 slices, `settleFrom` paging), `DecryptionGate` threshold reveal,
+  `NetworkParams` + `ProofVerifier` rotation timelocks. Hardhat suite: **102 passing**.
+- [x] **Dispute path (economic, not ZK):** `registerNode` bond + flat quorum of 3 distinct
+  reporters, winner-bond slash into buyer refund. Sampled on-chain check
+  (`verifyProofSegmented`), full verification off-chain. NOT Sybil-resistant (§2a).
+- [x] **TS SDK:** `uploadAndMonetize()`, DA client with CID validation + `getVerified`
+  re-hash, key-pin and `chainId` checks. **34 passing** (incl. relayer quantize/codec/
+  commitment). Real TFHE encryption in `@shroud/sdk/relayer` (node-only, Sepolia relayer);
+  live leg gated behind `SHROUD_LIVE_RELAYER=1` (CI job `relayer-live`), unverified from
+  this sandbox. Gap: default `Encryptor` is still `NoopEncryptor`, no browser FHEWasm build.
+- [x] **Rust node skeleton (not a compute node yet):** reorg-safe watcher, state fold,
+  worker (finalize/settle/dispute/redeem/reclaim/claim), gRPC mesh, local shard cache.
+  `cargo check --all-features` clean, **~160–165 tests green on CI**, never run against a
+  live chain. `lib.rs`/`worker.rs`: **no FHE engine and no STARK prover compiled in**
+  (`tfhe`/`winterfell`/`object_store` are optional, unimported deps).
+- [x] **DA service:** `infra/shardstore` content-addressed, size-capped, `Range`-capable,
+  bearer-token writes, LRU catalogue. 8 tests. On-chain pin is keccak-256, store
+  addresses SHA3-256 — SDK re-hashes instead of trusting CID.
+- [x] **Ops:** Telegram bot (35 tests), static `web/` site, `infra/` compose devnet
+  (`--network localhost` only, mock verifier/BLS).
+
+### Phase 2: Real FHE Compute in `node/` (Execution wired; tfhe + remote DA implemented)
+
+- [x] **`FheEngine` trait + `reference-cpu` engine (`node/src/fhe.rs`):** deterministic
+  fixed-point SGD (`Enc(W)·Enc(X)+Enc(B)` structure over quantised development shards,
+  gradient, `W_{t+1}`), exact integer arithmetic, golden-tested against a hand-computed
+  step; `trace_digest` layout documented and sensitivity-tested.
+- [x] **`Work::Execute` / `Work::Reexecute` (`node/src/worker.rs`):** sealed-input
+  gathering (leaf contributors/digests as contract views, bytes verified against pins),
+  `spawn_blocking` execution, DA publication, double-gated `commitEpoch` with
+  duplicate-commit check; mismatch re-arms the commit race for the dispute path.
+- [x] **Local DA (`node/src/da.rs`):** atomic content-addressed writes, budget
+  enforcement, digest verification; same layout the mesh serves.
+- [x] **`tfhe` backend (`--features prover`):** real `tfhe-rs` homomorphic SGD over
+  `FheUint32` (server key via `safe_serialize`d `CompressedServerKey`, shift-scaled
+  public learning rate, framed envelopes). Constraints documented in code: u32 wrapping,
+  power-of-two scale, PBS randomness vs. cross-node byte equality (single-executor
+  tasks until deterministic parameter sets land).
+- [x] **Remote DA (`--features da`):** `object_store` fetch/store for `s3://`, `gs://`,
+  `https://` with cache populate-through; loud refusal without the feature.
+- [ ] **Live `commitEpoch` from this node against devnet** (operator procedure + CI
+  assertion in `devnet-live`): `scripts/devnet-execute-check.ts` drives it — two live
+  nodes must independently commit the same verified digest — but no green CI run has
+  proven the loop yet.
+- [x] **Buyer-side `shroud/weights/v1` seed publishing** (SDK `src/weights.ts`, byte-pinned
+  against the node's golden vector): epoch 0 still falls back to genesis zeros with a
+  warning when the pinned seed is a foreign convention.
+
+### Phase 3: Verifiable FHE via STARKs
+
+- [ ] **Prover + AIR:** no prover/AIR in tree today (`docs/03` §1: statement unbaked,
+  `nodeId`/`n_shards`/`lr`/`w_{e+1}` unbound). Implement trace → Winterfell/SP1/RISC Zero
+  circuit with the 8-field transcript (`SHROUD/PoC/v1`, chainid, CipherTask, taskId,
+  epoch, ctRoot, lastWeightsDigest, traceDigest) byte-for-byte (`transcript.rs` + test-vectors).
+- [ ] **Full on-chain verification:** replace sampled-segment check with recursive
+  aggregation (STARK → Groth16) so "chain verified the proof" is literally true.
+- [ ] **Benchmarks:** epoch latency, ciphertext expansion, gas per verify on CPU/GPU runners.
+
+### Phase 4: Cryptoeconomic Hardening & Threshold KMS
+
+- [ ] **Commit-reveal reports:** `commitReport(keccak(digest,salt))` → `revealReport`
+  to stop mempool copy-paste by the 2nd/3rd reporter.
+- [ ] **Stake-weighted re-executors:** replace flat-count-3 with seeded/staked assignment;
+  slash winner on valid dispute, slash reporters on failed dispute (today: flat bond,
+  priced not prevented).
+- [ ] **Threshold re-encryption:** replace mock reveal with fhEVM Gateway KMS async
+  re-encryption of final weights under buyer key (ECIES/NaCl box).
+- [x] **Stateful invariant fuzz (`test/LifecycleFuzz.spec.ts`):** deterministic PRNG
+  (3 seeds × 200 steps) over every money-moving entry point — create, contribute, seal,
+  open, register, honest/divergent commits, disputes, finalize, paged settlement, bond
+  release, aborts, time travel — asserting `totalLocked == accountedLocked()` and vault
+  solvency after every step, success or revert, plus a terminal settle sweep. Arithmetic
+  panics fail the run; ordinary reverts are coverage data (tallied per action).
+- [ ] **Foundry stateful fuzz** (native `forge` invariants over the same properties,
+  once a foundry toolchain is available to verify them).
 
 ## Contributing & security
 
