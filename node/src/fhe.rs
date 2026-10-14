@@ -959,13 +959,14 @@ mod tfhe_backend {
                 }
                 for r in 0..lanes.len() / f {
                     let base = r * f;
-                    // predict = Σ w·x >> log2(S) + bias.
+                    // predict = Σ w·x >> log2(S) + bias (reference form, as in the
+                    // upstream shift tests: `&ct >> clear`).
                     let mut dot = FheUint32::encrypt_trivial(0u32);
                     for j in 0..f - 1 {
                         let prod = &w[j] * &lanes[base + j];
                         dot = &dot + &prod;
                     }
-                    let shifted = dot >> log_scale;
+                    let shifted = &dot >> log_scale;
                     let pred = &shifted + &w[f - 1];
                     let err = &pred - &lanes[base + f - 1];
                     for j in 0..f - 1 {
@@ -979,7 +980,7 @@ mod tfhe_backend {
                     if in_batch as usize >= inputs.minibatch {
                         for j in 0..f {
                             let scaled = &grad[j] * &step_ct;
-                            let delta = scaled >> STEP_SHIFT;
+                            let delta = &scaled >> STEP_SHIFT;
                             update_ct(&mut w[j], |w| &w - &delta);
                             grad[j] = FheUint32::encrypt_trivial(0u32);
                         }
@@ -998,14 +999,14 @@ mod tfhe_backend {
             if in_batch > 0 {
                 for j in 0..f {
                     let scaled = &grad[j] * &step_ct;
-                    let delta = scaled >> STEP_SHIFT;
+                    let delta = &scaled >> STEP_SHIFT;
                     update_ct(&mut w[j], |w| &w - &delta);
                 }
             }
             if let Some(l2) = l2_ct {
                 for lane in w.iter_mut() {
                     let scaled = &*lane * &l2;
-                    let shrink = scaled >> STEP_SHIFT;
+                    let shrink = &scaled >> STEP_SHIFT;
                     update_ct(lane, |w| &w - &shrink);
                 }
             }

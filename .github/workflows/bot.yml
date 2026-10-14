@@ -22,5 +22,12 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: bot/package-lock.json
+      # chain.test.js reads the NetworkParams ABI from the compiled Hardhat
+      # artifact (the SDK ships no fragment for it), so the contracts must be
+      # compiled first — same pattern as the sdk workflow.
+      - run: npm ci
+        working-directory: packages/contracts
+      - run: npx hardhat compile
+        working-directory: packages/contracts
       - run: npm ci
       - run: npm test
