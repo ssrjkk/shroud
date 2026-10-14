@@ -486,14 +486,11 @@ impl FheEngine for ReferenceCpuEngine {
                 want_cols: 2,
             }));
         }
-        if inputs.prev_weights.as_ref().map(|w| w.lanes.len()) != Some(f) {
+        let prev_len = inputs.prev_weights.as_ref().map_or(0, |w| w.lanes.len());
+        if prev_len != f {
             return Err(Error::Fhe(FheError::ShapeMismatch {
                 got_rows: 0,
-                got_cols: inputs
-                    .prev_weights
-                    .as_ref()
-                    .map(|w| w.lanes.len())
-                    .unwrap_or(0),
+                got_cols: prev_len,
                 want_rows: 0,
                 want_cols: f,
             }));
@@ -774,10 +771,12 @@ mod tfhe_backend {
                 .modified()
                 .map_err(&bad)?;
             let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(cached) = cache.as_ref() {
-                if cached.mtime == mtime {
-                    return Ok(cached.key.clone());
-                }
+            let hit = match cache.as_ref() {
+                Some(cached) if cached.mtime == mtime => Some(cached.key.clone()),
+                _ => None,
+            };
+            if let Some(key) = hit {
+                return Ok(key);
             }
             let bytes = std::fs::read(path).map_err(bad)?;
             let compressed: CompressedServerKey =
