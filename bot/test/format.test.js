@@ -204,7 +204,8 @@ test("pool handler reads newest-first and skips nothing", async () => {
   const { pool } = createHandlers(stub, {});
   const out = await pool();
   assert.deepEqual(seen, [3n, 2n, 1n]);
-  assert.ok(out.includes("Collecting"));
+  assert.ok(out.text.includes("Collecting"));
+  assert.ok(out.keyboard?.inline_keyboard?.flat().some((b) => b.callback_data === "t:1"));
 });
 
 test("task handler threads the running epoch through commits, winner and quorum", async () => {
@@ -236,9 +237,10 @@ test("task handler threads the running epoch through commits, winner and quorum"
     ["epochWinner", 7n, 4],
     ["disputeQuorum", 7n],
   ]);
-  assert.ok(out.includes("0/3"), "quorum progress shown");
-  assert.ok((await task([])).includes("usage"));
-  assert.ok((await task(["abc"])).includes("decimal integers"));
+  assert.ok(out.text.includes("0/3"), "quorum progress shown");
+  assert.ok(out.keyboard?.inline_keyboard?.flat().some((b) => b.callback_data === "w:7"), "watch toggle offered");
+  assert.ok((await task([])).text.includes("usage"));
+  assert.ok((await task(["abc"])).text.includes("decimal integers"));
 });
 
 test("renderTask says 'no task' rather than rendering an empty task", () => {

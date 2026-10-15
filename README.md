@@ -81,7 +81,7 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 | `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (110 tests: lifecycle, stateful fuzz, gas snapshot, admin controls, byte-layout vectors) |
 | `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (39 tests) |
 | `node/` | Rust compute node: chain follower + epoch executor (deterministic reference engine, `tfhe-rs` behind `prover`), gRPC mesh, content-addressed DA (`da` feature for remote) — see [Node](#node) |
-| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (39 tests, incl. stub-RPC read coverage) |
+| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (53 tests, incl. stub-RPC read coverage) |
 | `web/` | Project site (static, no build): home, in-browser lab, protocol, security status, license — RU/EN, ink/paper themes, newcomer/pro modes |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA, size-capped + range-pull), 3 nodes — operator runbook in [`infra/README.md`](infra/README.md) |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |

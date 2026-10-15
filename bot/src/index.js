@@ -28,17 +28,38 @@ import {
   renderRotation,
   renderLimits,
   renderHelp,
+  renderWatchlist,
+  renderAlerts,
 } from "./format.js";
+import {
+  ALERT_KEYS,
+  parseCallback,
+  poolKeyboard,
+  taskKeyboard,
+  statusKeyboard,
+  alertsKeyboard,
+  openTaskKeyboard,
+  openStatusKeyboard,
+  watchlistKeyboard,
+} from "./keyboards.js";
+import { WatchStore, targetChats } from "./watchlist.js";
 
 const CURSOR_FILE = resolve(ROOT, "state", "cursor.json");
 
 const COMMANDS = [
   { command: "status", description: "chain, key pin and pending rotation" },
-  { command: "pool", description: "recent tasks" },
+  { command: "pool", description: "recent tasks, newest first" },
   { command: "task", description: "<id> — one task with its epoch commits" },
+  { command: "watch", description: "<id> — alert me about this task" },
+  { command: "unwatch", description: "<id|all> — stop following" },
+  { command: "watchlist", description: "what this chat follows" },
+  { command: "alerts", description: "per-chat alert switches" },
   { command: "limits", description: "what this deployment does not protect against" },
   { command: "help", description: "this list" },
 ];
+
+/** Tasks per pool page. Small enough that the button list stays tappable. */
+export const POOL_PAGE_SIZE = 8;
 
 /**
  * Curried logger: `log("info", config)("message", detail)`.
@@ -106,48 +127,170 @@ export function mismatchArgs(ev, prev) {
 }
 
 /**
- * Command handlers over an already-resolved chain reader.
+ * Command handlers over an already-resolved chain reader and watch store.
+ *
+ * Every handler returns `{ text, keyboard? }`: the text is what the tests
+ * assert on, the keyboard is what makes it tappable. Handlers never touch
+ * Telegram directly, so the whole conversation (including callbacks) is
+ * unit-testable without a chain: tests hand a stub reader and an ephemeral
+ * store. `store` may be null in tests — watching then behaves as "off".
  *
  * Exported for tests: `main` wires the real reader, tests hand a stub whose calls
  * are recorded, which is what pins the pool window and the /task composition
  * (commits/winner/quorum for the running epoch) without a chain.
  */
-export function createHandlers(chain, config) {
+export function createHandlers(chain, config, store = null) {
+  async function isWatched(chatId, id) {
+    if (chatId == null || !store) return false;
+    return store.watched(chatId).includes(String(id));
+  }
+
   return {
     async help() {
-      return renderHelp();
+      return { text: renderHelp() };
     },
     async limits() {
-      return renderLimits();
+      return { text: renderLimits() };
     },
     async status() {
       const chainIdNow = await chain.chainId();
       const np = await chain.networkParams();
       const pending = np ? await chain.pendingRotation() : null;
-      return renderStatus(
-        { chainId: chainIdNow, blockNumber: await chain.blockNumber(), networkParams: np, pendingRotation: pending },
-        config
-      );
+      return {
+        text: renderStatus(
+          { chainId: chainIdNow, blockNumber: await chain.blockNumber(), networkParams: np, pendingRotation: pending },
+          config
+        ),
+        keyboard: statusKeyboard(),
+      };
     },
-    async pool() {
+    async pool(args = []) {
+      let page = 0;
+      if (args.length) {
+        if (!/^\d+$/.test(args[0]) || Number(args[0]) < 1) {
+          return { text: "usage: /pool [page] — pages start at 1." };
+        }
+        page = Number(args[0]) - 1;
+      }
       const count = await chain.taskCount();
+      const pages = Math.max(1, Math.ceil(count / POOL_PAGE_SIZE));
+      page = Math.min(page, pages - 1);
+      const ids = poolIds(count, (page + 1) * POOL_PAGE_SIZE).slice(page * POOL_PAGE_SIZE);
       const items = [];
-      for (const id of poolIds(count, 12)) {
+      for (const id of ids) {
         items.push(await chain.task(id));
       }
-      return renderPool(items);
+      return {
+        text: renderPool(items.filter(Boolean), count),
+        keyboard: poolKeyboard({
+          ids: items.filter(Boolean).map((t) => ({ id: String(t.taskId), label: t.statusName })),
+          page,
+          pages,
+        }),
+      };
     },
-    async task(args) {
-      if (!args.length) return "usage: /task &lt;id&gt;";
-      if (!/^\d+$/.test(args[0])) return "task ids are decimal integers. Try /pool.";
+    async task(args = [], chatId = null) {
+      if (!args.length) return { text: "usage: /task &lt;id&gt;" };
+      if (!/^\d+$/.test(args[0])) return { text: "task ids are decimal integers. Try /pool." };
       const id = BigInt(args[0]);
       const t = await chain.task(id);
       const commits = t ? await chain.commitsForEpoch(id, t.nextEpoch) : [];
       const winner = t ? await chain.epochWinner(id, t.nextEpoch) : null;
       const quorum = t ? await chain.disputeQuorum(id) : null;
-      return renderTask({ task: t, commits, winner, quorum }, id);
+      return {
+        text: renderTask({ task: t, commits, winner, quorum }, id),
+        keyboard: t ? taskKeyboard({ id: String(t.taskId), watched: await isWatched(chatId, t.taskId) }) : undefined,
+      };
+    },
+    async watch(args = [], chatId = null) {
+      if (!args.length || !/^\d+$/.test(args[0])) {
+        return { text: "usage: /watch &lt;id&gt; — alert this chat about one task." };
+      }
+      if (!store) return { text: "watching is unavailable (no state dir)." };
+      const on = await store.toggleWatch(chatId, args[0]);
+      const id = String(BigInt(args[0]));
+      return {
+        text: on
+          ? `watching task ${id}. Task alerts for this chat now cover #${id} (plus key rotations, always).`
+          : `stopped watching task ${id}.`,
+        keyboard: taskKeyboard({ id, watched: on }),
+      };
+    },
+    async unwatch(args = [], chatId = null) {
+      if (!store) return { text: "watching is unavailable (no state dir)." };
+      if (args[0] === "all") {
+        for (const id of store.watched(chatId)) await store.toggleWatch(chatId, id);
+        return { text: "watchlist cleared — this chat follows everything again." };
+      }
+      if (!args.length || !/^\d+$/.test(args[0])) {
+        return { text: "usage: /unwatch &lt;id&gt; or /unwatch all." };
+      }
+      const id = String(BigInt(args[0]));
+      if (store.watched(chatId).includes(id)) await store.toggleWatch(chatId, id);
+      return { text: `stopped watching task ${id}.` };
+    },
+    async watchlist(args = [], chatId = null) {
+      const watched = store ? store.watched(chatId) : [];
+      return { text: renderWatchlist(watched), keyboard: watchlistKeyboard(watched) };
+    },
+    async alerts(args = [], chatId = null) {
+      const overrides = store
+        ? { commitMismatch: null, disputes: null, keyRotation: null, ...store.snapshot(chatId).alerts }
+        : { commitMismatch: null, disputes: null, keyRotation: null };
+      return { text: renderAlerts(config.alerts, overrides), keyboard: alertsKeyboard(overrides) };
     },
   };
+}
+
+/**
+ * Route one callback query to a screen. Pure orchestration over handlers and
+ * the watch store: returns `{ text, keyboard?, toast? }` or `{ error }`.
+ * The caller (pollCommands) decides between editing the tapped message and
+ * sending a fresh one.
+ */
+export async function handleCallback(data, { handlers, store, chatId }) {
+  const cb = parseCallback(data);
+  if (!cb) return { error: "unknown button — try /help." };
+  try {
+    switch (cb.kind) {
+      case "pool": {
+        const view = await handlers.pool([String(cb.page + 1)]);
+        return { ...view };
+      }
+      case "task": {
+        const view = await handlers.task([cb.id], chatId);
+        return { ...view };
+      }
+      case "refresh": {
+        if (cb.view === "s") return { ...(await handlers.status()) };
+        const [kind, arg] = cb.view.split(":");
+        if (kind === "p") return { ...(await handlers.pool([String(Number(arg) + 1)])) };
+        return { ...(await handlers.task([arg], chatId)) };
+      }
+      case "watch": {
+        if (!store) return { error: "watching is unavailable (no state dir)." };
+        const on = await store.toggleWatch(chatId, cb.id);
+        const view = await handlers.task([cb.id], chatId);
+        return { ...view, toast: on ? `watching #${cb.id}` : `unwatched #${cb.id}` };
+      }
+      case "alerts": {
+        if (!store) return { error: "watching is unavailable (no state dir)." };
+        const family = ALERT_KEYS[cb.key];
+        const snap = store.snapshot(chatId);
+        const cur = snap.alerts[family];
+        // null (env) → false → true → null: two taps return to env.
+        const next = cur === null || cur === undefined ? false : cur === false ? true : null;
+        await store.setAlert(chatId, family, next);
+        const view = await handlers.alerts([], chatId);
+        const label = next === null ? "following env" : next ? "on" : "off";
+        return { ...view, toast: `${family}: ${label}` };
+      }
+      default:
+        return { error: "unknown button — try /help." };
+    }
+  } catch (err) {
+    return { error: `could not complete that tap: ${err.message}` };
+  }
 }
 
 async function main() {
@@ -201,6 +344,10 @@ async function main() {
   const me = await bot.getMe();
   log("info", config)(`telegram connected as @${me.username}`);
 
+  // Per-chat state (watchlists, alert overrides). Best-effort persistence:
+  // an unreadable state dir only costs preferences, never uptime.
+  const store = await WatchStore.open(resolve(ROOT, "state"));
+
   try {
     await bot.setCommands(COMMANDS);
   } catch (err) {
@@ -242,7 +389,7 @@ async function main() {
   // which epoch's commits /task shows) is unit-testable without a chain: handlers
   // take an already-resolved chain reader, and the tests hand them a stub.
 
-  const handlers = createHandlers(chain, config);
+  const handlers = createHandlers(chain, config, store);
 
   async function handleCommand(msg) {
     const text = msg.text ?? "";
@@ -250,15 +397,40 @@ async function main() {
     const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
     const handler = handlers[name];
     if (!handler) {
-      return renderHelp();
+      return { text: renderHelp() };
     }
     try {
-      return await handler(args);
+      return await handler(args, msg.chat?.id ?? null);
     } catch (err) {
       // A failing command must not kill the process: an ops bot that crashes on
       // one bad RPC read is worse than one that says "that failed".
-      return `could not complete /${name}: ${err.message}`;
+      return { text: `could not complete /${name}: ${err.message}` };
     }
+  }
+
+  function sendOptions(keyboard) {
+    const extra = config.html ? { parse_mode: "HTML" } : {};
+    if (keyboard) extra.reply_markup = keyboard;
+    return extra;
+  }
+
+  /** One alert to exactly the chats that asked for it (see targetChats). */
+  async function sendAlert(view, targets) {
+    await Promise.all(
+      targets.map((id) =>
+        bot.sendQueued(id, view.text, sendOptions(view.keyboard)).catch((err) => {
+          log("error", config)(`send to ${id} failed:`, err.message);
+        })
+      )
+    );
+  }
+
+  function authQuery(query) {
+    // Callbacks carry no message text; authorise the same way as messages:
+    // the chat when allowlisted, else the private sender.
+    const chat = query.message?.chat;
+    const probe = { chat: chat ?? { id: query.from?.id, type: "private" }, from: query.from };
+    return isAuthorised(probe) ? (chat?.id ?? query.from?.id ?? null) : null;
   }
 
   async function pollCommands() {
@@ -269,6 +441,42 @@ async function main() {
         offset = nextOffset;
 
         for (const update of updates) {
+          if (update.callback_query) {
+            const query = update.callback_query;
+            const chatId = authQuery(query);
+            if (chatId === null) {
+              await bot.answerCallbackQuery(query.id, "not authorised.");
+              continue;
+            }
+            const out = await handleCallback(query.data, {
+              handlers,
+              store,
+              chatId,
+            });
+            if (out.toast || out.error) {
+              await bot.answerCallbackQuery(query.id, out.toast ?? out.error);
+            } else {
+              await bot.answerCallbackQuery(query.id);
+            }
+            if (out.error) continue;
+            // Prefer editing the tapped message: paging and refreshes then read
+            // as one living screen instead of a growing stack of stale ones.
+            const mid = query.message?.message_id;
+            if (mid !== undefined) {
+              try {
+                await bot.editMessageText(chatId, mid, out.text, sendOptions(out.keyboard));
+                continue;
+              } catch {
+                // Falls through to a fresh message (e.g. the tap came from an
+                // alert whose layout changed shape).
+              }
+            }
+            await bot
+              .sendMessage(chatId, out.text, sendOptions(out.keyboard))
+              .catch(() => {});
+            continue;
+          }
+
           const msg = update.message;
           if (!msg?.text) continue;
 
@@ -288,7 +496,7 @@ async function main() {
 
           const reply = await handleCommand(msg);
           if (reply) {
-            await bot.sendMessage(msg.chat.id, reply, config.html ? { parse_mode: "HTML" } : {});
+            await bot.sendMessage(msg.chat.id, reply.text, sendOptions(reply.keyboard));
           }
         }
       } catch (err) {
@@ -304,8 +512,21 @@ async function main() {
     const head = await chain.blockNumber();
     if (head <= cursor) return { cursor, alerts: [] };
 
+    // The env flags are a global kill switch; a per-chat override can still
+    // re-enable a family for that chat, so the scan runs when anyone — env
+    // or override — could receive the alert. targetChats filters per chat.
+    function familyWanted(family) {
+      if (config.alerts[family]) return true;
+      for (const id of config.allowedChatIds) {
+        if (store.snapshot(id).alerts[family] === true) return true;
+      }
+      return false;
+    }
+
+    // Alerts carry their own routing: which task they are about (null for
+    // chain-wide ones like key rotation) and which per-chat families gate
+    // them. pollAlerts resolves chat targets from the watch store.
     const alerts = [];
-    const alertsCfg = config.alerts;
 
     // Commits, so a same-epoch digest disagreement can be detected. The bot
     // keeps the last-seen digest per (task, epoch, node) to spot a second,
@@ -313,44 +534,64 @@ async function main() {
     const seenDigest = scanOnce.seenDigest ?? new Map();
     scanOnce.seenDigest = seenDigest;
 
-    if (config.cipherTask) {
+    if (config.cipherTask && familyWanted("commitMismatch")) {
       const commits = await chain.commitEvents(cursor + 1, head);
       for (const ev of commits) {
         const key = `${ev.args.taskId}/${ev.args.epoch}/${ev.args.node}`;
         const prev = seenDigest.get(key);
         seenDigest.set(key, ev.args.traceDigest);
-        if (alertsCfg.commitMismatch && prev && prev !== ev.args.traceDigest) {
-          alerts.push(renderCommitMismatch(mismatchArgs(ev, prev)));
+        if (config.alerts.commitMismatch && prev && prev !== ev.args.traceDigest) {
+          const taskId = String(ev.args.taskId);
+          alerts.push({
+            text: renderCommitMismatch(mismatchArgs(ev, prev)),
+            keyboard: openTaskKeyboard(taskId),
+            taskId,
+            families: ["commitMismatch"],
+          });
         }
       }
     }
 
-    if (config.cipherTask && alertsCfg.disputes) {
+    if (config.cipherTask && familyWanted("disputes")) {
       const events = await chain.disputeEvents(cursor + 1, head);
       for (const ev of events) {
         const rendered = renderDispute(ev);
-        if (rendered) alerts.push(rendered);
+        if (rendered) {
+          const taskId = ev.args?.taskId === undefined ? null : String(ev.args.taskId);
+          alerts.push({
+            text: rendered,
+            keyboard: taskId === null ? undefined : openTaskKeyboard(taskId),
+            taskId,
+            families: ["disputes"],
+          });
+        }
       }
     }
 
-    if (config.networkParams && alertsCfg.keyRotation) {
+    if (config.networkParams && familyWanted("keyRotation")) {
       const { executed, proposed } = await chain.rotationEvents(cursor + 1, head);
       for (const ev of proposed) {
-        alerts.push(
-          renderRotation("proposed", {
+        alerts.push({
+          text: renderRotation("proposed", {
             proposer: ev.args.proposer,
             expectedHash: ev.args.expectedHash,
             scheduledAt: ev.args.scheduledAt,
-          })
-        );
+          }),
+          keyboard: openStatusKeyboard(),
+          taskId: null,
+          families: ["keyRotation"],
+        });
       }
       for (const ev of executed) {
-        alerts.push(
-          renderRotation("executed", {
+        alerts.push({
+          text: renderRotation("executed", {
             keyVersion: ev.args.keyVersion,
             fhePublicKeyHash: ev.args.fhePublicKeyHash,
-          })
-        );
+          }),
+          keyboard: openStatusKeyboard(),
+          taskId: null,
+          families: ["keyRotation"],
+        });
       }
     }
 
@@ -367,7 +608,14 @@ async function main() {
         cursor = next;
         await saveCursor(cursor);
         for (const a of alerts) {
-          await send(a);
+          const targets = targetChats({
+            allowedIds: [...config.allowedChatIds],
+            store,
+            env: config.alerts,
+            taskId: a.taskId,
+            families: a.families,
+          });
+          await sendAlert(a, targets);
         }
       } catch (err) {
         log("error", config)("alert scan failed:", err.message);
@@ -383,7 +631,8 @@ async function main() {
     `🕶 <b>Shroud bot online</b>\n\nchain ${chainId} · head ${await chain.blockNumber()}\n` +
       `alerts: commit mismatch ${config.alerts.commitMismatch ? "on" : "off"}, ` +
       `disputes ${config.alerts.disputes ? "on" : "off"}, ` +
-      `key rotation ${config.alerts.keyRotation ? "on" : "off"}`
+      `key rotation ${config.alerts.keyRotation ? "on" : "off"}\n` +
+      `per-chat: /watch, /alerts`
   );
 
   await Promise.all([pollCommands(), pollAlerts()]);

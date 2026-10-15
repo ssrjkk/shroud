@@ -307,18 +307,58 @@ export function renderHelp() {
     "",
     "<b>Read</b>",
     `${mono("/status")}  chain, key pin, pending rotation`,
-    `${mono("/pool")}  recent tasks`,
+    `${mono("/pool [page]")}  recent tasks, newest first`,
     `${mono("/task <id>")}  one task, with that epoch's commits`,
     `${mono("/limits")}  what this deployment does not protect against`,
+    "",
+    "<b>Follow</b>",
+    `${mono("/watch <id>")}  alert me about this task (toggle)`,
+    `${mono("/unwatch <id|all>")}  stop following`,
+    `${mono("/watchlist")}  what this chat follows`,
+    `${mono("/alerts")}  per-chat alert switches`,
+    "",
     `${mono("/help")}  this list`,
     "",
-    "<b>Alerts</b> (enable in .env)",
-    `${mono("ALERT_COMMIT_MISMATCH")}  same node, same epoch, two digests`,
-    `${mono("ALERT_DISPUTES")}  disputes, rejections and settlements`,
-    `${mono("ALERT_KEY_ROTATION")}  any network key change`,
+    "Most screens have buttons underneath: paging, refresh and toggles work",
+    "by tapping, no typing needed.",
     "",
     "This bot is read-only. It holds no keys and cannot sign or send a transaction.",
   ].join("\n");
+}
+
+/** What this chat follows. Empty means "everything" (the old broadcast). */
+export function renderWatchlist(watched) {
+  const lines = [header("☆", "Watchlist"), ""];
+  if (!watched.length) {
+    lines.push("this chat follows <b>everything</b>: every task alert lands here.");
+    lines.push("");
+    lines.push(`${mono("/watch <id>")} narrows it down to just that task.`);
+  } else {
+    lines.push("task alerts for this chat, and only these:");
+    for (const id of watched) lines.push(`  ${mono(`#${id}`)}`);
+    lines.push("");
+    lines.push("Key-rotation alerts always land here regardless.");
+    lines.push(`${mono("/unwatch <id>")} drops one, ${mono("/unwatch all")} clears.`);
+  }
+  return lines.join("\n");
+}
+
+/** Effective alert state: env default, per-chat override, result. */
+export function renderAlerts(env, overrides) {
+  const names = {
+    commitMismatch: "same node, same epoch, two digests",
+    disputes: "disputes, rejections and settlements",
+    keyRotation: "any network key change",
+  };
+  const lines = [header("🔔", "Alerts for this chat"), ""];
+  for (const key of Object.keys(names)) {
+    const eff = overrides[key] === null || overrides[key] === undefined ? env[key] : overrides[key];
+    const src = overrides[key] === null || overrides[key] === undefined ? "env" : "this chat";
+    lines.push(`${eff ? "✅" : "❌"} <b>${htmlEscape(names[key])}</b> — ${eff ? "on" : "off"} (${src})`);
+  }
+  lines.push("");
+  lines.push("Tap a row to flip it for this chat only. Tapping twice returns to env.");
+  return lines.join("\n");
 }
 
 export { htmlEscape, mono, shortHash };

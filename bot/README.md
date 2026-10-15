@@ -31,10 +31,34 @@ not to keep uploading.
 | command | what it answers |
 |---|---|
 | `/status` | chain, head, pinned FHE key hash, committee threshold, **pending rotation** |
-| `/pool` | the most recent tasks with status, budget and contributor count |
+| `/pool [page]` | the most recent tasks with status, budget and contributor count, 8 per page |
 | `/task <id>` | one task, plus that epoch's commits — and whether they disagree |
+| `/watch <id>` | alert this chat about one task (toggle) |
+| `/unwatch <id\|all>` | stop following |
+| `/watchlist` | what this chat follows |
+| `/alerts` | per-chat alert switches |
 | `/limits` | what this deployment does *not* protect against |
 | `/help` | the list above |
+
+Almost every screen carries inline buttons underneath: pool pages, prev/next
+task, refresh (which rewrites the message in place instead of stacking new
+ones), watch toggles, and alert switches. Tapping a button does the same thing
+as typing the command — `/pool 2`, `t:7`, `w:7` are just the typed spellings of
+the same verbs, so nothing is reachable *only* by button or *only* by typing.
+
+## Per-chat state
+
+Two things are remembered per chat, in `state/watchlist.json` (atomic write,
+corrupt file degrades to empty rather than crashing):
+
+- **watchlist** — task ids this chat follows. A chat that watches nothing gets
+  every task alert (the old broadcast); a chat watching `#5` gets only `#5`
+  plus key rotations, which always reach everyone.
+- **alert overrides** — each family (`mismatch`, `disputes`, `key rotation`)
+  can be forced on/off per chat via `/alerts`; unset means "follow `.env`".
+  The env flags stay a global kill switch with one exception: a chat that
+  explicitly switched a family *on* still receives it when the env has it
+  *off* — otherwise the switch would be a lie.
 
 ## Alerts
 
@@ -91,7 +115,7 @@ know.
 npm test
 ```
 
-39 tests, no bot token and no chain required. They cover the parts that fail
+53 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -104,6 +128,10 @@ quietly in production:
   (always `NaN`)
 - config validation, including that a missing or non-numeric allowlist stops
   the bot rather than opening it
+- every callback button parses back into a known verb (unknown data fails
+  loudly), payloads fit the 64-byte cap, and paging never offers a missing page
+- watchlist routing (empty = broadcast, rotations always global) and the
+  alert-override cycle, against an ephemeral store — no token, no chain
 
 ## Honest limits of the bot itself
 

@@ -120,6 +120,37 @@ export class TelegramBot {
     return this.#call("setMyCommands", { commands });
   }
 
+  /** Dismiss the loading spinner on a tapped button, optionally with a toast. */
+  async answerCallbackQuery(id, text) {
+    const payload = { callback_query_id: id };
+    if (text) payload.text = text;
+    return this.#call("answerCallbackQuery", payload).catch(() => {});
+  }
+
+  /**
+   * Rewrite a message in place (refresh buttons, paging, toggles).
+   *
+   * A "message is not modified" 400 means the tap changed nothing visible;
+   * that is a no-op rather than an error, so it resolves instead of throwing.
+   */
+  async editMessageText(chatId, messageId, text, extra = {}) {
+    const body = {
+      chat_id: chatId,
+      message_id: messageId,
+      text: text.length > 4096 ? `${text.slice(0, 4090)}\n…(truncated)` : text,
+      disable_web_page_preview: true,
+      ...extra,
+    };
+    try {
+      return await this.#call("editMessageText", body);
+    } catch (err) {
+      if (err instanceof TelegramError && /not modified/i.test(err.description ?? "")) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
   /**
    * Long-poll for updates, returning only ones we have not seen.
    *
@@ -132,7 +163,7 @@ export class TelegramBot {
     const updates = await this.#call("getUpdates", {
       offset,
       timeout: timeoutSeconds,
-      allowed_updates: ["message", "command"],
+      allowed_updates: ["message", "callback_query"],
     });
     const fresh = updates.filter((u) => !this.#seen.has(u.update_id));
     for (const u of updates) this.#seen.add(u.update_id);
