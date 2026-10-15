@@ -118,7 +118,7 @@ mod tests {
     }
 
     /// Deployed `CipherTask` of the hardhat run the vectors come from.
-    const TASK_ADDRESS: &str = "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318";
+    const TASK_ADDRESS: &str = "0x959922bE3CAee4b8Cd9a407cc3ac1C251C2007B1";
     const CHAIN_ID: u64 = 31_337;
 
     #[test]
@@ -187,7 +187,7 @@ mod tests {
         );
         assert_eq!(
             got,
-            b256("0x4abdca8df798a87c70c8d71e451d62074a9769cca624cedb289f9d579702d27c")
+            b256("0xdc1867631d1169dfd4f8aea83777cd1547c6803912701565add73fb417faafa2")
         );
     }
 

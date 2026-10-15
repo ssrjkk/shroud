@@ -176,7 +176,6 @@ sol! {
         /// Whether `taskId` still has an open reward channel whose window has not matured.
         /// The final settlement page waits on this (F-22); earlier pages never consult it.
         function hasImmatureChannels(uint256 taskId) external view returns (bool);
-        function channelIds(uint256 taskId) external view returns (uint256[] memory);
         function pendingWithdrawal(address account) external view returns (uint256);
         function redeemDigest(
             uint256 channelId,
