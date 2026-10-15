@@ -1,0 +1,65 @@
+name: site
+
+on:
+  push:
+    branches: [master]
+    paths: ["web/**", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["web/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+# Pages deployment needs these; PRs from forks cannot deploy, so the deploy
+# job is master-only below while build still validates every PR.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: package static site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/configure-pages@v5
+      - name: check internal links resolve
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          from pathlib import Path
+          web = Path("web")
+          pages = {p.name for p in web.glob("*.html")}
+          assets = {str(p.relative_to(web)).replace("\\", "/") for p in web.rglob("*") if p.is_file()}
+          bad = []
+          for html in web.glob("*.html"):
+              text = html.read_text()
+              for m in re.finditer(r'''(?:href|src)="([^"#]+)"''', text):
+                  target = m.group(1)
+                  if target.startswith(("http", "data:", "mailto:")):
+                      continue
+                  norm = (target[2:] if target.startswith("./") else target.lstrip("/"))
+                  if norm not in assets:
+                      bad.append(f"{html.name}: {target}")
+          if bad:
+              print("broken site links:"); print("\n".join(bad)); sys.exit(1)
+          print(f"site links OK: {len(pages)} pages")
+          EOF
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    name: deploy to GitHub Pages
+    if: github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

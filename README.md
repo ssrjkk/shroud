@@ -5,6 +5,9 @@
 [![rust](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
+🌐 **Live site: [ssrjkk.github.io/shroud](https://ssrjkk.github.io/shroud/)** — what it is,
+how the pipeline works, and the full honest security posture.
+
 **Train a model over other people's encrypted data — without ever seeing it. Sell the model /
 your data's value without revealing either.**
 
@@ -36,6 +39,26 @@ npx hardhat run scripts/devnet-e2e-check.ts --network localhost  # create → se
 `--network localhost` is load-bearing: the fhevm plugin instruments a standalone node only
 under that name (port 8545, chainId 31337). Anything else resolves to provider type `Unknown`,
 the mock coprocessor is never installed, and `CipherTask`'s constructor reverts with no reason.
+
+## Who is this for, and how to use it
+
+- **Buyer — fund a private training task.** Escrow a budget and describe the model:
+  `packages/contracts/scripts/devnet-e2e-check.ts` shows the calls
+  (`createTask` → contributions land → `sealTask` → `openEpoch` per epoch); the SDK wraps
+  them in `ShroudSdk`. Settlement pays contributors, the winning node and the committee
+  out of your escrow, and refunds the rest.
+- **Contributor — sell your data's value, not the data.** Encrypt rows client-side and
+  commit the shard: `sdk.uploadAndMonetize(data, taskId, { features, allowUnencrypted })`
+  (production: a real `Encryptor`, e.g. `@shroud/sdk/relayer`). Plaintext never leaves
+  your machine; the chain only ever sees CIDs and digests. End-to-end example:
+  `packages/sdk/scripts/devnet-check.mjs`.
+- **Node operator — run compute and earn epochs.** `docker compose up -d node-a` (see
+  [`infra/README.md`](infra/README.md) §3 for every knob: backends, DA, key pin, windows),
+  or build `node/` and point it at a task. The node registers, executes, commits, disputes
+  from its own commits, and redeems its reward channels.
+- **Ops — watch a deployment.** Run the Telegram bot (`bot/`, needs `bot/.env` with a token
+  and an allowlist): `/pool`, `/task <id>`, mismatch/dispute/rotation alerts. Setup and
+  limits: [`bot/README.md`](bot/README.md).
 
 ## Repository
 
