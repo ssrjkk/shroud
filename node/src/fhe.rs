@@ -1396,8 +1396,8 @@ mod tests {
             proof_ref: String,
         }
 
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../web/tests/vectors.json");
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../web/tests/vectors.json");
         let raw = std::fs::read_to_string(&path).expect("web/tests/vectors.json must exist");
         let vectors: VectorFile = serde_json::from_str(&raw).expect("vectors.json parses");
         assert!(!vectors.pipelines.is_empty(), "no golden pipelines pinned");
@@ -1449,7 +1449,9 @@ mod tests {
                 }],
             };
             let engine = ReferenceCpuEngine::new(p.scale, p.lr_q16, p.l2_q16, p.minibatch);
-            let out = engine.execute_epoch(&inputs).expect("golden epoch executes");
+            let out = engine
+                .execute_epoch(&inputs)
+                .expect("golden epoch executes");
             let lanes: Vec<i32> = out.weights.lanes.iter().map(|w| *w as i32).collect();
             assert_eq!(lanes, p.expect.lanes, "{}: lanes", p.name);
             assert_eq!(
