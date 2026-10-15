@@ -113,7 +113,7 @@ impl Weights {
     /// Decode and validate a weight file. `expected_features` is the task's `features`;
     /// anything else is a shape error, never a silent reinterpretation.
     pub fn decode(bytes: &[u8], expected_features: u32) -> Result<Self> {
-        let fail = |reason: String| Error::Shard(ShardError::Malformed { offset: 0, reason });
+        let fail = |reason: String| Error::ShardStore(ShardError::Malformed { offset: 0, reason });
         if bytes.len() < WEIGHTS_MAGIC.len() + 8 {
             return Err(fail(format!(
                 "weight object is {} bytes, shorter than the header",
@@ -159,7 +159,7 @@ impl Weights {
 /// on a huge positive with no error anywhere downstream.
 fn quantize(value: f64, scale: u32, index: usize) -> Result<u64> {
     let malformed = |reason: String| {
-        Error::Shard(ShardError::Malformed {
+        Error::ShardStore(ShardError::Malformed {
             offset: index,
             reason,
         })
@@ -201,7 +201,7 @@ pub struct ShardRows {
 /// parameter here, never a default.
 pub fn decode_noop_shard(bytes: &[u8], expected_features: u32, scale: u32) -> Result<ShardRows> {
     let malformed =
-        |offset: usize, reason: String| Error::Shard(ShardError::Malformed { offset, reason });
+        |offset: usize, reason: String| Error::ShardStore(ShardError::Malformed { offset, reason });
     if bytes.len() < NOOP_SHARD_MAGIC.len() {
         return Err(malformed(
             0,
@@ -802,7 +802,7 @@ mod tfhe_backend {
             expected_features: u32,
         ) -> Result<Vec<FheUint32>> {
             let malformed = |offset: usize, reason: String| {
-                Error::Shard(ShardError::Malformed { offset, reason })
+                Error::ShardStore(ShardError::Malformed { offset, reason })
             };
             if bytes.len() < magic.len() + 8 {
                 return Err(malformed(0, format!("{what} is shorter than the header")));

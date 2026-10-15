@@ -572,7 +572,7 @@ impl Worker {
             let contributor = self.client.contribution_of(task_id, index).await?;
             let c = self.client.contribution(task_id, contributor).await?;
             if !c.accepted {
-                return Err(Error::Shard(crate::error::ShardError::Malformed {
+                return Err(Error::ShardStore(crate::error::ShardError::Malformed {
                     offset: index as usize,
                     reason: format!(
                         "contribution of {contributor} at leaf {index} is not accepted"
