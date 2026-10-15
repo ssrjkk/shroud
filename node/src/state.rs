@@ -670,6 +670,25 @@ impl NodeState {
                 // carries, so this is a nudge and the worker checks the view.
                 work.push(Work::Settle { task_id: *task_id });
             }
+            ChainEvent::DisputeCommitted {
+                task_id,
+                epoch,
+                reporter,
+            } => {
+                // A commitment hides the digest, so there is nothing to count yet — but a
+                // reporter that paid for a commit believes the claim is wrong, which is exactly
+                // the signal that should make this node re-execute and form its own opinion.
+                // `B256::ZERO` is the "unknown claim" sentinel `on_reexecute` resolves against
+                // the winner's committed digest before comparing.
+                if Some(*reporter) == me {
+                    return work;
+                }
+                work.push(Work::Reexecute {
+                    task_id: *task_id,
+                    epoch: *epoch,
+                    claimed_digest: B256::ZERO,
+                })
+            }
             ChainEvent::DisputeReported {
                 task_id,
                 epoch,
@@ -1211,6 +1230,43 @@ mod tests {
                 // peer's claim.
                 our_digest: B256::repeat_byte(0xaa)
             }]
+        );
+    }
+
+    #[test]
+    fn a_commitment_nudges_a_reexecution_without_knowing_the_claim() {
+        // `DisputeCommitted` hides the digest by design: the fold cannot count it, but a
+        // reporter that paid for a commit believes the claim is wrong — exactly the signal
+        // that should make this node re-execute and form its own opinion.
+        let s = state();
+        s.mark_registered(U256::from(9), true);
+        opened(&s, 9, 0);
+        s.take_work();
+        let work = s.apply(&ChainEvent::DisputeCommitted {
+            task_id: U256::from(9),
+            epoch: 0,
+            reporter: OTHER,
+        });
+        assert_eq!(
+            work,
+            vec![Work::Reexecute {
+                task_id: U256::from(9),
+                epoch: 0,
+                // Unknown claim: the worker resolves this against the winner's committed
+                // digest before comparing, rather than "disagreeing" with zero.
+                claimed_digest: B256::ZERO,
+            }],
+            "a foreign commitment re-arms re-execution: {work:?}"
+        );
+        // Our own commitment needs no reaction: we already hold the opinion it hides.
+        let work = s.apply(&ChainEvent::DisputeCommitted {
+            task_id: U256::from(9),
+            epoch: 0,
+            reporter: NODE,
+        });
+        assert!(
+            work.is_empty(),
+            "our own commitment files nothing: {work:?}"
         );
     }
 

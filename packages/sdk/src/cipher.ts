@@ -115,13 +115,28 @@ export class CipherTaskClient {
    * Safe to call repeatedly and from any account: each page is independent and idempotent in the
    * sense that an already-settled task reverts rather than paying anyone twice, which is why the
    * loop re-reads `isFullySettled` rather than trusting its own count.
+   *
+   * If the final page is not yet runnable because reward channels have not matured
+   * (`ChannelsImmature`, threat model F-22), the revert is rethrown with the remedy attached:
+   * wait out the reward window and call again — the pages that already ran keep their effect.
    */
   async settleToCompletion(taskId: bigint, maxPages = 100): Promise<number> {
     let pages = 0;
     while (pages < maxPages) {
       if (await this.isFullySettled(taskId)) return pages;
       const cursor = await this.settleCursor(taskId);
-      await this.settle(taskId, cursor);
+      try {
+        await this.settle(taskId, cursor);
+      } catch (e) {
+        if (e instanceof Error && /ChannelsImmature/.test(e.message)) {
+          throw new Error(
+            `settlement of task ${taskId} paid ${pages} page(s) and is now waiting for reward ` +
+              `channels to mature; retry after the reward window (CipherTask.rewardChannelWindow). ` +
+              `Caused by: ${e.message}`
+          );
+        }
+        throw e;
+      }
       pages++;
     }
     throw new Error(`settlement did not complete within ${maxPages} pages for task ${taskId}`);
@@ -159,6 +174,93 @@ export class CipherTaskClient {
 
   async pendingPayout(account: string): Promise<bigint> {
     return BigInt(await this.contract.pendingPayout(account));
+  }
+
+  /**
+   * Register with proof-of-possession of the caller's key over its BLS key.
+   *
+   * Signs the EIP-191 message the contract reconstructs
+   * (`keccak(taskId, blsPubKey, node, chainId, cipherTask)`), so the BLS key is bound to a
+   * live signer instead of being self-declared. Prefer this over `registerNode` whenever the
+   * caller holds its own key.
+   */
+  async registerNodeWithPop(taskId: bigint, blsPubKey: Hex, signer: Signer, chainId: bigint): Promise<string> {
+    const node = await signer.getAddress();
+    const target = this.contract.target as string;
+    const inner = ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(
+        ["uint256", "bytes32", "address", "uint256", "address"],
+        [taskId, blsPubKey, node, chainId, target]
+      )
+    );
+    const sig = await signer.signMessage(ethers.getBytes(inner));
+    const contract = this.contract.connect(signer) as Contract;
+    const tx = await contract.registerNodeWithPop(taskId, blsPubKey, sig);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for registerNodeWithPop");
+    return tx.hash;
+  }
+
+  /** Commit to a dispute digest before revealing it (front-run resistance). */
+  async commitDispute(taskId: bigint, epoch: number, commitment: Hex): Promise<string> {
+    const tx = await this.contract.commitDispute(taskId, epoch, commitment);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for commitDispute");
+    return tx.hash;
+  }
+
+  /** Reveal a committed dispute digest. */
+  async reportDisputeWithSalt(taskId: bigint, epoch: number, digest: Hex, salt: Hex): Promise<string> {
+    const tx = await this.contract.reportDisputeWithSalt(taskId, epoch, digest, salt);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for reportDisputeWithSalt");
+    return tx.hash;
+  }
+
+  /** Commitment for `keccak(digest, salt, reporter)` — what `commitDispute` must be given. */
+  disputeCommitment(digest: Hex, salt: Hex, reporter: string): Hex {
+    return ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes32", "address"], [digest, salt, reporter])
+    );
+  }
+
+  /** Submit a segmented-STARK root for `epoch` (see `commitEpochSegmented`). */
+  async commitEpochSegmented(
+    taskId: bigint,
+    epoch: number,
+    segmentedRoot: Hex,
+    encWeightsCid: Hex,
+    weightsDigest: Hex,
+    metricsCid: Hex,
+    traceDigest: Hex
+  ): Promise<string> {
+    const tx = await this.contract.commitEpochSegmented(
+      taskId,
+      epoch,
+      segmentedRoot,
+      encWeightsCid,
+      weightsDigest,
+      metricsCid,
+      traceDigest
+    );
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for commitEpochSegmented");
+    return tx.hash;
+  }
+
+  /** Bond currently required of new contributions to `taskId` (0 = none). */
+  async contributionBondRequired(taskId: bigint): Promise<bigint> {
+    return BigInt(await this.contract.contributionBondRequired(taskId));
+  }
+
+  /** Bond currently posted by `contributor` on `taskId`. */
+  async contributionBondOf(taskId: bigint, contributor: string): Promise<bigint> {
+    return BigInt(await this.contract.contributionBondOf(taskId, contributor));
+  }
+
+  /** The ERC-20 token the orchestrator pulls contribution bonds (and escrow) in. */
+  async escrowToken(): Promise<string> {
+    return String(await this.contract.escrowToken());
   }
 }
 
@@ -290,6 +392,11 @@ export class PaymentVaultClient {
 
   async pendingWithdrawal(account: string): Promise<bigint> {
     return BigInt(await this.contract.pendingWithdrawal(account));
+  }
+
+  /** Whether `taskId` still has an open reward channel whose window has not matured. */
+  async hasImmatureChannels(taskId: bigint): Promise<boolean> {
+    return this.contract.hasImmatureChannels(taskId);
   }
 }
 

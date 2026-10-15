@@ -19,6 +19,7 @@ export * from "./eip712.js";
 export * from "./encrypt.js";
 export * from "./da.js";
 export * from "./weights.js";
+export * from "./gate.js";
 export { CipherTaskClient, NetworkParamsClient, NETWORK_PARAMS_ABI, PaymentVaultClient, taskIdFromReceipt } from "./cipher.js";
 
 export interface SdkConfig {
@@ -43,6 +44,16 @@ export interface SdkConfig {
   fhePublicKeyHash?: Hex;
   /** Address of the on-chain `NetworkParams` pin. Enables the key-substitution check. */
   networkParams?: string;
+  /**
+   * Allow a confidential encryptor with no on-chain pin to compare against.
+   *
+   * By default a client whose encryptor actually encrypts (`providesConfidentiality`) and
+   * declares the key it encrypts under refuses to run without `networkParams`: without the
+   * pin there is nothing that would notice a substituted `s_pub` (threat model F-08), and a
+   * silent default here would turn an explicit SDK guarantee into a configuration accident.
+   * Set this to `true` only for deployments that pin the key out of band.
+   */
+  allowUnpinnedKey?: boolean;
 }
 
 export interface UploadOptions {
@@ -74,6 +85,14 @@ export interface UploadOptions {
  * revert.
  */
 export const MAX_ROWS_PER_SHARD = 100_000;
+
+/** Minimal ERC-20 surface the SDK needs for bond approvals. Never add transfer here:
+ *  the SDK moves no funds of its own; approvals are the only token writes it performs. */
+const ERC20_MIN_ABI = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function balanceOf(address account) view returns (uint256)",
+] as const;
 
 export class ShroudSdk {
   readonly cipherTask: CipherTaskClient;
@@ -116,6 +135,17 @@ export class ShroudSdk {
         );
       }
       this.networkParams = new NetworkParamsClient(cfg.networkParams, cfg.signer);
+    } else if (this.encryptor.providesConfidentiality && this.fhePublicKeyHash && !cfg.allowUnpinnedKey) {
+      // F-08, fail-closed: an encryptor that produces real ciphertext under a known key, with
+      // no on-chain pin to compare it to, is exactly the configuration a key-substitution
+      // attack needs — every upload would succeed and nobody would notice. The old default
+      // skipped the check silently; refusing to construct is the only safe default.
+      throw new Error(
+        "this encryptor produces real ciphertext under a declared key, but no networkParams " +
+          "pin was configured, so a substituted s_pub would go undetected. Pass " +
+          "cfg.networkParams (the on-chain NetworkParams address), or set " +
+          "cfg.allowUnpinnedKey = true if this deployment pins the key out of band."
+      );
     }
   }
 
@@ -188,7 +218,7 @@ export class ShroudSdk {
    *
    * Every condition the contract would revert on is checked locally first — task status, shard
    * size bounds, the contributor cap, the contribution window, one-shard-per-address, shape-proof
-   * presence, and the encryptor's own outputs (a non-empty ciphertext, a row commitment, and a
+   * presence, the contribution bond (approved up front when missing), and the encryptor's own outputs (a non-empty ciphertext, a row commitment, and a
    * content address short enough to be a `bytes32`) — so a misconfigured call fails with an
    * actionable message instead of burning gas. The list below is exhaustive against
    * `submitContribution`; the contract remains the authority and still reverts if anything slips
@@ -272,6 +302,12 @@ export class ShroudSdk {
       }
     }
 
+    // `submitContribution` -> BondInsufficient. The bond is pulled by the orchestrator
+    // itself, so without an approval the submission burns gas on a revert that was
+    // knowable locally. Approved up front, for exactly the requirement — never a max
+    // approval, and only after every free check above passed.
+    await this.ensureContributionBond(resolvedId, me);
+
     // 1. Encrypt locally — plaintext never leaves the client.
     const { ciphertext, rowCommitment } = await this.encryptor.encryptRows(data, opts.features);
 
@@ -330,6 +366,37 @@ export class ShroudSdk {
     const bytes = encodeWeights(features, lanes);
     const { cid } = await this.shardStore.put(bytes);
     return { cid, weightsDigest: weightsDigest(lanes) };
+  }
+
+  /**
+   * Approve the contribution bond the task requires, if any is still missing.
+   *
+   * Reads, never guesses: the requirement and what this address already posted come from
+   * the chain, the token address from the orchestrator itself. A shortfall with no funds
+   * is a local error naming the exact figures; an approval covers exactly the requirement
+   * (the pull takes the full requirement or reverts, so a partial approval would still
+   * burn gas — approve the whole thing or fail loudly here).
+   */
+  private async ensureContributionBond(taskId: bigint, contributor: string): Promise<void> {
+    const required = await this.cipherTask.contributionBondRequired(taskId);
+    if (required === 0n) return;
+    const posted = await this.cipherTask.contributionBondOf(taskId, contributor);
+    if (posted >= required) return;
+    const taskAddr = this.cipherTask.contract.target as string;
+    const token = new ethers.Contract(await this.cipherTask.escrowToken(), ERC20_MIN_ABI, this.signer);
+    const balance = BigInt(await token.balanceOf(contributor));
+    if (balance < required) {
+      throw new Error(
+        `task ${taskId} requires a contribution bond of ${required}, but ${contributor} holds ` +
+          `only ${balance}; fund the bond first (an on-chain submit would revert BondInsufficient)`
+      );
+    }
+    const allowance = BigInt(await token.allowance(contributor, taskAddr));
+    if (allowance < required) {
+      const tx = await token.approve(taskAddr, required);
+      const receipt = await tx.wait();
+      if (!receipt) throw new Error("no receipt for the bond approval");
+    }
   }
 
   private async resolveTask(taskId: bigint, opts: UploadOptions): Promise<bigint> {

@@ -141,6 +141,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     error InvariantViolated(uint256 totalLocked, uint256 accounted);
     error TaskManagerAlreadySet();
     error NoPendingTaskManager();
+    error PendingRotationExists(address proposed, uint64 eta);
     error TaskManagerUnchanged(address proposed);
     error TaskManagerNotReady(uint64 eta);
     error NothingToRescue();
@@ -239,12 +240,16 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     ///      `setPaused(true)`, which blocks `fundTask`, `creditFromTask`, `openTaskChannel` and
     ///      `sweepTaskChannels` — every path that could drain anything — before the new manager is
     ///      installed. A malicious manager installed behind a pause can move no funds.
-    /// @dev Re-proposing overwrites the live rotation, including its `eta`. That is the owner's
-    ///      prerogative and cannot lengthen or shorten the delay for a *given* candidate: the
-    ///      earliest any candidate can take effect is `now + TASK_MANAGER_DELAY`.
+    /// @dev Re-proposing while a rotation is live reverts: the queued candidate and its `eta`
+    ///      are what observers rely on, and silently swapping the candidate mid-timelock would
+    ///      let the owner present one address to watchers and install another. Cancel first —
+    ///      the cancellation itself is an event — then propose the new candidate.
     function proposeTaskManager(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
         if (to == taskManager) revert TaskManagerUnchanged(to);
+        if (proposedTaskManager != address(0)) {
+            revert PendingRotationExists(proposedTaskManager, taskManagerEta);
+        }
         proposedTaskManager = to;
         taskManagerEta = uint64(block.timestamp) + TASK_MANAGER_DELAY;
         emit TaskManagerProposed(to, taskManagerEta);
@@ -279,14 +284,18 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     /* ================================================================== */
 
     /// @notice Fund the sub-balance of `taskId` by pulling `amount` from `from`.
+    /// @dev Fee-on-transfer safe: the ledger records what actually arrived (balance diff),
+    ///      never what was requested. A fee-taking token therefore fails closed at the
+    ///      orchestrator's `EscrowMismatch` check instead of silently under-collateralising
+    ///      the task.
     function fundTask(uint256 taskId, uint256 amount, address from) external onlyTaskManager whenNotPaused nonReentrant {
         if (amount == 0) revert ZeroAmount();
         if (from == address(0)) revert ZeroAddress();
-        _pull(from, amount);
-        taskBalance[taskId] += amount;
-        subBalancesTotal += amount;
-        totalLocked += amount;
-        emit TaskFunded(taskId, from, amount, taskBalance[taskId]);
+        uint256 received = _pull(from, amount);
+        taskBalance[taskId] += received;
+        subBalancesTotal += received;
+        totalLocked += received;
+        emit TaskFunded(taskId, from, received, taskBalance[taskId]);
     }
 
     /// @notice Move `amount` from a task's sub-balance into `account`'s pending balance.
@@ -320,7 +329,10 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         nodeBond[taskId][node] = REGISTRATION_BOND;
         bondTotal += REGISTRATION_BOND;
         totalLocked += REGISTRATION_BOND;
-        _pull(node, REGISTRATION_BOND);
+        // Fail closed on fee-on-transfer tokens: the bond must arrive whole, otherwise the
+        // quorum price the threat model (F-04) assumes is not actually posted.
+        uint256 received = _pull(node, REGISTRATION_BOND);
+        if (received != REGISTRATION_BOND) revert BondInsufficient(taskId, node, REGISTRATION_BOND);
         _assertInvariant();
     }
 
@@ -584,6 +596,21 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         return taskChannels[taskId];
     }
 
+    /// @notice Whether `taskId` still has an open reward channel whose window has not matured.
+    /// @dev Read by the orchestrator's settlement path: the final page must wait until every
+    ///      channel has either been redeemed/reclaimed or swept back, otherwise the committee
+    ///      leg is capped against an incomplete balance and the shortfall is permanent
+    ///      (threat model F-22). Earlier pages are unaffected — contributor shares come from
+    ///      the frozen pool, which node locks can never eat into — only the last page gates.
+    function hasImmatureChannels(uint256 taskId) external view returns (bool) {
+        uint256[] memory ids = taskChannels[taskId];
+        for (uint256 i = 0; i < ids.length; ++i) {
+            Channel storage ch = channels[ids[i]];
+            if (!ch.closed && ch.unlockAt > block.timestamp) return true;
+        }
+        return false;
+    }
+
     /// @notice EIP-712 digest a streamer must sign for a slice.
     function redeemDigest(
         uint256 channelId,
@@ -644,10 +671,16 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         return recovered != address(0) && recovered == streamer;
     }
 
-    function _pull(address from, uint256 amount) private {
+    function _pull(address from, uint256 amount) private returns (uint256 received) {
+        // Balance-diff accounting: fee-on-transfer / rebasing tokens may deliver less (or, for
+        // rebasing, more) than `amount`. Recording the diff instead of `amount` keeps
+        // `totalLocked` equal to tokens actually held, so the invariant tripwire stays exact.
         // Defensive against non-standard tokens (USDT returns no data on success).
+        uint256 before = token.balanceOf(address(this));
         (bool ok, bytes memory ret) = address(token).call(abi.encodeCall(IERC20.transferFrom, (from, address(this), amount)));
         if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) revert TransferFailed(address(token), from, amount);
+        uint256 afterBal = token.balanceOf(address(this));
+        received = afterBal > before ? afterBal - before : 0;
     }
 
     function _push(address to, uint256 amount) private {

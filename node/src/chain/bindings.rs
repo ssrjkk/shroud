@@ -116,11 +116,19 @@ sol! {
         function escrowToken() external view returns (address);
         function pendingPayout(address account) external view returns (uint128);
         function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have);
+        /// Contributors paid per settlement call. Read rather than hardcoded so a future
+        /// paging change moves the node with it; the worker uses it to recognise the final
+        /// page, which is the only one gated on reward-channel maturity (F-22).
+        function SETTLE_PAGE_SIZE() external view returns (uint256);
     }
 
     #[sol(rpc)]
     interface ICipherTaskWrite {
         function registerNode(uint256 taskId, bytes32 blsPubKey) external;
+        /// Commit-reveal dispute reporting (front-run resistance): `commitment` hides the
+        /// digest until `reportDisputeWithSalt`. See `DisputeLib`.
+        function commitDispute(uint256 taskId, uint32 epoch, bytes32 commitment) external;
+        function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external;
         function commitEpoch(
             uint256 taskId,
             uint32 epoch,
@@ -133,6 +141,18 @@ sol! {
         /// @dev `reexecutedDigest` must equal *our own* committed `traceDigest`, and must differ
         ///      from the epoch's claimed digest. It is not a free-form accusation.
         function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external;
+        /// Segmented-STARK commit path: `segmentedRoot` is the Merkle root over the segment
+        /// proofs, verified through `verifyProofSegmented`. Without this binding the
+        /// segmented verifier was unreachable (F-33).
+        function commitEpochSegmented(
+            uint256 taskId,
+            uint32 epoch,
+            bytes32 segmentedRoot,
+            bytes32 encWeightsCid,
+            bytes32 weightsDigest,
+            bytes32 metricsCid,
+            bytes32 traceDigest
+        ) external;
         function finalizeEpoch(uint256 taskId, uint32 epoch) external;
         function settle(uint256 taskId) external;
         function settleFrom(uint256 taskId, uint256 cursor) external;
@@ -152,6 +172,10 @@ sol! {
         }
 
         function channelInfo(uint256 channelId) external view returns (Channel memory);
+        function channelIds(uint256 taskId) external view returns (uint256[] memory);
+        /// Whether `taskId` still has an open reward channel whose window has not matured.
+        /// The final settlement page waits on this (F-22); earlier pages never consult it.
+        function hasImmatureChannels(uint256 taskId) external view returns (bool);
         function channelIds(uint256 taskId) external view returns (uint256[] memory);
         function pendingWithdrawal(address account) external view returns (uint256);
         function redeemDigest(
@@ -234,6 +258,9 @@ pub mod events {
     pub const EPOCH_SETTLED: &str = "EpochSettled(uint256,uint32,address,uint128)";
     pub const EPOCH_REJECTED: &str = "EpochRejected(uint256,uint32,uint256)";
     pub const DISPUTE_REPORTED: &str = "DisputeReported(uint256,uint32,address,bytes32)";
+    /// Commit half of commit-reveal dispute reporting. The digest stays hidden until the
+    /// reveal, so folding this nudges a re-execution without knowing the claim.
+    pub const DISPUTE_COMMITTED: &str = "DisputeCommitted(uint256,uint32,address,bytes32)";
     pub const CONTRIBUTION_SUBMITTED: &str =
         "ContributionSubmitted(uint256,address,uint32,bytes32,uint32)";
     pub const TASK_ABORTED: &str = "TaskAborted(uint256,bytes4)";
@@ -253,6 +280,7 @@ pub mod events {
     /// the task decoder, where a data word would be read as an address.
     pub const TASK_EVENTS: &[&str] = &[
         CONTRIBUTION_SUBMITTED,
+        DISPUTE_COMMITTED,
         DISPUTE_REPORTED,
         EPOCH_COMMITTED,
         EPOCH_OPENED,
@@ -295,6 +323,7 @@ pub mod events {
     topic_static!(EPOCH_SETTLED_TOPIC, EPOCH_SETTLED);
     topic_static!(EPOCH_REJECTED_TOPIC, EPOCH_REJECTED);
     topic_static!(DISPUTE_REPORTED_TOPIC, DISPUTE_REPORTED);
+    topic_static!(DISPUTE_COMMITTED_TOPIC, DISPUTE_COMMITTED);
     topic_static!(CONTRIBUTION_SUBMITTED_TOPIC, CONTRIBUTION_SUBMITTED);
     topic_static!(TASK_ABORTED_TOPIC, TASK_ABORTED);
     topic_static!(TASK_SETTLED_TOPIC, TASK_SETTLED);
@@ -318,6 +347,7 @@ pub mod events {
         #[rustfmt::skip]
         const COMPILED: &[(&str, &str)] = &[
             (CONTRIBUTION_SUBMITTED, "0xc37fa11865d20db8c2f9f36ef55d1f99c41a0ee1f98fd66fcad5c3e82cae8ef3"),
+            (DISPUTE_COMMITTED, "0xc99d9e000cdf25faf80e5443b83ddbcf61258670e265d0a9d8e41e12d1ff24d9"),
             (DISPUTE_REPORTED, "0x56c6da7aeff81fba1958ad3eddabcec10d01fa5edbe133afd962121e89b9acf9"),
             (EPOCH_COMMITTED, "0xbe1c0401080fba30020b1609c22d6c3de654f750279eb2c12daac731b9c5f668"),
             (EPOCH_OPENED, "0x7e3cb4c8395e586b6b675ae99ac10bb09551b19d95aeae90a896aead64caab2b"),

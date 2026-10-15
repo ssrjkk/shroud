@@ -140,6 +140,15 @@ pub struct NodeConfig {
     pub data_dir: PathBuf,
     /// Refuse to start unless the on-chain `fhePublicKeyHash` matches the local params.
     pub enforce_key_pin: bool,
+    /// Refuse to execute an epoch whose seed weights are not a decodable
+    /// `shroud/weights/v1` file, instead of falling back to genesis zeros.
+    ///
+    /// Off by default: the fallback is a deliberate consensus choice (every node running
+    /// this code agrees on zeros and binds the chain pin in the trace, so a node that
+    /// understands the buyer's convention can still dispute). Turn it on when the
+    /// deployment's buyers always publish SDK-encoded seed files and silent convention
+    /// drift must be loud instead of executable.
+    pub strict_weights: bool,
     /// Only watch this task. `None` watches everything. Set from `--task-filter`.
     pub task_filter: Option<B256>,
 }
@@ -211,9 +220,12 @@ pub struct ShardConfig {
     pub cache_dir: PathBuf,
     /// Drop cached objects older than this.
     pub cache_ttl: Duration,
-    /// Verify sha256 of a full object before parsing it.
-    pub verify_digest: bool,
     /// Derive the per-shard AEAD transport key instead of trusting the DA transport.
+    ///
+    /// NOT IMPLEMENTED: no code in this crate reads this flag, so `true` used to mean
+    /// "protected" while nothing was protected. It now fails closed in `validate()`:
+    /// transport confidentiality comes from mesh mTLS (`mesh.mtls_*`) and DA-endpoint
+    /// TLS, never from this key. Default `false`.
     pub aead_transport: bool,
 }
 
@@ -227,6 +239,14 @@ pub struct MeshConfig {
     pub request_timeout: Duration,
     /// Max shard announcements kept in the local index.
     pub index_capacity: usize,
+    /// Inbound mesh requests served per second, per peer IP. `fetch_shard` does disk I/O
+    /// and gossip writes grow the shard index, so neither may be unbounded per peer.
+    pub inbound_rps: u64,
+    /// Burst above the rate a peer may spend at once.
+    pub inbound_burst: u64,
+    /// Max concurrent streams per h2 connection. Each gossip stream spawns a task plus a
+    /// channel, so uncapped streams are task/memory exhaustion by handshake.
+    pub max_streams_per_connection: usize,
     pub mtls_cert: Option<PathBuf>,
     pub mtls_key: Option<PathBuf>,
     pub ca_cert: Option<PathBuf>,
@@ -291,6 +311,7 @@ impl Default for Config {
                 // and the devnet config sets neither. The SDK-side pin check stays the alert
                 // that is on out of the box; this is the opt-in node-side twin.
                 enforce_key_pin: false,
+                strict_weights: false,
                 task_filter: None,
             },
             fhe: FheConfig {
@@ -322,8 +343,7 @@ impl Default for Config {
                 range_bytes: 4 << 20,
                 cache_dir: PathBuf::from("./data/cache"),
                 cache_ttl: Duration::from_secs(7 * 86_400),
-                verify_digest: true,
-                aead_transport: true,
+                aead_transport: false,
             },
             mesh: MeshConfig {
                 listen: "0.0.0.0:7331"
@@ -333,6 +353,9 @@ impl Default for Config {
                 announce_interval: Duration::from_secs(30),
                 request_timeout: Duration::from_secs(20),
                 index_capacity: 65_536,
+                inbound_rps: 100,
+                inbound_burst: 200,
+                max_streams_per_connection: 100,
                 mtls_cert: None,
                 mtls_key: None,
                 ca_cert: None,
@@ -509,10 +532,41 @@ impl Config {
             }
             .into());
         }
+        if self.mesh.inbound_rps == 0 {
+            return Err(ConfigError::Invalid {
+                field: "mesh.inbound_rps",
+                reason: "must be >= 1; at zero the node serves no peer".into(),
+            }
+            .into());
+        }
+        if self.mesh.inbound_burst == 0 {
+            return Err(ConfigError::Invalid {
+                field: "mesh.inbound_burst",
+                reason: "must be >= 1; at zero even one request is over quota".into(),
+            }
+            .into());
+        }
+        if self.mesh.max_streams_per_connection == 0 {
+            return Err(ConfigError::Invalid {
+                field: "mesh.max_streams_per_connection",
+                reason: "must be >= 1; at zero no peer can open a stream".into(),
+            }
+            .into());
+        }
         if self.mesh.request_timeout.is_zero() {
             return Err(ConfigError::Invalid {
                 field: "mesh.request_timeout",
                 reason: "must be > 0; it bounds how long one range read may hold a peer".into(),
+            }
+            .into());
+        }
+        // `shard.aead_transport` was accepted and never read: `true` meant "protected"
+        // while nothing was protected. Fail closed until a real AEAD transport exists —
+        // use mesh mTLS and DA-endpoint TLS instead.
+        if self.shard.aead_transport {
+            return Err(ConfigError::Invalid {
+                field: "shard.aead_transport",
+                reason: "not implemented; set false and rely on mesh mTLS + DA TLS".into(),
             }
             .into());
         }
@@ -760,6 +814,73 @@ mod tests {
                 Error::Config(ConfigError::Missing("node.operator_key"))
             ),
             "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn an_unimplemented_aead_transport_is_rejected() {
+        // `shard.aead_transport` was accepted and never read: `true` meant "protected"
+        // while nothing was protected. Fail closed until a real AEAD transport exists.
+        let mut cfg = base();
+        assert!(
+            !cfg.shard.aead_transport,
+            "the default must not claim protection"
+        );
+        cfg.shard.aead_transport = true;
+        let err = cfg
+            .validate()
+            .expect_err("an unimplemented transport flag must be rejected");
+        assert!(
+            matches!(
+                err,
+                Error::Config(ConfigError::Invalid {
+                    field: "shard.aead_transport",
+                    ..
+                })
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mesh_throttle_and_stream_caps_reject_zero() {
+        // Zero here means "serve no peer" / "admit no stream" — a silent mesh outage
+        // that looks like an empty network. Each field fails closed with its own name.
+        let mut cfg = base();
+        cfg.mesh.inbound_rps = 0;
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(Error::Config(ConfigError::Invalid {
+                    field: "mesh.inbound_rps",
+                    ..
+                }))
+            ),
+            "zero rps must be rejected"
+        );
+        let mut cfg = base();
+        cfg.mesh.inbound_burst = 0;
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(Error::Config(ConfigError::Invalid {
+                    field: "mesh.inbound_burst",
+                    ..
+                }))
+            ),
+            "zero burst must be rejected"
+        );
+        let mut cfg = base();
+        cfg.mesh.max_streams_per_connection = 0;
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(Error::Config(ConfigError::Invalid {
+                    field: "mesh.max_streams_per_connection",
+                    ..
+                }))
+            ),
+            "zero stream cap must be rejected"
         );
     }
 

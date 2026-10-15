@@ -72,6 +72,17 @@ export interface ShardStore {
    * and throw on a mismatch instead of trusting their own addressing.
    */
   getVerified(cid: Hex, expectedCtDigest: Hex): Promise<Uint8Array>;
+
+  /**
+   * Fetch `[offset, offset + length)` of `cid` (optional).
+   *
+   * Optional because not every backend implements ranges (the in-memory and file stores do
+   * not need to); `HttpShardStore` does, against the reference service's `Range` support.
+   * When present, the implementation must validate the window the way `get` validates the
+   * whole object: a server that ignores `Range` and answers 200 with the full body must be
+   * rejected unless the window *is* the object from its start.
+   */
+  getRange?(cid: Hex, offset: number, length: number): Promise<Uint8Array>;
 }
 
 /** The local FHE encryption abstraction (FHEWasm / relayer in production). */

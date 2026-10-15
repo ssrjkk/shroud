@@ -68,6 +68,14 @@ pub enum ChainEvent {
         reporter: Address,
         digest: B256,
     },
+    /// Commit half of a commit-reveal dispute. The digest stays hidden until the reveal,
+    /// so the fold reacts by re-executing to form its own opinion rather than by counting
+    /// a digest it cannot see.
+    DisputeCommitted {
+        task_id: U256,
+        epoch: u32,
+        reporter: Address,
+    },
     EpochCommitted {
         task_id: U256,
         epoch: u32,
@@ -149,6 +157,7 @@ impl ChainEvent {
         match self {
             ChainEvent::ContributionSubmitted { task_id, .. }
             | ChainEvent::DisputeReported { task_id, .. }
+            | ChainEvent::DisputeCommitted { task_id, .. }
             | ChainEvent::EpochCommitted { task_id, .. }
             | ChainEvent::EpochOpened { task_id, .. }
             | ChainEvent::EpochRejected { task_id, .. }
@@ -177,6 +186,7 @@ impl ChainEvent {
         match self {
             ChainEvent::ContributionSubmitted { .. } => "ContributionSubmitted",
             ChainEvent::DisputeReported { .. } => "DisputeReported",
+            ChainEvent::DisputeCommitted { .. } => "DisputeCommitted",
             ChainEvent::EpochCommitted { .. } => "EpochCommitted",
             ChainEvent::EpochOpened { .. } => "EpochOpened",
             ChainEvent::EpochRejected { .. } => "EpochRejected",
@@ -691,6 +701,7 @@ fn bool_of(b: B256) -> Option<bool> {
 /// | event                     | indexed                        | data                                        |
 /// |---------------------------|--------------------------------|---------------------------------------------|
 /// | `ContributionSubmitted`   | taskId, contributor, leafIndex | ciphertextCid, rows                         |
+/// | `DisputeCommitted`          | taskId, epoch, reporter        | commitment (opaque until revealed)          |
 /// | `DisputeReported`         | taskId, epoch, reporter        | digest                                      |
 /// | `EpochCommitted`          | taskId, epoch, node            | traceDigest                                 |
 /// | `EpochOpened`             | taskId, epoch                  | encWeightsCid, weightsDigest                |
@@ -709,6 +720,16 @@ pub fn decode_task_event(sig: &B256, topics: &[B256], data: &[u8]) -> Option<Cha
             leaf_index: indexed_u32(topics, 2)?,
             ciphertext_cid: data_word(data, 0)?,
             rows: u32_of(data_word(data, 1)?),
+        });
+    }
+    if *sig == *events::DISPUTE_COMMITTED_TOPIC {
+        // `commitment` (the only data word) is deliberately not decoded into the fold:
+        // it hides the digest by design, and persisting it would invite comparing against
+        // a value that is not the claim. The fold reacts with a re-execution instead.
+        return Some(ChainEvent::DisputeCommitted {
+            task_id: indexed(topics, 0)?,
+            epoch: indexed_u32(topics, 1)?,
+            reporter: indexed_address(topics, 2)?,
         });
     }
     if *sig == *events::DISPUTE_REPORTED_TOPIC {

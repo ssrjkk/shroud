@@ -6,11 +6,12 @@
  *
  * Note on addressing: a store's `cid` is a *transport* address and may be anything the store
  * chooses to call an object, while the value pinned on chain is `ctDigest` = keccak256(payload),
- * computed client-side in `pinPayload`. `MemoryShardStore` happens to use the same keccak256 for
- * both, which is one reason it is only for development. The reference service in `infra/shardstore`
- * addresses objects with Node's sha3-256, which differs from keccak-256 in padding, so there the
- * cid and the on-chain pin are different identifiers for the same bytes — and a store's `cid` must
- * never be treated as the pin.
+ * computed client-side in `pinPayload`. The development stores below mirror the production
+ * split on purpose: `cid` = sha256(payload) (the transport address, like the reference
+ * service's sha3-256), `digest` = keccak256(payload) (the on-chain pin). They are different
+ * identifiers for the same bytes — and a store's `cid` must never be treated as the pin.
+ * An earlier revision used keccak256 for both, which hid exactly the confusion production
+ * punishes: code that compared `cid` against `ctDigest` passed in dev and failed live.
  *
  * Consequently `getVerified` recomputes keccak256 over the fetched bytes and compares against the
  * expected `ctDigest`. Trusting the store's own addressing instead would mean a DA that returns
@@ -53,15 +54,17 @@ export class MemoryShardStore implements ShardStore {
   private readonly objects = new Map<string, Uint8Array>();
 
   async put(payload: Uint8Array): Promise<{ cid: string; digest: string }> {
-    // Content-addressed: the local keccak256 is both the cid and the on-chain pin, so the two
-    // cannot drift apart the way a separate transport hash would.
+    // Content-addressed, with the production split: the transport address is sha256
+    // (like the reference service's sha3-256), the on-chain pin is keccak256. Using
+    // keccak256 for both here once hid cid/digest confusion that only failed live.
     // Copied on the way in and on the way out (see FileShardStore): the caller keeps a live
     // reference otherwise, and mutating it afterwards would corrupt every later read —
     // including another party's `getVerified` in the same process.
     const bytes = Uint8Array.from(payload);
+    const cid = ethers.sha256(bytes);
     const digest = ethers.keccak256(bytes);
-    this.objects.set(digest, bytes);
-    return { cid: digest, digest };
+    this.objects.set(cid, bytes);
+    return { cid, digest };
   }
 
   async get(cid: string): Promise<Uint8Array> {
@@ -87,6 +90,30 @@ export interface HttpShardStoreOptions {
   maxObjectBytes?: number;
   /** Per-request timeout in milliseconds. */
   timeoutMs?: number;
+  /**
+   * Retries after the first attempt (default 3). Retried: network-level failures,
+   * timeouts, HTTP 429 and 5xx. Never retried: 4xx (other than 429), size caps,
+   * digest mismatches, assertion failures. Retrying a PUT is safe: the store is
+   * content-addressed, so re-sending the same bytes addresses the same object.
+   */
+  maxRetries?: number;
+  /** Base backoff in milliseconds (default 200): sleep before attempt n is
+   * `rand() * base * 2^(n-1)` — exponential backoff with full jitter, so a fleet
+   * of nodes does not re-hit a recovering DA in lockstep. */
+  retryBaseMs?: number;
+}
+
+/**
+ * Retryable iff the failure might pass on its own: a dead socket, an expired timeout,
+ * an overloaded store (429/5xx). Anything the store decided deliberately (400/404/size
+ * caps) or that failed locally (digest mismatch, assertions) is permanent.
+ */
+function isRetryableFetchError(e: unknown): boolean {
+  // Undici/network-level: DNS, refused, reset, aborted.
+  if (e instanceof TypeError) return true;
+  const m = e instanceof Error ? e.message : String(e);
+  if (/timed out after \d+ms/.test(m)) return true;
+  return /: (429|5\d\d)\b/.test(m);
 }
 
 /**
@@ -105,6 +132,8 @@ export class HttpShardStore implements ShardStore {
   private readonly authToken?: string;
   private readonly maxObjectBytes: number;
   private readonly timeoutMs: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseMs: number;
 
   constructor(baseUrl: string, opts: HttpShardStoreOptions = {}) {
     // A trailing slash would produce `//objects` and break the path.
@@ -112,6 +141,8 @@ export class HttpShardStore implements ShardStore {
     this.authToken = opts.authToken;
     this.maxObjectBytes = opts.maxObjectBytes ?? HttpShardStore.DEFAULT_MAX_OBJECT_BYTES;
     this.timeoutMs = opts.timeoutMs ?? HttpShardStore.DEFAULT_TIMEOUT_MS;
+    this.maxRetries = opts.maxRetries ?? 3;
+    this.retryBaseMs = opts.retryBaseMs ?? 200;
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -120,6 +151,32 @@ export class HttpShardStore implements ShardStore {
       ...(this.authToken ? { authorization: `Bearer ${this.authToken}` } : {}),
       ...extra,
     };
+  }
+
+  /**
+   * One request with retries. The attempt budget is attempts, not time: with the defaults
+   * (3 retries, 200ms base) the worst case sleeps ~200+400+800ms of jittered backoff, which
+   * is what keeps an epoch with a deadline from waiting on a DA that will never answer.
+   */
+  private async request<T>(
+    path: string,
+    init: RequestInit,
+    consume: (res: Response) => Promise<T>
+  ): Promise<T> {
+    let last: unknown;
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0) {
+        const backoff = Math.random() * this.retryBaseMs * 2 ** (attempt - 1);
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+      try {
+        return await this.withTimeout(path, init, consume);
+      } catch (e) {
+        last = e;
+        if (!isRetryableFetchError(e)) throw e;
+      }
+    }
+    throw last;
   }
 
   /**
@@ -156,7 +213,7 @@ export class HttpShardStore implements ShardStore {
       );
     }
 
-    const body = await this.withTimeout("/objects", {
+    const body = await this.request("/objects", {
       method: "PUT",
       body: payload as BodyInit,
       headers: this.headers(),
@@ -183,7 +240,7 @@ export class HttpShardStore implements ShardStore {
   async get(cid: string): Promise<Uint8Array> {
     assertSafeCid(cid);
 
-    const bytes = await this.withTimeout(
+    const bytes = await this.request(
       `/objects/${cid}`,
       { method: "GET", headers: this.headers() },
       async (res) => {
@@ -226,7 +283,7 @@ export class HttpShardStore implements ShardStore {
       throw new Error(`requested range of ${length} bytes exceeds the ${this.maxObjectBytes} byte cap`);
     }
 
-    const bytes = await this.withTimeout(
+    const bytes = await this.request(
       `/objects/${cid}`,
       { method: "GET", headers: this.headers({ range: `bytes=${offset}-${offset + length - 1}` }) },
       async (res) => {

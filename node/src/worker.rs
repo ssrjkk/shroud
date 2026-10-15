@@ -49,6 +49,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     chain::client::{ChannelOnChain, CommitIntent, CommitOnChain, OrchestratorClient, TaskOnChain},
     chain::slice::{self, Slice},
+    chain::transcript,
     config::{parse_bls_pub_key, Config},
     da,
     error::{ConfigError, Error, FheError, Result},
@@ -505,13 +506,26 @@ impl Worker {
             }
             Err(e) => return Err(Error::Other(e.into())),
         };
-        if ours == claimed_digest {
+        // A commitment hides the digest (`B256::ZERO` sentinel from the fold): resolve the
+        // comparison against the winner's committed digest instead. Comparing against zero
+        // would make every re-execution "disagree" and commit unconditionally.
+        let claimed = if claimed_digest.is_zero() {
+            let winner = self.client.epoch_winner(task_id, epoch).await?;
+            self.client
+                .commit_of(task_id, epoch, winner)
+                .await?
+                .map(|c| c.trace_digest)
+                .unwrap_or_default()
+        } else {
+            claimed_digest
+        };
+        if ours == claimed {
             debug!(task = %task_id, epoch, "claim reproduces locally; no dispute");
         } else {
             info!(
                 task = %task_id,
                 epoch,
-                claimed = %claimed_digest,
+                claimed = %claimed,
                 ours = %ours,
                 "claim differs from local re-execution; re-arming the commit race"
             );
@@ -602,7 +616,7 @@ impl Worker {
         let prev_weights_bytes = da::fetch(&dir, &endpoint, &task.last_weights_cid, max).await?;
         let reference = matches!(self.cfg.fhe.backend, crate::config::FheBackend::Reference);
         let prev_weights = if reference {
-            Some(self.decode_prev_weights(&prev_weights_bytes, task)?)
+            Some(self.decode_prev_weights(task_id, &prev_weights_bytes, task)?)
         } else {
             None
         };
@@ -633,7 +647,12 @@ impl Worker {
     /// the *chain's* digest, so every node running this code agrees either way — and a
     /// node that understands the buyer's convention will disagree through the dispute
     /// protocol, which is exactly what it is for.
-    fn decode_prev_weights(&self, bytes: &[u8], task: &TaskOnChain) -> Result<fhe::Weights> {
+    fn decode_prev_weights(
+        &self,
+        task_id: U256,
+        bytes: &[u8],
+        task: &TaskOnChain,
+    ) -> Result<fhe::Weights> {
         match fhe::Weights::decode(bytes, task.features) {
             Ok(w) => {
                 if w.digest() != task.last_weights_digest {
@@ -646,6 +665,16 @@ impl Worker {
                 Ok(w)
             }
             Err(_) => {
+                if self.cfg.node.strict_weights {
+                    // Loud instead of executable: the buyer pinned weights in a convention this
+                    // node does not decode, and silently training from zeros would fork the
+                    // digest against every node that decodes them correctly.
+                    return Err(Error::Fhe(FheError::Backend(format!(
+                        "seed weights for task {task_id:#x} are not a shroud/weights/v1 file (cid {:#x}, digest {:#x}); \
+                         refusing to execute from genesis zeros with node.strict_weights set",
+                        task.last_weights_cid, task.last_weights_digest
+                    ))));
+                }
                 warn!(
                     cid = %task.last_weights_cid,
                     digest = %task.last_weights_digest,
@@ -659,9 +688,17 @@ impl Worker {
 
     /// `reportDispute` for a claim we can prove wrong.
     ///
-    /// The chain's `_claimedDigest` has no view, but `epochWinner` is written in the same branch
-    /// that writes it, so `winner == us` is the authoritative reading of "the claim is already
-    /// ours" — which is exactly the case `reportDispute` reverts as `DisputeAgreesWithClaim`.
+    /// Filed as commit-reveal, not bare: a bare report sits in the mempool where any other
+    /// registered node holding its own verified commit can copy the digest and race it,
+    /// collecting the reporter bounty for work it did not do. The commitment hides the digest
+    /// until the reveal, and the salt is deterministic (`transcript::dispute_salt`) so a
+    /// restart between the commit and the reveal recomputes it instead of stranding an
+    /// unrevealable commitment on chain.
+    ///
+    /// Recovery order matters because receipt failures are opaque (`status=failed` carries no
+    /// revert data): commit first; if the commit fails, try the bare report (which preserves
+    /// the original revert reason when no commitment is open); if that fails too, the
+    /// commitment may predate this tick, so reveal with the deterministic salt.
     async fn on_dispute(&self, task_id: U256, epoch: u32, our_digest: B256) -> Result<Outcome> {
         let me = self.client.operator();
         let task = self.client.task(task_id).await?;
@@ -671,8 +708,29 @@ impl Worker {
         if gate != Gate::Ready {
             return Ok(outcome_of(gate));
         }
-        self.client
+        let salt = transcript::dispute_salt(me, task_id, epoch);
+        let commitment = transcript::dispute_commitment(our_digest, salt, me);
+        if self
+            .client
+            .commit_dispute(task_id, epoch, commitment)
+            .await
+            .is_ok()
+        {
+            self.client
+                .report_dispute_with_salt(task_id, epoch, our_digest, salt)
+                .await?;
+            return Ok(Outcome::Done);
+        }
+        if self
+            .client
             .report_dispute(task_id, epoch, our_digest)
+            .await
+            .is_ok()
+        {
+            return Ok(Outcome::Done);
+        }
+        self.client
+            .report_dispute_with_salt(task_id, epoch, our_digest, salt)
             .await?;
         Ok(Outcome::Done)
     }
@@ -714,6 +772,23 @@ impl Worker {
         // `settle` is `_settleFrom(taskId, 0)` and a page may only continue from the exact cursor,
         // so the two calls are chosen by reading it rather than by remembering it.
         let cursor = self.client.settle_cursor(task_id).await?;
+        // Only the final page is gated on reward-channel maturity (F-22): contributor pages pay
+        // from the frozen pool, which node locks can never eat into, so they must not wait out
+        // the window. Waiting here spends no gas; sending the page would burn it on a
+        // `ChannelsImmature` revert every poll until the window passes.
+        let page = self.client.settle_page_size().await?;
+        if is_final_settle_page(cursor, page, task.contributors) {
+            if self.client.has_immature_channels(task_id).await? {
+                let (_, now) = self.client.latest_block().await?;
+                match self.client.immature_until(task_id, now).await? {
+                    Some(until) if until > now => {
+                        info!(%task_id, until, now, "final settlement page waits for reward maturity");
+                        return Ok(Outcome::Retry(Duration::from_secs(until - now)));
+                    }
+                    _ => return Ok(Outcome::Retry(self.cfg.chain.poll_interval)),
+                }
+            }
+        }
         if cursor.is_zero() {
             self.client.settle(task_id).await?;
         } else {
@@ -926,6 +1001,15 @@ pub fn finalize_gate(task: &TaskOnChain, epoch: u32, now: u64, quorum_met: bool)
     } else {
         Gate::Wait(Duration::from_secs(ready_at - now))
     }
+}
+
+/// Whether the page starting at `cursor` is the settlement's last one.
+///
+/// Only the last page is gated on reward-channel maturity (F-22): contributor pages pay from
+/// the frozen pool, which node locks can never eat into, so they must not wait out the
+/// window. `page` is the chain's own `SETTLE_PAGE_SIZE`, read rather than hardcoded.
+pub fn is_final_settle_page(cursor: U256, page: U256, contributors: u32) -> bool {
+    cursor.saturating_add(page) >= U256::from(contributors)
 }
 
 /// `settle` / `settleFrom`: every epoch settled, nothing locked, and not already distributed.
@@ -1216,6 +1300,20 @@ mod tests {
             settle_gate(&t),
             Gate::Skip("the task is not waiting to be settled")
         ));
+    }
+
+    #[test]
+    fn only_the_final_settle_page_waits_for_maturity() {
+        let page = U256::from(200);
+        // Single-page task: cursor 0 of 8 contributors is already the last page.
+        assert!(is_final_settle_page(U256::ZERO, page, 8));
+        // Multi-page task: earlier pages pay contributors from the frozen pool and must not
+        // wait out the reward window.
+        assert!(!is_final_settle_page(U256::ZERO, page, 500));
+        assert!(!is_final_settle_page(U256::from(200), page, 500));
+        assert!(is_final_settle_page(U256::from(400), page, 500));
+        // Exact fit is still final: cursor + page == contributors leaves nothing unpaid.
+        assert!(is_final_settle_page(U256::from(300), page, 500));
     }
 
     #[test]

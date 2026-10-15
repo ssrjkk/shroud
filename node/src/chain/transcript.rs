@@ -41,6 +41,38 @@ pub fn ct_root(ciphertext_cids: &[B256]) -> B256 {
     root
 }
 
+/// The commitment `commitDispute` takes: `keccak256(abi.encode(digest, salt, reporter))`.
+///
+/// Three full words — `bytes32`, `bytes32`, `address` left-padded into a word — so the
+/// encoding is a fixed 96 bytes with no offsets. Binding the reporter stops one commitment
+/// being replayed by another identity; binding the salt stops a bare digest from matching.
+pub fn dispute_commitment(digest: B256, salt: B256, reporter: Address) -> B256 {
+    let mut buf = [0u8; 96];
+    buf[0..32].copy_from_slice(digest.as_slice());
+    buf[32..64].copy_from_slice(salt.as_slice());
+    buf[64..76].copy_from_slice(&[0u8; 12]);
+    buf[76..96].copy_from_slice(reporter.as_slice());
+    keccak256(buf)
+}
+
+/// Deterministic dispute salt for `(operator, task, epoch)`.
+///
+/// Fresh randomness would need persisting across the commit and the reveal (a restart between
+/// the two otherwise loses the salt while the commitment stays open on chain). A derived
+/// salt is recomputable after any restart, and it does not weaken the hiding: the preimage
+/// space that matters is the 256-bit digest, not the salt. Uniqueness per reporter comes
+/// from the reporter binding inside the commitment itself.
+pub fn dispute_salt(operator: Address, task_id: U256, epoch: u32) -> B256 {
+    let mut buf = [0u8; 96];
+    buf[0..12].copy_from_slice(&[0u8; 12]);
+    buf[12..32].copy_from_slice(operator.as_slice());
+    buf[32..64].copy_from_slice(&task_id.to_be_bytes::<32>());
+    let mut epoch_word = [0u8; 32];
+    epoch_word[28..32].copy_from_slice(&epoch.to_be_bytes());
+    buf[64..96].copy_from_slice(&epoch_word);
+    keccak256(buf)
+}
+
 /// The transcript a proof of compute is bound to:
 /// `CipherTask::proofTranscript(taskId, epoch, traceDigest)`.
 ///
@@ -189,6 +221,64 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), before, "two distinct input sets collided");
+    }
+
+    #[test]
+    fn the_dispute_commitment_matches_abi_encode() {
+        // `ethers.keccak256(abi.encode(["bytes32","bytes32","address"], [0x11*32, 0x22*32, 0xaa*20]))`,
+        // computed against the SDK's encoder so the node and the contract agree byte for byte.
+        let digest = B256::repeat_byte(0x11);
+        let salt = B256::repeat_byte(0x22);
+        let reporter: Address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .parse()
+            .expect("address");
+        assert_eq!(
+            dispute_commitment(digest, salt, reporter),
+            b256("0xcfd5d0c50c4ee315105146571d644a56cfe517efa50a3d1f9010e78948106e97")
+        );
+    }
+
+    #[test]
+    fn the_dispute_commitment_binds_every_word() {
+        let digest = B256::repeat_byte(0x11);
+        let salt = B256::repeat_byte(0x22);
+        let reporter: Address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .parse()
+            .expect("address");
+        let base = dispute_commitment(digest, salt, reporter);
+        assert_ne!(
+            dispute_commitment(B256::repeat_byte(0x12), salt, reporter),
+            base
+        );
+        assert_ne!(
+            dispute_commitment(digest, B256::repeat_byte(0x23), reporter),
+            base
+        );
+        let other: Address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            .parse()
+            .expect("address");
+        assert_ne!(dispute_commitment(digest, salt, other), base);
+    }
+
+    #[test]
+    fn the_dispute_salt_is_deterministic_and_scoped() {
+        let operator: Address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            .parse()
+            .expect("address");
+        // `keccak256(0x00*12 || 0xbb*20 || u256(7) || u256(3))` from the SDK encoder.
+        assert_eq!(
+            dispute_salt(operator, U256::from(7), 3),
+            b256("0x193369e50097a1b3e8b1486f5f36d750c4c184785a17edec4539b3f4f03b5eb0")
+        );
+        assert_eq!(
+            dispute_salt(operator, U256::from(7), 3),
+            dispute_salt(operator, U256::from(7), 3),
+            "a restart between commit and reveal must recompute the same salt"
+        );
+        assert_ne!(
+            dispute_salt(operator, U256::from(8), 3),
+            dispute_salt(operator, U256::from(7), 3)
+        );
     }
 
     #[test]

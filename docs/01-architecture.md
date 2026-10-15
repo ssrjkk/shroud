@@ -376,15 +376,15 @@ exactness and a tractable ZK trace.
 
 | # | Attack | Countermeasure | Code |
 |---|---|---|---|
-| A1 | User uploads garbage / poison rows to drain escrow | Groth16 membership proof binds `rowCommitment` computed over a *shape Merkle root* published by the buyer; deposit + slashing on fraud quorum | `CipherTask._verifyContributionProof` |
-| A2 | Node returns a STARK for a different dataset | Public input includes `ctRoot`, `epoch`, `chainId`, `address(this)`; domain-separated transcript | `StarkVerifier` |
-| A3 | Node returns weights fitted on *some other* ciphertext set but not this one | Hash-chain in the AIR over per-shard ciphertext digests, folded in `leafIndex` order up to `ctRoot` | `PoCCircuit` |
+| A1 | User uploads garbage / poison rows to drain escrow | Groth16 membership proof binds `rowCommitment` over the buyer's `shapeRoot`; only the proof digest is kept on chain and re-execution checks it against fetched bytes. Opt-in contribution bond (`setContributionBondRequirement`, capped, slash-to-treasury only, closed after settle) prices spam; slashing is attested, not a fraud proof (F-01) | `submitContribution`, `slashContributionBond` |
+| A2 | Node returns a STARK for a different dataset | Public input includes `ctRoot`, `epoch`, `chainId`, `address(this)`; domain-separated transcript | `ProofVerifier`, `proofTranscript` |
+| A3 | Node returns weights fitted on *some other* ciphertext set but not this one | Ordered fold of per-shard digests into `ctRoot` (byte-identical in `node/src/chain/transcript.rs`); the STARK binds the root, full fold re-checked by re-executors | `ctRoot`, dispute quorum |
 | A4 | Node lies about progress to farm micro-payments | Payment channel slices are only signed for epochs already `EPOCH_SETTLED`; contract settles before signing | `PaymentVault` |
 | A5 | Committee collusion (< t members) decrypts user rows | Shamir t-of-n; **partial decryptions are contract-restricted to output CIDs registered by a settled task** — you cannot ask the committee to decrypt a user shard at all | `DecryptionGate` |
-| A6 | Committee collusion (≥ t) decrypts user rows | Structurally possible; mitigated by (a) BLS-gated requests only for settled tasks, (b) public audit log, (c) economic bond slashing. **This is the documented residual trust assumption** | `docs/04-threat-model.md §5` |
-| A7 | Key-swap: sequencer swaps `s_pub` so it can decrypt | `NetworkParams` pins `keccak(s_pub)`; SDK refuses mismatched params; nodes refuse to join | `NetworkParams.sol` |
-| A8 | Front-running contribution to harvest the same shard | Contribution is per-address, one shard per address per task, and the shard is bound by EIP-712 to the submitter | `submitContribution` |
-| A9 | Buyer aborts after nodes spent compute | Escrow is locked per-epoch on `openEpoch` with a `nodeBond`/`completionRatio` oracle; abort refunds `unstartedEpochs` only | `_settle`, `ABORTED` path |
+| A6 | Committee collusion (≥ t) decrypts user rows | Structurally possible; bounded by (a) BLS-gated requests only for settled tasks, (b) public audit log. There is no committee bond and no slashing here — attribution without economic consequence. **This is the documented residual trust assumption** | `docs/04-threat-model.md §5` |
+| A7 | Key-swap: sequencer swaps `s_pub` so it can decrypt | `NetworkParams` pins `keccak(s_pub)`; SDK with an encrypting encryptor refuses to run unpinned (fail-closed); node check is opt-in with a startup WARN; rotation needs 7d + approver | `NetworkParams.sol` |
+| A8 | Front-running contribution to harvest the same shard | Contribution is per-address (one shard per address per task) and bound into `ctRoot` in leaf order; a copy from another address is a different leaf with no weight history | `submitContribution` |
+| A9 | Buyer aborts after nodes spent compute | Escrow is locked per-epoch on `openEpoch`; abort keeps a slice of the open lock only for an epoch with a *verified* commit (as a redeemable channel), refunds everything else; unspent node pool reclaimable after the last epoch | `abort`, `reclaimUnspentEpochs` |
 | A10 | DoS via absurd dataset size | `maxContributors`, `maxShards`, `maxCiphertextBytes`, `minRowsPerShard` all bounded at task creation | `TaskParams` validation |
 | A11 | Reorg reverts a settled epoch | Watchers only act on `finalized` blocks; STARK public input includes `chainId`; settlement is idempotent by `(taskId, epoch)` | `watcher.rs: FinalityPolicy` |
 | A12 | Ciphertext decompression bomb on node | Range-pull with byte budget + streaming digest verification before TFHE parse | `shard_store.rs` |
@@ -399,17 +399,22 @@ contributions, and per-epoch `q` = number of nodes that produced a valid STARK:
 ```
 contributorPool = B * userShareBps / 10_000                 userShareBps = 8_000
 nodePool       = B * nodeShareBps / 10_000                   nodeShareBps = 1_500
-treasury       = B - contributorPool - nodePool             = B * 1_500 / 10_000
+committeePool  = B * committeeShareBps / 10_000              committeeShareBps = 500
 
-contributor_i  = contributorPool * w_i / Σw                  (w_i = accepted rows^0.5 × liveness)
-node_n         = nodePool / (E * q)                          (split equally across valid commits)
-nodeBondSlab   = nodePool * completionRatio / (E * q)         (paid back to bond on full completion)
+contributor_i  = contributorPool * w_i / Σw                  (w_i = sqrt(rows_i) × liveness, Q16.16)
+epochReward_e  = nodePool / E                                 (one winner per epoch: first verified
+                                                             commit, ties to the lower address)
+reporterBounty = epochReward_e * reexecutionBps / 10_000     (split across quorum reporters;
+                                                             winner unpaid, winner bond slashed)
+buyerRefund    = B - paidOut                                  (residue after every leg)
 ```
 
 `w_i = sqrt(rows_i) * liveness_i` — sqrt-damping stops a single whale contributor from
 capturing the pool, and the liveness multiplier penalises contributors that only uploaded at
-the end. Integer division remainders are assigned to the contributor with the largest
-`address` (deterministic, no favoritism). See `libraries/Dividend.sol`.
+the end. The pool is frozen by the first settlement page so per-page amounts cannot drift;
+integer division remainders go to the deterministically highest address (no favoritism).
+The final page waits for reward-channel maturity (`ChannelsImmature`), so the committee leg
+is never paid from an incomplete balance. See `libraries/Dividend.sol` and `SettlementLib`.
 
 ---
 

@@ -32,9 +32,10 @@
 use std::{
     collections::{HashMap, VecDeque},
     io::SeekFrom,
+    net::IpAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use alloy::primitives::{keccak256, B256, U256};
@@ -100,6 +101,105 @@ pub struct AnnouncedShard {
     pub announced_at: u64,
     /// Hex of the announcing peer's node id, so a later miss can name where to try next.
     pub peer: String,
+}
+
+/// Per-IP token bucket for inbound mesh work.
+///
+/// `fetch_shard` does disk I/O and gossip writes grow the shard index, so a peer flooding
+/// either is a disk/CPU DoS on this node. The bucket is per peer IP: `burst` tokens of
+/// headroom, refilled at `rps`. `take` is pure over an injected `now`, so the window math
+/// is unit-testable without sleeping.
+///
+/// Memory is bounded like the shard index: at most `max_peers` buckets, idle-full buckets
+/// swept, and an arbitrary victim evicted when a new peer arrives at a full table (fail-open
+/// for the newcomer, whose bucket starts full — the safe direction for availability).
+#[derive(Debug)]
+pub struct InboundThrottle {
+    rps: f64,
+    burst: f64,
+    buckets: HashMap<IpAddr, Bucket>,
+    max_peers: usize,
+}
+
+#[derive(Debug)]
+struct Bucket {
+    tokens: f64,
+    updated: Instant,
+}
+
+impl InboundThrottle {
+    pub fn new(rps: u64, burst: u64) -> Self {
+        // Zero here divides by zero in the retry computation; config validation rejects it,
+        // and this is the backstop for direct construction.
+        assert!(rps >= 1, "inbound rps must be >= 1");
+        assert!(burst >= 1, "inbound burst must be >= 1");
+        Self {
+            rps: rps as f64,
+            burst: burst as f64,
+            buckets: HashMap::new(),
+            max_peers: 10_000,
+        }
+    }
+
+    /// Take one request token for `ip`. `Err(retry_after)` when over quota.
+    ///
+    /// Synchronous by design: under the service lock, check-and-record is atomic and no
+    /// two concurrent requests from one peer can both see the last token.
+    pub fn take(&mut self, ip: IpAddr, now: Instant) -> std::result::Result<(), Duration> {
+        if !self.buckets.contains_key(&ip) {
+            if self.buckets.len() >= self.max_peers {
+                self.sweep(now);
+                if self.buckets.len() >= self.max_peers {
+                    // Still full of active peers: admit the newcomer rather than refuse it.
+                    // Throttling must degrade gracefully, not lock out a rotated peer IP.
+                    return Ok(());
+                }
+            }
+            self.buckets.insert(
+                ip,
+                Bucket {
+                    tokens: self.burst,
+                    updated: now,
+                },
+            );
+        }
+        let bucket = self.buckets.get_mut(&ip).expect("just inserted");
+        let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.rps).min(self.burst);
+        bucket.updated = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            Ok(())
+        } else {
+            Err(Duration::from_secs_f64((1.0 - bucket.tokens) / self.rps))
+        }
+    }
+
+    /// Drop buckets that are both full and idle past 60s. Returns evicted count.
+    ///
+    /// Refill is applied before the idleness check (without moving `updated`): a bucket
+    /// that would be full if anyone asked is as good as full for eviction purposes, and
+    /// idle age is still measured from the last real request, not from the sweep.
+    pub fn sweep(&mut self, now: Instant) -> usize {
+        let idle_for = Duration::from_secs(60);
+        for bucket in self.buckets.values_mut() {
+            let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
+            if elapsed > 0.0 {
+                bucket.tokens = (bucket.tokens + elapsed * self.rps).min(self.burst);
+            }
+        }
+        let before = self.buckets.len();
+        self.buckets.retain(|_, b| {
+            !(b.tokens >= self.burst - f64::EPSILON
+                && now.saturating_duration_since(b.updated) > idle_for)
+        });
+        before - self.buckets.len()
+    }
+
+    #[cfg(test)]
+    fn peer_count(&self) -> usize {
+        self.buckets.len()
+    }
 }
 
 /// A bounded, peer-fed view of who holds what.
@@ -181,6 +281,7 @@ struct Shared {
     request_timeout: Duration,
     state: Arc<NodeState>,
     index: Arc<Mutex<ShardIndex>>,
+    inbound: Arc<Mutex<InboundThrottle>>,
 }
 
 /// The gRPC service.
@@ -199,6 +300,10 @@ impl MeshService {
                 request_timeout: cfg.mesh.request_timeout,
                 state,
                 index: Arc::new(Mutex::new(ShardIndex::new(cfg.mesh.index_capacity))),
+                inbound: Arc::new(Mutex::new(InboundThrottle::new(
+                    cfg.mesh.inbound_rps,
+                    cfg.mesh.inbound_burst,
+                ))),
             }),
         }
     }
@@ -222,11 +327,14 @@ impl mesh_server::Mesh for MeshService {
         &self,
         request: Request<Streaming<Envelope>>,
     ) -> std::result::Result<Response<Self::GossipStream>, Status> {
+        // Captured before `into_inner` consumes the request: the stream loop needs the peer
+        // IP for throttling peer-fed writes, and there is no other place to get it.
+        let peer_ip = request.remote_addr().map(|a| a.ip());
         let mut inbound = request.into_inner();
         let (tx, rx) = mpsc::channel(OUTBOUND_BUFFER);
         let shared = self.inner.clone();
         tokio::spawn(async move {
-            run_gossip(&mut inbound, tx, shared).await;
+            run_gossip(&mut inbound, tx, shared, peer_ip).await;
         });
         Ok(Response::new(ReceiverStream::new(rx)))
     }
@@ -235,6 +343,28 @@ impl mesh_server::Mesh for MeshService {
         &self,
         request: Request<ShardRequest>,
     ) -> std::result::Result<Response<ShardResponse>, Status> {
+        // Throttle before any disk I/O: a range fetch is a seek + read, and an uncapped peer
+        // turns those into a disk DoS. Unknown peer address (unix socket) is admitted — the
+        // throttle keys on IP, and refusing traffic we cannot attribute would break local use.
+        if let Some(ip) = request.remote_addr().map(|a| a.ip()) {
+            let retry = self
+                .inner
+                .inbound
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .take(ip, Instant::now());
+            if let Err(retry) = retry {
+                warn!(
+                    ip = %ip,
+                    retry_ms = retry.as_millis(),
+                    "inbound mesh quota exceeded; shedding fetch_shard"
+                );
+                return Err(Status::resource_exhausted(format!(
+                    "inbound quota exceeded; retry in {}ms",
+                    retry.as_millis()
+                )));
+            }
+        }
         let req = request.into_inner();
         let cid = to_b256(&req.ciphertext_cid)
             .ok_or_else(|| Status::invalid_argument("ciphertext_cid must be 32 bytes"))?;
@@ -364,6 +494,7 @@ async fn run_gossip(
     inbound: &mut Streaming<Envelope>,
     out: mpsc::Sender<GossipItem>,
     shared: Arc<Shared>,
+    peer_ip: Option<IpAddr>,
 ) {
     let Some(peer) = handshake(inbound, &out, &shared).await else {
         return;
@@ -381,6 +512,35 @@ async fn run_gossip(
                 return;
             }
         };
+
+        // Peer-fed writes (index growth, log volume) share the inbound quota with
+        // fetch_shard, and only those writes consume it: throttling cheap control frames
+        // (Ping/Hello/Ack) would let a Ping flood starve legitimate announcements.
+        // Over quota the message is nacked, not applied: the stream stays alive and an
+        // honest peer backs off, while a flooding peer only burns its own quota.
+        let is_write = matches!(
+            &env.body,
+            Some(Body::ShardAnnounce(_)) | Some(Body::TraceDigest(_))
+        );
+        if is_write {
+            let over_quota = peer_ip
+                .map(|ip| {
+                    shared
+                        .inbound
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .take(ip, Instant::now())
+                        .is_err()
+                })
+                .unwrap_or(false);
+            if over_quota {
+                warn!("inbound mesh quota exceeded; shedding a peer-fed write");
+                if !ack(&out, env.nonce, false, "inbound quota exceeded".to_string()).await {
+                    return;
+                }
+                continue;
+            }
+        }
 
         let rejection = match env.body {
             Some(Body::ShardAnnounce(announce)) => record_announce(&shared, &peer.label, announce),
@@ -706,6 +866,9 @@ pub async fn serve(
 
     builder
         .add_service(service)
+        // Each gossip stream spawns a task plus a channel: uncapped streams per connection
+        // are task/memory exhaustion by handshake. The cap lives in config, not code.
+        .concurrency_limit_per_connection(cfg.mesh.max_streams_per_connection)
         .serve_with_shutdown(cfg.mesh.listen, signal)
         .await
         .map_err(|e| listen_error(&cfg, &e))?;
@@ -780,6 +943,7 @@ mod tests {
             request_timeout: Duration::from_secs(1),
             state: Arc::new(NodeState::new()),
             index: Arc::new(Mutex::new(ShardIndex::new(capacity))),
+            inbound: Arc::new(Mutex::new(InboundThrottle::new(100, 200))),
         }
     }
 
@@ -828,6 +992,41 @@ mod tests {
             validate_hello(&hello, 31_338).expect("accepts"),
             "ab".repeat(20)
         );
+    }
+
+    #[test]
+    fn the_inbound_bucket_holds_burst_then_refills_at_the_rate() {
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        let mut t = InboundThrottle::new(10, 3);
+        let t0 = Instant::now();
+        assert!(t.take(ip, t0).is_ok());
+        assert!(t.take(ip, t0).is_ok());
+        assert!(t.take(ip, t0).is_ok());
+        // Burst spent: the fourth request in the same instant is over quota, with a
+        // retry hint rather than a bare refusal.
+        let retry = t.take(ip, t0).expect_err("burst is spent");
+        assert!(retry > Duration::ZERO && retry <= Duration::from_millis(100));
+        // Half a second later at 10 rps, five tokens are back: one request passes.
+        let later = t0 + Duration::from_millis(500);
+        assert!(t.take(ip, later).is_ok());
+        // A different peer is unaffected by the first one's burst.
+        let other: IpAddr = "127.0.0.2".parse().unwrap();
+        assert!(t.take(other, later).is_ok());
+    }
+
+    #[test]
+    fn idle_buckets_are_swept_but_active_ones_survive() {
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        let mut t = InboundThrottle::new(10, 3);
+        let t0 = Instant::now();
+        assert!(t.take(ip, t0).is_ok());
+        // Recently used: survives the sweep even though it would refill to full.
+        assert_eq!(t.sweep(t0 + Duration::from_secs(30)), 0);
+        assert_eq!(t.peer_count(), 1);
+        // Idle past the horizon: refilled to full by the sweep itself, then collected.
+        // No per-peer leak from a slow trickle of distinct addresses.
+        assert_eq!(t.sweep(t0 + Duration::from_secs(3600)), 1);
+        assert_eq!(t.peer_count(), 0);
     }
 
     #[test]

@@ -11,11 +11,13 @@ import {IDecryptionGate} from "./interfaces/IDecryptionGate.sol";
 import {IProofVerifier} from "./zk/ProofVerifier.sol";
 import {IERC20} from "./interfaces/IERC20.sol";
 import {PaymentVault} from "./payments/PaymentVault.sol";
-import {Dividend} from "./libraries/Dividend.sol";
 import {TaskParamsLib} from "./libraries/TaskParamsLib.sol";
 import {ReentrancyGuard, Pausable} from "./libraries/Guard.sol";
 import {StateAcl} from "./libraries/StateAcl.sol";
 import {SettlementLib} from "./libraries/SettlementLib.sol";
+import {DisputeLib} from "./libraries/DisputeLib.sol";
+import {BondLib, PopLib} from "./libraries/BondLib.sol";
+import {RewardLib, CommitLib, ContributeLib, UnwindLib} from "./libraries/EpochLib.sol";
 
 /// @title CipherTask — Shroud FHE training orchestrator
 /// @notice Escrows a buyer's budget, admits client-side-encrypted contributions, orchestrates
@@ -66,6 +68,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @dev Fraction of the open epoch's lock retained on abort, so a node that already
     ///      produced work stays solvent.
     uint16 public constant ABORT_LOCK_BPS = 2_000;
+
+    /// @dev Upper bound on the per-contributor bond a buyer may require (1000 USDC at 6 dp).
+    ///      The bond is anti-spam, not a buyer revenue stream (slashes go to the treasury),
+    ///      and without a cap a malicious buyer could set a prohibitive bond to censor the
+    ///      contribution window shut.
+    uint128 public constant MAX_CONTRIBUTION_BOND = 1_000_000_000;
 
     /// @dev Distinct re-executors whose disagreement with the claimed digest is required to
     ///      reject an epoch. See docs/03-proof-of-compute.md §4.
@@ -123,12 +131,14 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => mapping(uint32 => uint256)) private _epochChannel;
 
     mapping(uint256 => uint256) private _totalWeight;
-    /// @dev Keyed by epoch, not just by task: a quorum reached while disputing epoch 0 must not
-    ///      carry over and auto-reject epoch 1, which would let one round of disputes poison every
-    ///      later epoch of the same task.
-    mapping(uint256 => mapping(uint32 => uint256)) private _disputeCount;
-    mapping(uint256 => mapping(uint32 => mapping(address => bool))) private _disputeRecorded;
-    mapping(uint256 => mapping(uint32 => address[])) private _epochReporters;
+    /// @dev Dispute state (counts, reporters, commitments), keyed by epoch, not just by task:
+    ///      a quorum reached while disputing epoch 0 must not carry over and auto-reject
+    ///      epoch 1. The type lives with the code that moves it (`DisputeLib`).
+    DisputeLib.State private _disputes;
+    /// @dev Contributor anti-spam bonds (F-01). Zero requirement (default) = none: fully
+    ///      backward compatible. Custodied here, not in the vault — bonds are contributor
+    ///      money, never task escrow. The type lives with the code (`BondLib`).
+    BondLib.State private _bonds;
     mapping(uint256 => mapping(uint32 => bytes32)) private _claimedDigest;
     /// @dev Settlement progress, keyed by task: the first contributor not yet paid, the amounts
     ///      credited so far (so the dust is computed against the whole pool across pages), the
@@ -159,6 +169,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @dev Emitted for every settlement page that is not the last, so an operator can watch
     ///      progress and see that it is actually advancing.
     event SettleProgress(uint256 indexed taskId, uint256 paidUpTo, uint256 total);
+    // Dispute/bond lifecycle events are declared in `ICipherTask` (ABI) and redeclared in
+    // `DisputeLib`/`BondLib`, which log them from this address by DELEGATECALL.
 
     /* ------------------------------------------------------------------ */
     /*                                errors                                */
@@ -350,51 +362,27 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         bytes32 rowCommitment,
         uint32 rows
     ) external whenNotPaused nonReentrant {
-        Task storage t = _tasks[taskId];
-        if (t.status != TaskStatus.Opening && t.status != TaskStatus.Collecting) {
-            revert InvalidTaskStatus(taskId, t.status, TaskStatus.Collecting);
-        }
-        if (block.timestamp > t.windowEnd) revert ContributionWindowClosed(taskId);
-        if (_contributions[taskId][msg.sender].accepted) revert AlreadyContributed(taskId, msg.sender);
-        if (ciphertextCid == bytes32(0) || ctDigest == bytes32(0)) revert ZeroContribution();
-        if (rows < t.params.minRowsPerShard) revert ShardTooSmall(rows, t.params.minRowsPerShard);
-        if (rows > MAX_ROWS_PER_SHARD) revert ShardTooLarge(rows, MAX_ROWS_PER_SHARD);
-        if (t.contributors >= t.params.maxContributors) revert CapReached(taskId, t.params.maxContributors);
-        if (t.shards >= MAX_SHARDS) revert CapReached(taskId, MAX_SHARDS);
-        bytes32 shapeProofDigest = keccak256(shapeProof);
-        if (shapeProofsRequired && shapeProof.length == 0) revert ShapeProofInvalid(taskId, msg.sender);
-        if (rowCommitment == bytes32(0)) revert RowCommitmentInvalid(taskId, msg.sender);
-
-        uint32 leafIndex = t.shards;
-        uint96 w = uint96(Dividend.weight(rows, Dividend.liveness(t.createdAt, t.windowEnd, uint64(block.timestamp))));
-        if (w == 0) revert ZeroContribution();
-
-        _contributions[taskId][msg.sender] = Contribution({
-            ciphertextCid: ciphertextCid,
-            ctDigest: ctDigest,
-            shapeProof: shapeProofDigest,
-            rowCommitment: rowCommitment,
-            rows: rows,
-            leafIndex: leafIndex,
-            submittedAt: uint64(block.timestamp),
-            weightQ16: w,
-            accepted: true,
-            slashed: false
-        });
-
-        _contributionByLeaf[taskId][leafIndex] = msg.sender;
-        _totalWeight[taskId] += w;
-        t.ctRoot = _appendLeaf(t.ctRoot, leafIndex, ciphertextCid);
-        _contributorList[taskId].push(msg.sender);
-
-        unchecked {
-            t.shards += 1;
-            t.contributors += 1;
-        }
-
-        if (t.status == TaskStatus.Opening) _setStatus(taskId, TaskStatus.Collecting);
-
-        emit ContributionSubmitted(taskId, msg.sender, leafIndex, ciphertextCid, rows);
+        // Checked here rather than in the library: it is a host-level capacity bound on the
+        // leaf index space, not contribution validation.
+        if (_tasks[taskId].shards >= MAX_SHARDS) revert CapReached(taskId, MAX_SHARDS);
+        ContributeLib.submit(
+            _bonds,
+            _tasks[taskId],
+            _contributions[taskId],
+            _contributionByLeaf[taskId],
+            _contributorList[taskId],
+            _totalWeight,
+            _escrowToken,
+            taskId,
+            msg.sender,
+            ciphertextCid,
+            ctDigest,
+            shapeProof,
+            shapeProofsRequired,
+            rowCommitment,
+            rows,
+            MAX_ROWS_PER_SHARD
+        );
     }
 
     /// @notice Seal the dataset so `ctRoot` freezes. Callable by the buyer/update manager once
@@ -436,11 +424,24 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      buyer-refundable, and a bond swept into a refund would pay the buyer with the node's
     ///      money). BLS-key uniqueness is enforced there too.
     function registerNode(uint256 taskId, bytes32 blsPubKey) external whenNotPaused {
+        _registerNode(taskId, msg.sender, blsPubKey);
+    }
+
+    /// @notice Register with proof-of-possession of the node's signing key over its BLS key.
+    /// @dev See the interface for the signed message. Verification is EIP-191 personal-message
+    ///      ECDSA with low-s enforcement: malleated signatures must not produce two
+    ///      registrations for one signer, and a 65-byte check keeps the ABI honest.
+    function registerNodeWithPop(uint256 taskId, bytes32 blsPubKey, bytes calldata sig) external whenNotPaused {
+        PopLib.verify(taskId, blsPubKey, msg.sender, block.chainid, address(this), sig);
+        _registerNode(taskId, msg.sender, blsPubKey);
+    }
+
+    function _registerNode(uint256 taskId, address node, bytes32 blsPubKey) private {
         if (_tasks[taskId].status == TaskStatus.None) revert UnknownTask(taskId);
-        if (_nodeRegistered[taskId][msg.sender]) revert NodeAlreadyRegistered(taskId, msg.sender);
-        _nodeRegistered[taskId][msg.sender] = true;
-        vault.takeBond(taskId, msg.sender, blsPubKey);
-        emit NodeRegistered(taskId, msg.sender, blsPubKey);
+        if (_nodeRegistered[taskId][node]) revert NodeAlreadyRegistered(taskId, node);
+        _nodeRegistered[taskId][node] = true;
+        vault.takeBond(taskId, node, blsPubKey);
+        emit NodeRegistered(taskId, node, blsPubKey);
     }
 
     /// @notice Buyer publishes the encrypted weight vector for epoch `nextEpoch` plus a fresh
@@ -466,7 +467,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status != TaskStatus.Sealed && t.status != TaskStatus.EpochSettled) {
             revert InvalidTaskStatus(taskId, t.status, TaskStatus.Sealed);
         }
-        if (msg.sender != t.params.updateManager && msg.sender != t.params.buyer && msg.sender != owner) {
+        // Buyer or update manager only. The owner is deliberately *not* on this list: epoch
+        // contents steer what every node executes and what the buyer pays for, so letting a
+        // third key publish epochs would hand it quiet control of the training trajectory.
+        // The owner's emergency lever is `emergencyUnwind`, which is rate-limited by the
+        // epoch deadline plus the dispute window instead.
+        if (msg.sender != t.params.updateManager && msg.sender != t.params.buyer) {
             revert NotUpdateManagerOrOwner(taskId, msg.sender);
         }
         if (encWeightsCid == bytes32(0) || weightsDigest == bytes32(0)) {
@@ -507,60 +513,67 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         bytes32 metricsCid,
         bytes32 traceDigest
     ) external whenNotPaused nonReentrant {
-        Task storage t = _tasks[taskId];
-        if (t.status != TaskStatus.EpochOpen && t.status != TaskStatus.EpochCommitting) {
-            revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochOpen);
-        }
-        if (!_nodeRegistered[taskId][msg.sender]) revert NodeNotRegistered(taskId, msg.sender);
-        if (epoch != t.nextEpoch) revert EpochOutOfOrder(taskId, epoch);
-        if (block.timestamp > t.epochDeadline) revert CommitWindowExpired(taskId, t.epochDeadline);
-        if (encWeightsCid == bytes32(0) || weightsDigest == bytes32(0) || traceDigest == bytes32(0)) {
-            revert WeightPinMismatch(taskId, weightsDigest, encWeightsCid);
-        }
-        EpochCommit storage c = _commits[taskId][epoch][msg.sender];
-        if (c.committedAt != 0) revert DuplicateCommit(taskId, epoch, msg.sender);
+        _commit(taskId, epoch, proof, encWeightsCid, weightsDigest, metricsCid, traceDigest, false);
+    }
 
-        // `proof` is a 32-byte *reference* to the proof, never the proof itself: a single-segment
-        // STARK is far larger than 32 bytes, and a segmented proof is summarised by the Merkle
-        // root over its segment proofs. Which of the two it is cannot be inferred from a fixed-size
-        // field, so the verifier behind `proofVerifier` resolves it (it may be a STARK digest, a
-        // segmented Merkle root, or an indirection to off-chain storage).
-        if (proof == bytes32(0)) revert ProofReferenceMissing(taskId, epoch, msg.sender);
+    /// @notice Submit a segmented STARK for epoch `epoch` (see the interface).
+    function commitEpochSegmented(
+        uint256 taskId,
+        uint32 epoch,
+        bytes32 segmentedRoot,
+        bytes32 encWeightsCid,
+        bytes32 weightsDigest,
+        bytes32 metricsCid,
+        bytes32 traceDigest
+    ) external whenNotPaused nonReentrant {
+        _commit(taskId, epoch, segmentedRoot, encWeightsCid, weightsDigest, metricsCid, traceDigest, true);
+    }
 
-        bytes32 transcript = proofTranscript(taskId, epoch, traceDigest);
-        bytes memory publicInput = abi.encode(
-            transcript,
+    function _commit(
+        uint256 taskId,
+        uint32 epoch,
+        bytes32 proof,
+        bytes32 encWeightsCid,
+        bytes32 weightsDigest,
+        bytes32 metricsCid,
+        bytes32 traceDigest,
+        bool segmented
+    ) private {
+        // Verification + winner recording live in `CommitLib` (host size limit). The transcript
+        // binding is identical: chain, this contract, task, epoch, dataset root, prior weights.
+        CommitLib.commit(
+            _tasks[taskId],
+            _commits,
+            _epochWinner,
+            _claimedDigest,
+            _nodeRegistered,
+            proofVerifier,
+            _tasks[taskId].ctRoot,
+            _tasks[taskId].lastWeightsDigest,
+            taskId,
             epoch,
-            t.shards,
+            msg.sender,
+            proof,
+            encWeightsCid,
+            weightsDigest,
+            metricsCid,
             traceDigest,
-            t.ctRoot,
-            t.lastWeightsDigest,
-            block.chainid
+            segmented
         );
+    }
 
-        bool ok = proofVerifier.verifyProof(publicInput, abi.encodePacked(proof));
-        emit EpochVerified(taskId, epoch, msg.sender, ok);
-        if (!ok) revert ProofRejected(taskId, epoch, _REASON_STARK_REJECTED);
+    /// @notice Commit to a dispute digest before revealing it (front-run resistance).
+    /// @dev `commitment = keccak256(abi.encode(digest, salt, msg.sender))`. See `DisputeLib`.
+    function commitDispute(uint256 taskId, uint32 epoch, bytes32 commitment) external whenNotPaused {
+        DisputeLib.commit(_disputes, _nodeRegistered, _tasks[taskId], taskId, epoch, msg.sender, commitment);
+    }
 
-        c.proof = proof;
-        c.encWeightsCid = encWeightsCid;
-        c.weightsDigest = weightsDigest;
-        c.metricsCid = metricsCid;
-        c.traceDigest = traceDigest;
-        c.committedAt = uint64(block.timestamp);
-        c.revealNonce = 1;
-        c.verified = true;
-
-        // First verified commit is the candidate winner; ties resolve to the lower address,
-        // which is fixed before the dispute window opens so nobody can buy the tie-break.
-        address incumbent = _epochWinner[taskId][epoch];
-        if (incumbent == address(0) || msg.sender < incumbent) {
-            _epochWinner[taskId][epoch] = msg.sender;
-            _claimedDigest[taskId][epoch] = traceDigest;
-        }
-
-        _setStatus(taskId, TaskStatus.EpochCommitting);
-        emit EpochCommitted(taskId, epoch, msg.sender, traceDigest);
+    /// @notice Reveal a committed dispute digest.
+    function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external whenNotPaused {
+        DisputeLib.reveal(
+            _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
+            taskId, epoch, msg.sender, reexecutedDigest, salt
+        );
     }
 
     /// @notice Re-execute epoch `epoch` and report the digest you independently obtain.
@@ -569,30 +582,19 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///
     ///      A report is only counted from an address that *itself* holds a verified commit for
     ///      that epoch whose `traceDigest` is the digest it reports. Without that requirement a
-    ///      dispute costs nothing but two transactions — `registerNode` is permissionless and
-    ///      unbonded — while `_payReporters` pays `reexecutionBps` of the epoch lock out of the
-    ///      buyer's escrow to whoever reports. Three cheap addresses could then reject every epoch
-    ///      of every task and collect the bounty each time: not a denial of reward but a
-    ///      transfer, and the previous wording of the docs ("it cannot *steal* the payout")
-    ///      understated it. Re-execution now has to produce a proof that verifies, which is the
-    ///      work the bounty is meant to pay for.
+    ///      dispute costs nothing but two transactions — `registerNode` is permissionless —
+    ///      while `_payReporters` pays `reexecutionBps` of the epoch lock out of the
+    ///      buyer's escrow to whoever reports. Re-execution now has to produce a proof that
+    ///      verifies, which is the work the bounty is meant to pay for.
+    ///
+    ///      Prefer `commitDispute` + `reportDisputeWithSalt` when the mempool is adversarial:
+    ///      a bare report can be copied by any other registered node that also holds a verified
+    ///      commit. Once this reporter has an open commitment, this bare path reverts.
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external whenNotPaused {
-        if (!_nodeRegistered[taskId][msg.sender]) revert NodeNotRegistered(taskId, msg.sender);
-        Task storage t = _tasks[taskId];
-        if (t.status != TaskStatus.EpochCommitting) revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochCommitting);
-        if (_disputeRecorded[taskId][epoch][msg.sender]) revert DuplicateCommit(taskId, epoch, msg.sender);
-        if (reexecutedDigest == _claimedDigest[taskId][epoch]) revert DisputeAgreesWithClaim(taskId, epoch, msg.sender);
-
-        EpochCommit storage mine = _commits[taskId][epoch][msg.sender];
-        if (!mine.verified) revert DisputeWithoutVerifiedCommit(taskId, epoch, msg.sender);
-        if (mine.traceDigest != reexecutedDigest) {
-            revert DisputeDigestMismatch(taskId, epoch, msg.sender, mine.traceDigest, reexecutedDigest);
-        }
-
-        _disputeRecorded[taskId][epoch][msg.sender] = true;
-        _disputeCount[taskId][epoch] += 1;
-        _epochReporters[taskId][epoch].push(msg.sender);
-        emit DisputeReported(taskId, epoch, msg.sender, reexecutedDigest);
+        DisputeLib.report(
+            _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
+            taskId, epoch, msg.sender, reexecutedDigest
+        );
     }
 
     /// @notice Close the epoch once its dispute window expired, or immediately once the
@@ -602,9 +604,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status != TaskStatus.EpochCommitting) revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochCommitting);
         if (epoch != t.nextEpoch) revert EpochOutOfOrder(taskId, epoch);
 
-        bool quorum = _disputeCount[taskId][epoch] >= DISPUTE_QUORUM;
+        bool quorum = _disputes.count[taskId][epoch] >= DISPUTE_QUORUM;
         if (!quorum && block.timestamp < t.epochDeadline + t.params.disputeWindow) {
-            revert DisputeBelowQuorum(taskId, epoch, _disputeCount[taskId][epoch], DISPUTE_QUORUM);
+            revert DisputeBelowQuorum(taskId, epoch, _disputes.count[taskId][epoch], DISPUTE_QUORUM);
         }
 
         uint128 lock = _epochLock(t);
@@ -627,7 +629,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
                 vault,
                 taskId,
                 epoch,
-                _epochReporters[taskId][epoch],
+                _disputes.reporters[taskId][epoch],
                 t.params.reexecutionBps,
                 lock,
                 uint64(block.timestamp) + rewardChannelWindow(),
@@ -637,7 +639,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             // settlement); custody and rationale live in `PaymentVault.slashBond`, here only the
             // call remains so this contract stays inside the deployment limit.
             vault.slashBond(taskId, epoch, winner);
-            emit EpochRejected(taskId, epoch, _epochReporters[taskId][epoch].length);
+            emit EpochRejected(taskId, epoch, _disputes.reporters[taskId][epoch].length);
         } else if (winner != address(0)) {
             // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides
             // `budget * nodeShareBps` across the epochs), so the node share must not be taken
@@ -807,41 +809,18 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      every abort silently burned 20% of the epoch lock even when no node had committed
     ///      anything. Gating retention on an actual winner closes that.
     function _unwind(uint256 taskId, bytes4 reason) private {
-        Task storage t = _tasks[taskId];
-        // Settlement is a commitment to the contributors, so it cannot be unwound once begun.
-        // Before paging existed this was unreachable because `settle` was atomic; with paging, a
-        // buyer could run one page — paying contributors in list order at their full pro-rata
-        // share — then `abort` and recover everything the remaining contributors were owed.
-        // That turns contributor ordering, which is only submission order, into a selective-payment
-        // lever: pay the addresses you like, claw back the rest.
-        //
-        // Freezing here cannot strand funds. Settlement is permissionless, every page is
-        // independently callable, and the total credited can never exceed the pool frozen by the
-        // first page, so finishing is always possible.
-        if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
-        if (_settlement.started[taskId]) revert SettlementBegun(taskId);
-
-        address worker = _epochWinner[taskId][t.nextEpoch];
-        uint128 keep = (t.locked > 0 && worker != address(0)) ? (t.locked * ABORT_LOCK_BPS) / BPS : 0;
-
-        // Un-redeemed reward locks return to the sub-balance before the refund is computed.
-        vault.sweepTaskChannels(taskId);
-        uint256 available = vault.taskBalance(taskId);
-        t.locked = 0;
-
-        if (keep > 0) _openChannel(taskId, t.nextEpoch, worker, keep);
-
-        uint128 refund = uint128(available > keep ? available - keep : 0);
-        if (refund > 0) {
-            // Pull-based, like every other payout leg in this contract (see `settle`): the
-            // refund is credited to the buyer, who claims it. `PaymentVault.refundFromTask` would
-            // instead push an ERC-20 transfer during the abort, which reverts the whole unwind if
-            // the buyer's token hook fails and leaves two different payout models for the SDK.
-            vault.creditFromTask(taskId, t.params.buyer, refund);
-            emit Withdrawn(taskId, t.params.buyer, refund);
-        }
-        _setStatus(taskId, TaskStatus.Aborted);
-        emit TaskAborted(taskId, reason);
+        // The refund logic lives in `UnwindLib` (host size limit); the guards deciding whether
+        // an unwind may run stay here with the state machine.
+        UnwindLib.unwind(
+            vault,
+            _tasks[taskId],
+            _settlement,
+            _epochWinner,
+            _authorizedSlice,
+            rewardChannelWindow(),
+            taskId,
+            reason
+        );
     }
 
     /// @notice Return the escrow belonging to epochs that will never run back to the buyer.
@@ -856,12 +835,80 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      calling this before settlement.
     function reclaimUnspentEpochs(uint256 taskId) external whenNotPaused nonReentrant returns (uint128 amount) {
         Task storage t = _tasks[taskId];
-        if (msg.sender != t.params.buyer) revert NotUpdateManagerOrOwner(taskId, msg.sender);
+        // Buyer or update manager: both already control the epoch loop (`openEpoch`), so both
+        // must be able to recover the unspent node pool. Restricting this to the buyer alone
+        // stranded the refund behind a key the task may no longer use.
+        if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager) {
+            revert NotUpdateManagerOrOwner(taskId, msg.sender);
+        }
         if (t.status == TaskStatus.None) revert UnknownTask(taskId);
         if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
         if (t.locked != 0) revert EpochLocked(taskId);
         if (t.nextEpoch < t.params.epochs) revert EpochsRemain(taskId);
         return SettlementLib.reclaim(vault, taskId, t);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*                    contribution bonds (F-01)                        */
+    /* ------------------------------------------------------------------ */
+
+    /// @notice Set (or clear with 0) the bond every contributor must post with their shard.
+    function setContributionBondRequirement(uint256 taskId, uint128 amount) external whenNotPaused {
+        Task storage t = _tasks[taskId];
+        if (t.status == TaskStatus.None) revert UnknownTask(taskId);
+        if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager) {
+            revert NotUpdateManagerOrOwner(taskId, msg.sender);
+        }
+        if (t.isSealed) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Collecting);
+        if (amount > MAX_CONTRIBUTION_BOND) revert BondRequirementInvalid(taskId, amount);
+        _bonds.required[taskId] = amount;
+        emit ContributionBondRequirementSet(taskId, amount);
+    }
+
+    /// @notice Release a contributor's bond to them. Permissionless: the money can only go to
+    ///         the contributor, so the caller has no discretion — mirroring `releaseBond`.
+    /// @dev Releasable once the task can no longer slash it: terminal (`Aborted`/`Disclosed`)
+    ///      or fully settled. Deliberately NOT `whenNotPaused`: a pause freezes protocol
+    ///      progress, not exits.
+    ///
+    ///      The event is declared in `BondLib` (DELEGATECALL logs from here with the same topic).
+    function releaseContributionBond(uint256 taskId, address contributor) external nonReentrant {
+        Task storage t = _tasks[taskId];
+        bool releasable = t.status == TaskStatus.Aborted ||
+            t.status == TaskStatus.Disclosed ||
+            _settlement.settled[taskId];
+        BondLib.release(_bonds, _escrowToken, taskId, contributor, releasable);
+    }
+
+    /// @notice Slash a contributor's bond to the treasury and mark the contribution slashed
+    ///         (so `settle` skips its reward share).
+    /// @dev The slash goes to the treasury, never to the buyer: the buyer must gain nothing
+    ///      from slashing, or slashing becomes a revenue stream and every contributor is at
+    ///      the buyer's mercy.
+    function slashContributionBond(uint256 taskId, address contributor) external nonReentrant {
+        Task storage t = _tasks[taskId];
+        if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager && msg.sender != owner) {
+            revert NotUpdateManagerOrOwner(taskId, msg.sender);
+        }
+        // The bond secures the contribution phase, not the aftermath: once the task is
+        // settled or terminal, release is the only path. Without this a buyer could wait
+        // until honest contributors are paid and then burn their unreleased bonds anyway —
+        // grief with no fraud behind it, indistinguishable on chain from a real slash.
+        if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
+        if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
+            revert AlreadyTerminal(taskId, t.status);
+        }
+        BondLib.slash(_bonds, _contributions, _escrowToken, treasury, taskId, contributor);
+    }
+
+    /// @notice Bond required of new contributions to `taskId` (0 = none).
+    function contributionBondRequired(uint256 taskId) external view returns (uint128) {
+        return _bonds.required[taskId];
+    }
+
+    /// @notice Bond currently posted by `contributor` on `taskId`.
+    function contributionBondOf(uint256 taskId, address contributor) external view returns (uint128) {
+        return _bonds.posted[taskId][contributor];
     }
 
     /* ------------------------------------------------------------------ */
@@ -994,7 +1041,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have) {
-        return (DISPUTE_QUORUM, _disputeCount[taskId][_tasks[taskId].nextEpoch]);
+        return (DISPUTE_QUORUM, _disputes.count[taskId][_tasks[taskId].nextEpoch]);
     }
 
     function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest) public view returns (bytes32) {
@@ -1055,27 +1102,15 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @dev Escrow locked per epoch: the node pool split across `epochs`, so every epoch is
     ///      fully solvent no matter how the buyer behaves afterwards.
     function _epochLock(Task storage t) private view returns (uint128) {
-        uint128 pool = (t.budget * t.params.nodeShareBps) / BPS;
-        return pool / t.params.epochs;
+        return RewardLib.epochLock(t);
     }
 
     /// @dev Open the winner's reward channel and authorise its first slice. The contract is
     ///      the streamer, so the node can redeem without any off-chain signer.
     function _payNode(uint256 taskId, uint32 epoch, address node, uint128 reward) private {
-        uint256 channelId = _openChannel(taskId, epoch, node, reward);
-        if (channelId != 0) _epochChannel[taskId][epoch] = channelId;
-    }
-
-    /// @dev Open a reward channel without recording it as the epoch's headline channel. Used for
-    ///      reporter bounties, which must not overwrite `_epochChannel[epoch]` — that slot is the
-    ///      winner's, and an indexer reading it would otherwise conclude a bounty recipient won
-    ///      the epoch it just disputed.
-    function _openChannel(uint256 taskId, uint32 epoch, address node, uint128 reward) private returns (uint256 channelId) {
-        if (reward == 0) return 0;
-        uint64 unlockAt = uint64(block.timestamp) + rewardChannelWindow();
-        channelId = vault.openTaskChannel(taskId, node, reward, unlockAt);
-        _authorizedSlice[channelId][0] = reward;
-        emit NodeRewardChannelOpened(taskId, epoch, node, channelId, reward, unlockAt, reward);
+        RewardLib.payNode(
+            vault, _epochChannel, _authorizedSlice, rewardChannelWindow(), taskId, epoch, node, reward
+        );
     }
 
     function _setStatus(uint256 taskId, TaskStatus to) private {
@@ -1084,15 +1119,5 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (from == to) return;
         t.status = to;
         emit TaskStatusChanged(taskId, from, to);
-    }
-
-    /// @dev `keccak(prev – leafIndex – ciphertextCid)`, byte-identical to
-    ///      `node/src/chain/transcript.rs::ct_root_step`. Keeping the two implementations
-    ///      byte-for-byte equal is what makes `ctRoot` usable as a STARK public input, so the
-    ///      encoding is spelled out here rather than left to a struct hash. The chain is seeded
-    ///      with `_EMPTY_ROOT` by `createTask`; a node that folded the same leaves from a
-    ///      different seed would derive a different root and refuse to execute the task.
-    function _appendLeaf(bytes32 acc, uint32 leafIndex, bytes32 ciphertextCid) private pure returns (bytes32) {
-        return keccak256(abi.encodePacked(acc, leafIndex, ciphertextCid));
     }
 }

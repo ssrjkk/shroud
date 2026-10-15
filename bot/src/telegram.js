@@ -32,13 +32,22 @@ export class TelegramBot {
   #base;
   /** Serialises all writes. Telegram is unhappy with concurrent sends. */
   #writeChain = Promise.resolve();
+  /** In-flight + queued sends. Bounded: an alert storm must not grow memory without limit. */
+  #queued = 0;
+  #maxQueued;
+  /** Alerts dropped by the queue cap since boot. Polled by /status operators, never reset. */
+  droppedSends = 0;
   /** offsets of updates already handled, per chat id. */
   #seen = new Set();
 
-  constructor(token, { log = console } = {}) {
+  constructor(token, { log = console, maxQueued = 100 } = {}) {
     if (!token) throw new Error("TelegramBot needs a token");
+    if (!Number.isInteger(maxQueued) || maxQueued < 1) {
+      throw new Error("TelegramBot maxQueued must be a positive integer");
+    }
     this.#token = token;
     this.#base = `https://api.telegram.org/bot${token}`;
+    this.#maxQueued = maxQueued;
     this.log = log;
   }
 
@@ -106,11 +115,27 @@ export class TelegramBot {
     return this.#call("sendMessage", body);
   }
 
-  /** Sends are serialised so a burst of alerts cannot trip the rate limiter. */
+  /**
+   * Sends are serialised so a burst of alerts cannot trip the rate limiter, and
+   * bounded so a burst of alerts cannot grow memory without limit: past the cap
+   * the oldest unsent alert is shed in favour of the newest (an ops channel wants
+   * the latest state, not a backlog), counted in `droppedSends` and logged.
+   * Dropping resolves `{ dropped: true }` rather than rejecting, so broadcast loops
+   * (`Promise.all` over chats) are unaffected.
+   */
   sendQueued(chatId, text, extra = {}) {
+    if (this.#queued >= this.#maxQueued) {
+      this.droppedSends++;
+      this.log.warn?.(`send queue full (${this.#queued}/${this.#maxQueued}); dropping alert for ${chatId}`);
+      return Promise.resolve({ dropped: true });
+    }
+    this.#queued++;
     const next = this.#writeChain
       .catch(() => {})
-      .then(() => this.sendMessage(chatId, text, extra));
+      .then(() => this.sendMessage(chatId, text, extra))
+      .finally(() => {
+        this.#queued--;
+      });
     this.#writeChain = next.catch(() => {});
     return next;
   }

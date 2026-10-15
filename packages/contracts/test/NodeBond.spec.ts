@@ -4,7 +4,7 @@ import { ethers } from "hardhat";
 
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, PaymentVault, TestToken } from "../typechain-types";
-import { bytes32Of, externalUint64, params, proofFor, proofRef } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef } from "./helpers";
 import { deployLinked } from "../scripts/libraries";
 
 /**
@@ -167,6 +167,7 @@ describe("node registration bonds", () => {
       .commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
     await time.increase(3600 + 600);
     await task.finalizeEpoch(id, 0);
+    await matureRewardWindows();
     await task.settle(id);
 
     await expect(vault.connect(node).releaseBond(id, node.address))

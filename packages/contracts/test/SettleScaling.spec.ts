@@ -5,7 +5,7 @@ import { ethers } from "hardhat";
 
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, PaymentVault, TestToken } from "../typechain-types";
-import { bytes32Of, externalUint64, params, proofRef } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofRef } from "./helpers";
 import { deployLinked } from "../scripts/libraries";
 
 /**
@@ -85,6 +85,9 @@ describe("settlement scalability", () => {
       .commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
     await time.increase(3600 + 600 + 1);
     await task.finalizeEpoch(id, 0);
+    // The winner's channel opens at finalize with a 7-day window; the final settlement page
+    // waits for it (F-22). Mature it here so every test below settles a complete balance.
+    await matureRewardWindows();
 
     return { task, vault, token, id, buyer, contributors: contributors.length };
   }

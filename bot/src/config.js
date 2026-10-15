@@ -130,6 +130,9 @@ export function loadConfig() {
 
     rpcUrl: (process.env.RPC_URL ?? "http://127.0.0.1:8545").trim(),
     chainId: optionalInt("CHAIN_ID", 0),
+    // Per-request RPC deadline. Without it a dead node hangs every read forever and the
+    // poll loops stall instead of erroring into their backoffs.
+    rpcTimeoutMs: optionalInt("RPC_TIMEOUT_MS", 15_000),
 
     cipherTask: address("CIPHER_TASK_ADDRESS"),
     paymentVault: address("PAYMENT_VAULT_ADDRESS"),
@@ -153,6 +156,9 @@ export function loadConfig() {
   }
   if (!Number.isSafeInteger(config.chainId) || config.chainId < 0) {
     throw new ConfigError("CHAIN_ID must be a non-negative integer.");
+  }
+  if (config.rpcTimeoutMs < 1000) {
+    throw new ConfigError("RPC_TIMEOUT_MS below 1000 turns every slow block into a failure.");
   }
 
   return config;

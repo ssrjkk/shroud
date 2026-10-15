@@ -78,10 +78,10 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 
 | path | what |
 |------|------|
-| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (110 tests: lifecycle, stateful fuzz, gas snapshot, admin controls, byte-layout vectors) |
-| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (39 tests) |
+| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (119 tests: lifecycle, stateful fuzz, gas snapshot, admin controls, byte-layout vectors) |
+| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (45 tests) |
 | `node/` | Rust compute node: chain follower + epoch executor (deterministic reference engine, `tfhe-rs` behind `prover`), gRPC mesh, content-addressed DA (`da` feature for remote) — see [Node](#node) |
-| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (39 tests, incl. stub-RPC read coverage) |
+| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (54 tests, incl. stub-RPC read coverage) |
 | `web/` | Project site (static, no build): home, in-browser lab, protocol, security status, license — RU/EN, ink/paper themes, newcomer/pro modes |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA, size-capped + range-pull), 3 nodes — operator runbook in [`infra/README.md`](infra/README.md) |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |
@@ -91,15 +91,15 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 ```sh
 # contracts
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 110 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 119 passing
 
 # sdk
 cd packages/sdk
-npm ci && npm test                                                       # 39 passing
+npm ci && npm test                                                       # 45 passing
 
 # ops bot (no token and no chain needed for the tests)
 cd bot
-npm ci && npm test                                                       # 39 passing
+npm ci && npm test                                                       # 54 passing
 npm start                                                                # needs bot/.env
 
 # node — needs protoc and a C toolchain; see the note below
@@ -159,34 +159,44 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 | Disputes target the real winner | **Enforced.** A losing committer cannot redirect a dispute onto an honest epoch. |
 | Disputing is rational | **Enforced.** `reexecutionBps` of the lock goes to reporters; the winner's bond slashes into the buyer refund on quorum reject. |
 | `Disclosed` means decrypted | **Enforced.** `withdraw` requires the threshold gate. |
-| Key substitution is detected before upload | **Enforced in the SDK when configured** (`networkParams` + `fhePublicKeyHash`); node-side check exists but is opt-in. |
+| Key substitution is detected before upload | **Enforced, fail-closed for real encryptors.** A confidential encryptor with a declared key refuses to run without `networkParams` (unless `allowUnpinnedKey`); node-side check is opt-in but its absence is a startup `WARN`. |
 | Cleartext upload by omission | **Enforced.** Non-encrypting encryptors are refused without `allowUnencrypted`. |
 | Wrong-chain signing | **Enforced.** A configured `chainId` mismatch is a hard error. |
 | Hostile DA | **Enforced.** CIDs validated pre-request, responses size-capped and timed out, payloads re-hashed locally against the on-chain pin. |
-| Admin surface | **Enforced.** Treasury/proof-flag/pause switches are owner-only, tested; verifier and manager rotations go through timelocks executable by anyone. |
+| Admin surface | **Enforced.** Treasury/proof-flag/pause switches are owner-only, tested; verifier and manager rotations go through timelocks executable by anyone; live rotations cannot be overwritten without a cancel. |
+| Fee-on-transfer escrow tokens | **Enforced (fail-closed).** Vault ledgers the balance diff actually received; shortfalls revert instead of mis-accounting. |
+| Dispute front-running | **Enforced.** Commit-reveal reporting (`commitDispute` → `reportDisputeWithSalt`); the node files disputes this way. |
+| Epoch-authorship by the owner | **Enforced.** Only buyer/update-manager may `openEpoch`; the owner keeps `emergencyUnwind`. |
+| Settlement against immature channels | **Enforced.** The final page reverts `ChannelsImmature` until the reward window passes; earlier pages proceed. |
 | Sybil-resistant dispute quorum | **NOT enforced — priced, not prevented.** Flat count of 3; locked capital returns after terminality. See `05` §2a. |
-| Slashable contribution bond | **NOT implemented.** Only `sqrt(rows)` weighting + one-shard-per-address. |
-| Full on-chain STARK verification | **NOT implemented.** Sampled on chain, completed off-chain. See `05` §3. |
+| Slashable contribution bond | **Opt-in, not a fraud proof.** `setContributionBondRequirement` + slash-to-treasury exists; no requirement by default and no on-chain proof of poison. |
+| Full on-chain STARK verification | **NOT implemented.** Segmented path is reachable (`commitEpochSegmented`) but no prover exists; sampled on chain, completed off-chain. See `05` §3. |
 | Committee cannot decrypt rows | **NOT mitigated, by design** (residual F-10). |
-| Key-substitution detection by default | **NOT enforced by default** (opt-in on both sides; forensic detection after the fact). |
+| Key-substitution detection by default | **NOT enforced for default configs** (fail-closed only once a confidential encryptor declares its key; node opt-in; forensic detection after the fact). |
 
 ## Roadmap
 
 ### Done
 
 - **Protocol core:** task FSM + escrow + streaming channels + threshold reveal + rotation
-  timelocks; dispute quorum with winner-bond slash; admin controls under test.
+  timelocks; dispute quorum with winner-bond slash; commit-reveal dispute reporting with
+  reporter-bound salt; BLS-key proof-of-possession on registration; opt-in contribution
+  bonds (slash-to-treasury); segmented-proof commit path; settlement gated on reward
+  maturity; fee-on-transfer fail-closed accounting; admin controls under test.
 - **Compute:** deterministic execution engine wired into the worker (commit, re-execute,
-  dispute from own commits); `tfhe-rs` backend + remote DA behind cargo features;
-  two-node devnet agreement check in CI.
-- **Clients & ops:** SDK upload/weights/key-pin/DA hardening, Telegram ops bot with
-  read coverage, devnet compose, gas snapshot + lifecycle fuzz in the suite.
+  commit-reveal disputes from own commits); `tfhe-rs` backend + remote DA behind cargo features;
+  inbound mesh throttling per peer IP + stream cap; `strict_weights` opt-in; two-node
+  devnet agreement check in CI.
+- **Clients & ops:** SDK upload/weights/key-pin (fail-closed)/DA hardening + DecryptionGate
+  client, Telegram ops bot with read coverage + per-chat abuse quotas + alert dedupe,
+  content-addressed DA service with perimeter guard (rate limits, penalty box, shadowban,
+  idempotency, graceful shutdown), devnet compose, gas snapshot + lifecycle fuzz in the suite.
 
 ### Next
 
 - [ ] **Proving (Phase 3):** zkVM guest circuit over the 8-field transcript; recursive
   aggregation so on-chain verification is literally true; CPU/GPU benchmarks.
-- [ ] **Cryptoeconomics (Phase 4):** commit-reveal reporting, stake-weighted re-executor
+- [ ] **Cryptoeconomics (Phase 4):** stake-weighted re-executor
   assignment (+ slashing both ways), fhEVM Gateway threshold re-encryption, Foundry
   native invariants.
 - [ ] **Green devnet-live execution leg:** the two-node agreement script is wired in CI

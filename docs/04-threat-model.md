@@ -26,15 +26,16 @@ is `sqrt(rows)·liveness` rather than linear, so splitting one row into 400 sybi
 `400·sqrt(1) << sqrt(400)`. Residual: a funded adversary with many *genuinely distinct* rows is not
 preventable by any of this and is not a vulnerability — that is a bulk data purchase.
 
-*Corrected:* this finding previously claimed "a deposit of `contributionBond` is slashable on a
-fraud quorum". **No such deposit exists** — `contributionBond` appears nowhere in the tree, and
-`ContributionRejected` is never used. (`BondInsufficient` is a live error again, but it belongs
-to *node* registration bonds in the vault, not to contributors.)
-`Contribution.slashed` is read by `settle` but never set. So there is currently **no slashing and
-no economic penalty for a fraudulent shard**: a bad shard is detected only if a node re-executes
-and disputes, and a buyer cannot slash the contributor even then. Mitigating sybil farming rests
-entirely on the weighting and the one-shard-per-address rule. A bond is genuinely missing work,
-not a completed mitigation.
+*Update:* an opt-in bond now exists where none did. `setContributionBondRequirement` (buyer or
+update manager, only while the window is open, capped at `MAX_CONTRIBUTION_BOND`) makes every
+`submitContribution` pull that bond into the orchestrator's custody; `releaseContributionBond`
+returns it once the task can no longer slash it, and `slashContributionBond` forfeits it to the
+treasury — never to the buyer, so slashing cannot become a revenue stream — while marking the
+contribution `slashed` so `settle` skips its reward share. The slash path closes once the task is
+settled or terminal, so post-hoc burns of honest contributors' unreleased bonds revert. The default requirement is zero, so
+tasks created before this mechanism behave exactly as before. What the bond does **not** do is
+prove fraud on chain: there is no on-chain test for "this shard is poison", so the slash is an
+attested operator action with an event trail, not a fraud proof.
 
 ### F-02 — Proof replay across tasks (ADV2) — **Mitigated**
 The STARK transcript (`CipherTask.proofTranscript`) is bound to `chainId`, `address(this)`,
@@ -82,6 +83,13 @@ A ring can still deny an honest node its reward, and now also burn the honest wi
 alongside the reward (the chain cannot tell a lying winner from a lying quorum). Seeded or
 stake-weighted re-executor assignment is still genuinely missing and is called out in
 `05-honest-limitations.md` rather than papered over here.
+
+*Update — narrower without changing the count:* `commitDispute` + `reportDisputeWithSalt`
+hide the digest until the reveal, so a bare `reportDispute` in the mempool can no longer be
+copied by a ring that never re-executed (the salt is bound to the reporter; the bare path
+closes while a commitment is open). `registerNodeWithPop` binds the BLS key to a live signer
+(EIP-191 ECDSA over task, key, node, chain, contract), which at least proves one live signer
+per identity and ends key-theft repudiation for adopters. Neither changes the flat quorum of 3.
 
 F-15 removes the variant where the attack is free.
 
@@ -156,21 +164,22 @@ un-deaded `canFinalize`, whose `&& !combined` guard contradicted the auto-combin
 `submitPartialDecryption`. Regression: *"withdraw is blocked while the gate has not reached
 threshold"*, which asserts that not even the owner can shortcut it.
 
-### F-22 — Contributors shortchanged by un-redeemed reward channels (ADV2) — **Accepted, documented**
+### F-22 — Contributors shortchanged by un-redeemed reward channels (ADV2) — **Mitigated**
 `sweepTaskChannels` deliberately leaves a channel open until its 7-day reward window matures, so
 that a node which delivered a valid proof is not paid nothing merely because settlement ran first.
-The consequence is that at settlement time the escrow backing `userPool` and `committeePool` may
-still sit in unmatured channel locks, so `settle` caps both pools at the *swept* balance and the
-contributors receive less than their contractual share. The money is not lost — it remains locked
-in the vault and the node can still redeem it — but it is deferred, and the shortfall lands
-entirely on contributors rather than on the node.
+The final settlement page now *waits* for that maturity instead of paying the committee/buyer
+legs from an incomplete balance: `settleFrom` reverts `ChannelsImmature(taskId)` on the last page
+while any channel of the task is still redeemable, and succeeds once the window passes (the sweep
+at the top of the page then recovers everything). Earlier pages are unaffected — contributor
+shares come from the pool frozen by the first page, which node locks can never eat into — so
+settlement still progresses while it waits; only the terminal legs defer. Operators and the node
+itself treat this as a scheduled wait, not a failure: the node re-arms settlement at the earliest
+maturity instead of burning gas on the revert, and `settleToCompletion` explains the remedy.
 
-This is a genuine fairness gap and the fix is not obvious: treating unmatured channel locks as
-available would let the buyer's terminal refund credit funds that are still encumbered, which is
-worse. The clean resolution is to make settlement wait for the reward window to close (or to
-defer the contributor leg into a second, explicitly pull-based settlement pass), which is a
-protocol change rather than a patch. Left as-is and called out here rather than silently
-reshuffled.
+The one behavioural cost is stated plainly: a task's committee cut and buyer refund now land up
+to one reward window after the last epoch. The money was never lost (it sat in redeemable
+channels), but it is deferred, and this makes the deferral explicit and bounded rather than a
+silent haircut.
 
 ### F-23 — SDK could upload cleartext rows by omission (ADV1) — **Mitigated**
 `ShroudSdk` defaulted `encryptor` to `NoopEncryptor`, which serialises the plaintext `f64`s
@@ -410,17 +419,18 @@ was the only thing exercised — and it now has eight cases covering a clean rot
 six invalid parameter sets, timelock enforcement, single execution, cancellation, role separation,
 and the live-rotation guard.
 
-### F-33 — Segmented proofs were documented as implemented but are unreachable (ADV2) — **Documented, not implemented**
+### F-33 — Segmented proofs were documented as implemented but are unreachable (ADV2) — **Mitigated**
 `IProofVerifier.verifyProofSegmented` and the `ProofVerifier` implementation exist, and
 `docs/03-proof-of-compute.md` §5 states the contract "verifies each segment against the segment's
-public-input range. Implemented in `ProofVerifier.verifySegmented`". Neither is true of the system:
-`CipherTask.commitEpoch` calls `verifyProof` and only `verifyProof`, so the segmented path is never
-reached. A 32-byte segmented Merkle root submitted through the single-segment entry point would
-also be rejected by any real single-segment verifier.
+public-input range. Implemented in `ProofVerifier.verifySegmented`". The segmented path *was*
+unreachable: `CipherTask.commitEpoch` called `verifyProof` and only `verifyProof`, so no caller
+could ever reach it.
 
-There is no working STARK prover in this repo, so implementing segmentation now would produce code
-with nothing to verify against. It is recorded here as a documentation defect rather than papered
-over, and `05-honest-limitations.md` lists it as missing work.
+`commitEpochSegmented` now routes the same bindings and winner logic through
+`verifyProofSegmented`, so the path is reachable and covered. What is still honestly missing is
+the prover itself: there is no working STARK prover in this repo (mock verifier on devnet), so
+segmented verification is exercised against the mock's shape check, not a real AIR. The
+cryptographic half stays in `05-honest-limitations.md` as missing work.
 
 ### F-25 — SDK pre-validation was documented but absent (ADV1) — **Mitigated**
 `uploadAndMonetize`'s docstring promised it pre-validates "task status, per-address contribution
@@ -472,17 +482,19 @@ preserved in history), which is worth something, but it is detection, not preven
 requires someone to go and look.
 
 Closing this needs a `NetworkParams` client in the SDK that refuses to encrypt on a hash mismatch
-before upload, and a real key-pin check at node startup. **The SDK half is now done:**
-`NetworkParamsClient` plus `SdkConfig.networkParams` / `fhePublicKeyHash` make
-`uploadAndMonetize` verify `isCurrentKey` before it builds a payload, and the error names the
-on-chain hash and key version, flags a pending rotation, and explains the consequence. **The node
-half now exists but is opt-in:** with `node.enforce_key_pin = true` (plus `fhe.public_key_hash`
-and `contracts.network_params`) the node compares the on-chain key hash at startup and refuses to
-run on a mismatch. It defaults to off — the devnet config sets neither field — and it is a
-startup check, not a continuous one: a rotation that lands mid-epoch is not caught until the next
-restart. So the finding stands as **not mitigated for any default configuration**; an operator
-who opts in buys detection of a substituted key at boot, which is real but narrower than the
-original claim.
+before upload, and a real key-pin check at node startup. **The SDK half is now done and
+fail-closed:** `NetworkParamsClient` plus `SdkConfig.networkParams` / `fhePublicKeyHash` make
+`uploadAndMonetize` verify `isCurrentKey` before it builds a payload, and a client whose
+encryptor actually encrypts under a declared key now *refuses to construct* without
+`networkParams` (unless `allowUnpinnedKey` is set for deployments that pin out of band) — the
+old silent skip is gone. **The node half now exists but is opt-in:** with `node.enforce_key_pin
+= true` (plus `fhe.public_key_hash` and `contracts.network_params`) the node compares the
+on-chain key hash at startup and refuses to run on a mismatch, and the startup log is a `warn`,
+not an `info`, when the check is off — an operator who never sees the warning is not looking.
+It defaults to off — the devnet config sets neither field — and it is a startup check, not a
+continuous one: a rotation that lands mid-epoch is not caught until the next restart. So the
+finding stands as **not mitigated for any default configuration**, but the unsafe defaults are
+now loud on both sides instead of silent.
 
 ### F-09 — Committee minority decryption (ADV6) — **Mitigated**
 Shamir t-of-n. `DecryptionGate` additionally restricts *what* may be decrypted: a member's
@@ -527,6 +539,31 @@ Slice permits are `Permit`-style with `deadline`, `channelId`, monotonically inc
 `sliceIndex`, and a `MAX_CUMULATIVE` cap. The contract rejects `sliceIndex <= consumed` and
 `amount > remainingChannel`. Re-signing an old slice is worthless. Signature malleability is
 handled by using the low-s form and an explicit `s` bound check in `PaymentVault`.
+
+### F-36 — Fee-on-transfer tokens broke escrow accounting (ADV4) — **Mitigated (fail-closed)**
+`fundTask` and `takeBond` recorded the *requested* amount while the token could deliver less, so
+a fee-taking escrow token silently under-collateralised the task (or the bond price F-04
+assumes). Both paths now ledger the balance diff actually received. A shortfall fails closed —
+`EscrowMismatch` on creation, `BondInsufficient` on registration — rather than recording money
+that never arrived. Fee-on-transfer tokens are therefore rejected with a diagnosis, not
+mis-accounted; plain and no-return (USDT-style) tokens work as before.
+
+### F-37 — Transient-only reentrancy guard (pre-Cancun chains) — **Mitigated**
+The guard used `TLOAD`/`TSTORE` (EIP-1153), which do not exist pre-Cancun: on such a chain every
+guarded call misbehaves instead of merely costing more gas. The guard is now a storage flag —
+slightly more expensive on Cancun+, correct everywhere the bytecode can execute.
+
+### F-38 — Task-manager rotation overwrite (ADV5) — **Mitigated**
+`proposeTaskManager` silently overwrote a live rotation, including its `eta`: observers watching
+the first proposal could be switched to a different candidate mid-timelock. A live proposal must
+now be cancelled (itself an event) before a new one is queued.
+
+### F-39 — `openEpoch`/`reclaim` authority creep (ADV4) — **Mitigated**
+`openEpoch` accepted the contract owner alongside the buyer/update manager, handing a third key
+quiet control of the training trajectory; only the buyer and update manager may open epochs now
+(the owner's emergency lever remains `emergencyUnwind`, rate-limited by deadline + window).
+`reclaimUnspentEpochs` was buyer-only, stranding the refund behind a key the task may no longer
+use; the update manager — which already controls the epoch loop — may call it too.
 
 ## 3. Explicitly out of scope
 

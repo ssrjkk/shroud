@@ -128,6 +128,12 @@ interface ICipherTask {
     event EpochCommitted(uint256 indexed taskId, uint32 indexed epoch, address indexed node, bytes32 traceDigest);
     event EpochVerified(uint256 indexed taskId, uint32 indexed epoch, address indexed node, bool ok);
     event DisputeReported(uint256 indexed taskId, uint32 indexed epoch, address indexed reporter, bytes32 digest);
+    /// @dev Emitted by `DisputeLib` (DELEGATECALL, same topic): a reporter committed to a
+    ///      dispute digest without revealing it yet.
+    event DisputeCommitted(uint256 indexed taskId, uint32 indexed epoch, address indexed reporter, bytes32 commitment);
+    event ContributionBondRequirementSet(uint256 indexed taskId, uint128 amount);
+    event ContributionBondReleased(uint256 indexed taskId, address indexed contributor, uint128 amount);
+    event ContributionBondSlashed(uint256 indexed taskId, address indexed contributor, uint128 amount);
     event EpochSettled(uint256 indexed taskId, uint32 indexed epoch, address indexed node, uint128 amount);
     /// @notice The dispute quorum was reached for `epoch`: its claimant is not paid and the epoch
     ///         is skipped. Emitted instead of `TaskAborted`, because the task keeps running.
@@ -236,8 +242,22 @@ interface ICipherTask {
     error AlreadySettled(uint256 taskId);
     error SettlementBegun(uint256 taskId);
     error SettleCursorMismatch(uint256 taskId, uint256 provided);
+    /// @dev The final settlement page ran while a reward channel of the task could still be
+    ///      redeemed. Paying the committee/buyer legs against that incomplete balance would
+    ///      permanently short them (F-22): wait for the window, then settle again.
+    error ChannelsImmature(uint256 taskId);
     error NotTaskParty(uint256 taskId, address account);
     error ZeroAddress();
+    /// @dev A dispute commitment is already open for this reporter: it must be revealed with
+    ///      its salt (`reportDisputeWithSalt`), not bypassed with a bare `reportDispute`.
+    error CommitmentPending(uint256 taskId, uint32 epoch, address reporter);
+    /// @dev The reporter never committed, or the salt does not open the commitment.
+    error CommitmentMismatch(uint256 taskId, uint32 epoch, address reporter);
+    /// @dev Contribution-bond requirement outside the allowed range (see CipherTask).
+    error BondRequirementInvalid(uint256 taskId, uint128 amount);
+    error NoBondToRelease(uint256 taskId, address contributor);
+    error InvalidPopSignature(uint256 taskId, address node);
+    error TransferFailed(address token, address to, uint256 amount);
 
     /* ------------------------------------------------------------------ */
     /*                                 actions                             */
@@ -257,6 +277,14 @@ interface ICipherTask {
     ) external;
     function sealTask(uint256 taskId) external;
     function registerNode(uint256 taskId, bytes32 blsPubKey) external;
+    /// @notice Register with proof-of-possession of the node's signing key over its BLS key.
+    /// @dev `sig` must be a 65-byte ECDSA signature by `msg.sender` (EIP-191 personal message)
+    ///      over `keccak256(abi.encode(taskId, blsPubKey, msg.sender, block.chainid,
+    ///      address(this)))`. BLS keys are otherwise self-declared: uniqueness only stops lazy
+    ///      reuse, and anyone can register any key. Binding the BLS key to the node's EOA at
+    ///      registration at least proves one live signer per identity and makes key-theft
+    ///      repudiation impossible — the registration transaction itself is the attestation.
+    function registerNodeWithPop(uint256 taskId, bytes32 blsPubKey, bytes calldata sig) external;
     function openEpoch(
         uint256 taskId,
         bytes32 encWeightsCid,
@@ -273,12 +301,53 @@ interface ICipherTask {
         bytes32 metricsCid,
         bytes32 traceDigest
     ) external;
+    /// @notice Submit a segmented STARK (Merkle root over segment proofs) for epoch `epoch`.
+    /// @dev Same bindings and winner logic as `commitEpoch`, but verified through
+    ///      `IProofVerifier.verifyProofSegmented`. Without this entry point the segmented
+    ///      verifier path was unreachable: the docs claimed segmented verification existed
+    ///      while `commitEpoch` could only ever call `verifyProof` (F-33). `proof` must be
+    ///      exactly 32 bytes (the segment Merkle root); anything else reverts in the verifier.
+    function commitEpochSegmented(
+        uint256 taskId,
+        uint32 epoch,
+        bytes32 segmentedRoot,
+        bytes32 encWeightsCid,
+        bytes32 weightsDigest,
+        bytes32 metricsCid,
+        bytes32 traceDigest
+    ) external;
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external;
+    /// @notice Commit to a dispute digest before revealing it (front-run resistance).
+    /// @dev `commitment = keccak256(abi.encode(digest, salt, msg.sender))`. A bare
+    ///      `reportDispute` in the mempool can be copied by any other registered node that
+    ///      also holds a verified commit; the copy pays the copier the reporter bounty for
+    ///      work it did not do and, worse, lets a Sybil ring manufacture quorum cheaply.
+    ///      Committing first makes the digest unknowable until `reportDisputeWithSalt`.
+    function commitDispute(uint256 taskId, uint32 epoch, bytes32 commitment) external;
+    /// @notice Reveal a committed dispute digest.
+    function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external;
     function finalizeEpoch(uint256 taskId, uint32 epoch) external;
     function settle(uint256 taskId) external;
     function settleFrom(uint256 taskId, uint256 cursor) external;
     function settleCursor(uint256 taskId) external view returns (uint256);
     function isFullySettled(uint256 taskId) external view returns (bool);
+    /// @notice Set (or clear with 0) the per-contributor bond required to submit a shard.
+    /// @dev Anti-spam, not punishment: without any bond a fraudulent shard costs nothing to
+    ///      submit and is detected only if someone re-executes (F-01). Callable by the buyer
+    ///      or update manager while the contribution window is still open. Capped so a
+    ///      malicious buyer cannot set a prohibitive bond to censor contributions.
+    function setContributionBondRequirement(uint256 taskId, uint128 amount) external;
+    /// @notice Release a contributor's bond to them. Callable by anyone once the task can no
+    ///         longer slash it (terminal or fully settled); the money can only go to the
+    ///         contributor, so the caller has no discretion.
+    function releaseContributionBond(uint256 taskId, address contributor) external;
+    /// @notice Slash a contributor's bond to the treasury (never to the buyer: the buyer must
+    ///         gain nothing from slashing, or slashing becomes a revenue stream). Callable by
+    ///         the buyer, update manager or owner. The contribution is also marked slashed, so
+    ///         `settle` skips its reward share.
+    /// @dev Closed once the task is settled or terminal: post-hoc burns of honest
+    ///      contributors' unreleased bonds would be grief indistinguishable from a real slash.
+    function slashContributionBond(uint256 taskId, address contributor) external;
     function requestReveal(uint256 taskId, bytes calldata blsAggregateSig) external;
     function submitPartialDecryption(uint256 taskId, bytes32 partialDecryption) external;
     function withdraw(uint256 taskId) external;

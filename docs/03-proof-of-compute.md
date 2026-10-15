@@ -97,13 +97,12 @@ Rule: if the proof exceeds `MAX_STARK_BYTES` (48 KB), the node splits it into `k
 `k` trace segments and posts `merkleRootOfProofs`; the contract verifies each segment
 against the segment's public-input range.
 
-> **Not implemented.** `IProofVerifier.verifyProofSegmented` and a `ProofVerifier` implementation
-> of it exist, but `CipherTask.commitEpoch` calls `verifyProof` and only `verifyProof`, so this path
-> is unreachable from the only entry point that submits proofs. A 32-byte segmented Merkle root
-> submitted through `commitEpoch` would in any case be sent to the single-segment verifier and
-> rejected. There is also no STARK prover in this repo, so there is nothing today that could produce
-> either proof shape. Treat the paragraph above as the design intent, not as shipped behaviour;
-> see `05-honest-limitations.md` and threat model F-33.
+> **Plumbing shipped, prover missing.** `commitEpochSegmented` routes the same bindings and
+> winner logic through `verifyProofSegmented`, so the segmented path is reachable and covered
+> (`Hardening` spec) — the paragraph above is real routing, not just design intent. What is
+> still missing is anything that *produces* a segmented proof: there is no STARK prover in
+> this repo (mock verifier on devnet checks shape, not an AIR), so the cryptography half
+> stays in `05-honest-limitations.md` and threat model F-33.
 
 ## 4. Dispute / re-execution window (the FHE honesty layer)
 
@@ -126,6 +125,14 @@ Why this is sound: re-execution is deterministic given `(R, w_e, lr, update_mode
 All of those are public inputs. A node that lies must produce a digest that differs from a
 deterministic function of public data — so ≥ 3 independent honest nodes will disagree with
 it. The gRPC `EpochDigest` gossip makes the quorum cheap (one 32 B message per peer).
+
+> Implementation notes (where the diagram above is looser than the code): the quorum is a
+> flat 3 distinct reporters, not "3 of 5" — there is no seeded assignment, only the
+> registration bond pricing Sybils (F-04). The slashed bond is the *winner's* registration
+> bond (into the buyer refund); reporter bounties come from `reexecutionBps` of the epoch
+> lock, not from the bond. Reports are filed commit-reveal (`commitDispute` →
+> `reportDisputeWithSalt`, salt bound to the reporter) so a bare report cannot be copied
+> from the mempool; the bare `reportDispute` stays as the compatible path.
 
 ## 5. On-chain verification
 

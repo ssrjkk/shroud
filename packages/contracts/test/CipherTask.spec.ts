@@ -5,7 +5,7 @@ import { ethers } from "hardhat";
 
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, NetworkParams, PaymentVault, TestToken } from "../typechain-types";
-import { bytes32Of, externalUint64, params, proofFor, proofRef, reason4, redeemDigest, sliceDomain } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef, reason4, redeemDigest, sliceDomain } from "./helpers";
 import { deployLinked } from "../scripts/libraries";
 
 /**
@@ -619,14 +619,10 @@ describe("CipherTask", () => {
       const { task, vault, token, buyer, alice, bob, node, treasury } = fx;
       const id = await sealed(fx, { epochs: 1, aRows: 4_000, bRows: 1_000 });
       await runEpoch(fx, id, 0, node);
-      await task.settle(id);
-
-      const aliceDue = await task.pendingPayout(alice.address);
-      const bobDue = await task.pendingPayout(bob.address);
-      expect(aliceDue).to.be.greaterThan(bobDue);
-      expect(aliceDue).to.be.lessThan(bobDue * 4n); // sqrt damping, not linear
 
       // Node pay streams through its channel rather than being credited at settlement.
+      // Redeem BEFORE the window matures: once matured, `settle` sweeps unredeemed locks
+      // back into the sub-balance instead of leaving them for the node.
       const channelId = await task.epochChannel(id, 0);
       const ch = await vault.channelInfo(channelId);
       const digest = await vault.redeemDigest(channelId, await task.getAddress(), node.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256);
@@ -645,6 +641,16 @@ describe("CipherTask", () => {
       await vault.connect(node).redeem(channelId, 0, ch.maxCumulative, ethers.MaxUint256, sig);
       // Single-epoch task: the node pool is budget 1e9 * nodeShareBps 1500 / 10000 = 1.5e8.
       expect(await token.balanceOf(node.address)).to.equal(150_000_000n);
+
+      // The winner's reward channel matures 7 days after it opens; the final settlement
+      // page waits for every channel (F-22), so move past the window first.
+      await matureRewardWindows();
+      await task.settle(id);
+
+      const aliceDue = await task.pendingPayout(alice.address);
+      const bobDue = await task.pendingPayout(bob.address);
+      expect(aliceDue).to.be.greaterThan(bobDue);
+      expect(aliceDue).to.be.lessThan(bobDue * 4n); // sqrt damping, not linear
 
       await vault.connect(alice).claim();
       await vault.connect(bob).claim();
@@ -667,6 +673,7 @@ describe("CipherTask", () => {
       const { task, node } = fx;
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, node);
+      await matureRewardWindows();
       await task.settle(id);
       await expect(task.settle(id)).to.be.revertedWithCustomError(task, "AlreadySettled");
     });
@@ -695,6 +702,7 @@ describe("CipherTask", () => {
       await expect(task.settle(id)).to.be.revertedWithCustomError(task, "EpochsRemain");
 
       await runEpoch(fx, id, 2, node);
+      await matureRewardWindows();
       await expect(task.settle(id)).to.emit(task, "EscrowSettled");
     });
 
@@ -725,6 +733,7 @@ describe("CipherTask", () => {
       const fx = await deployFixture();
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, fx.node);
+      await matureRewardWindows();
       await fx.task.settle(id);
       return { fx, id };
     }
@@ -1042,6 +1051,7 @@ describe("CipherTask", () => {
       const { bls, outsider, gate, task } = fx;
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, fx.node);
+      await matureRewardWindows();
       await task.settle(id);
       const [cid] = await task.acceptedWeights(id);
       const message = await gate.revealMessage(id, cid);
@@ -1114,6 +1124,7 @@ describe("CipherTask", () => {
       expect(await token.balanceOf(buyer.address)).to.equal(0n);
 
       // `settle` still pays everyone out in full afterwards.
+      await matureRewardWindows();
       await task.settle(id);
       expect(await vault.taskBalance(id)).to.equal(0n);
       void escrow;
@@ -1125,6 +1136,7 @@ describe("CipherTask", () => {
       const fx = await deployFixture();
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, fx.node);
+      await matureRewardWindows();
       await fx.task.settle(id);
       return { fx, id };
     }

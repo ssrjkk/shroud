@@ -52,6 +52,23 @@ it means a non-deterministic executor or a node bug. `/task` separately flags
 *different* nodes disagreeing about an epoch, which is the condition a dispute
 exists for and is not itself a bug.
 
+Dispute alerts now also cover `DisputeCommitted` — the commit-reveal front half of a
+dispute. A commitment with no follow-up reveal is a stuck reporter or someone probing
+the quorum, and it is worth knowing about before the reveal lands.
+
+## Anti-abuse (per-chat throttling)
+
+One command costs up to ~15 RPC calls (`/pool`), so a compromised allowlisted chat
+is an amplification vector onto the RPC node. `src/abuse.mjs` prices commands in
+RPC-load units (`/pool` 15, `/task` 5, `/status` 4, `/help` 1) against a per-chat
+sliding-window budget; over-budget chats get a retry-after reply, floods of
+identical commands raise a decay-scored risk, greylisted chats are tarpitted and
+spammers are shadowbanned — a plausible reply with zero RPC behind it. Every
+handler additionally runs under `ABUSE_HANDLER_TIMEOUT_MS`, and the RPC provider
+itself carries `RPC_TIMEOUT_MS`, so a dead node fails commands in milliseconds
+instead of stalling both poll loops. All knobs are env (`ABUSE_*`, see
+`.env.example`); the guard is fail-open (better an extra RPC than a dead bot).
+
 ## Setup
 
 ### 1. Create the bot
@@ -91,7 +108,7 @@ know.
 npm test
 ```
 
-39 tests, no bot token and no chain required. They cover the parts that fail
+54 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -102,8 +119,16 @@ quietly in production:
   what caught `new <Interface instance>` (every read threw, every read caught, so
   the bot reported empty pools forever) and `Number()` of the dispute-quorum pair
   (always `NaN`)
+- log identity for the alert loop: decoded logs carry `transactionHash` + `index`
+  (this caught `#decode` reading `log.hash`, which does not exist on an ethers v6
+  `Log` — every rendered "tx …" was `undefined`), and `eventUid`/`dedupeEvents`
+  suppress re-alerts across restarts and reorg rewinds
 - config validation, including that a missing or non-numeric allowlist stops
   the bot rather than opening it
+- per-chat abuse quotas (heavy commands cost more), input sanitization, flood →
+  shadowban escalation, handler deadlines, and the RPC timeout failing fast
+- bounded Telegram send queue (over-cap alerts shed newest-first with a counter,
+  broadcasts never grow memory without limit)
 
 ## Honest limits of the bot itself
 
@@ -111,9 +136,12 @@ quietly in production:
   no public URL, so a webhook would need infrastructure this does not have.
   Trade-off: Telegram caps long polling at ~25 updates/s, which is irrelevant
   here but would be for a busy public bot.
-- **The alert cursor is per-block, not per-event.** A crash between the RPC read
-  and the cursor save re-alerts on that window. Cursor saves are written after
-  each scan, so the window is one poll interval.
+- **At-least-once alerts with duplicate suppression, not exactly-once.** Every
+  observed log is remembered by `transactionHash:logIndex` (persisted, capped at
+  2000) and skipped on rescan, and a reorg below the cursor rewinds instead of
+  skipping the range. What remains: a crash between sending and persisting still
+  re-alerts (a duplicate is noise; a loss would be an incident, so this is the
+  right bias), and a log the RPC never returns is never alerted on.
 - **It reports what the chain says, not whether the chain is honest.** Every
   caveat in `/limits` applies to the bot too: it is a better way to notice a key
   rotation, not a way to prove one did not happen.
