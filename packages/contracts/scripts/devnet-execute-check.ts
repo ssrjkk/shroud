@@ -62,9 +62,12 @@ async function main() {
   const sdk = await import("../../sdk/dist/index.js");
   // @ts-ignore: same as above.
   const weights = await import("../../sdk/dist/weights.js");
+  // @ts-ignore: FileShardStore is node-only (node:fs), so it lives under the
+  // `./file-store` subpath rather than the browser-safe index.
+  const filestore = await import("../../sdk/dist/file-store.js");
 
   // --- 1-2. Seed the shared DA directory -------------------------------------------
-  const store = new sdk.FileShardStore(cacheDir);
+  const store = new filestore.FileShardStore(cacheDir);
   const shard = await new sdk.NoopEncryptor().encryptRows(MATRIX, FEATURES);
   const putShard = await store.put(shard.ciphertext);
   const ctDigest = ethers.keccak256(shard.ciphertext);
