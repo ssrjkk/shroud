@@ -59,9 +59,9 @@ async function main() {
   // @ts-ignore: cross-package `.js` import — contracts tsconfig uses moduleResolution
   // node, which takes `.js` literally and misses the adjacent `.d.ts`; node resolves it
   // fine at runtime.
-  const sdk = await import("../../../sdk/dist/index.js");
+  const sdk = await import("../../sdk/dist/index.js");
   // @ts-ignore: same as above.
-  const weights = await import("../../../sdk/dist/weights.js");
+  const weights = await import("../../sdk/dist/weights.js");
 
   // --- 1-2. Seed the shared DA directory -------------------------------------------
   const store = new sdk.FileShardStore(cacheDir);
