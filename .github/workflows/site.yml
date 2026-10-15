@@ -3,9 +3,9 @@ name: site
 on:
   push:
     branches: [master]
-    paths: ["web/**", ".github/workflows/site.yml"]
+    paths: ["web/**", "node/src/fhe.rs", "node/Cargo.toml", ".github/workflows/site.yml"]
   pull_request:
-    paths: ["web/**", ".github/workflows/site.yml"]
+    paths: ["web/**", "node/src/fhe.rs", "node/Cargo.toml", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 # Pages deployment needs these; PRs from forks cannot deploy, so the deploy

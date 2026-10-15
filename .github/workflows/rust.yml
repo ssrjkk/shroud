@@ -3,9 +3,9 @@ name: rust
 on:
   push:
     branches: [master]
-    paths: ["node/**", "packages/contracts/**", ".github/workflows/rust.yml"]
+    paths: ["node/**", "web/tests/**", "packages/contracts/**", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["node/**", "packages/contracts/**", ".github/workflows/rust.yml"]
+    paths: ["node/**", "web/tests/**", "packages/contracts/**", ".github/workflows/rust.yml"]
   workflow_dispatch:
 
 env:
