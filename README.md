@@ -3,6 +3,8 @@
 [![contracts](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml)
 [![sdk](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml)
 [![rust](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml)
+[![site](https://github.com/ssrjkk/shroud/actions/workflows/site.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/site.yml)
+[![bot](https://github.com/ssrjkk/shroud/actions/workflows/bot.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/bot.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
 
 🌐 **Live site: [ssrjkk.github.io/shroud](https://ssrjkk.github.io/shroud/)** — what it is,
