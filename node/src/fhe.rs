@@ -526,10 +526,10 @@ impl FheEngine for ReferenceCpuEngine {
                 let base = r * f;
                 // Prediction in quantised units: Σ w·x / S + bias.
                 let mut dot: i128 = 0;
-                for j in 0..f - 1 {
+                for (j, wj) in w.iter().enumerate().take(f - 1) {
                     dot = dot
                         .checked_add(
-                            i128::from(w[j])
+                            i128::from(*wj)
                                 .checked_mul(i128::from(shard.values[base + j]))
                                 .ok_or_else(|| overflow("dot product"))?,
                         )
@@ -540,8 +540,8 @@ impl FheEngine for ReferenceCpuEngine {
                 loss = loss
                     .checked_add(err.checked_mul(err).ok_or_else(|| overflow("loss"))?)
                     .ok_or_else(|| overflow("loss"))?;
-                for j in 0..f - 1 {
-                    grad[j] = grad[j]
+                for (j, gj) in grad.iter_mut().enumerate().take(f - 1) {
+                    *gj = (*gj)
                         .checked_add(
                             err.checked_mul(i128::from(shard.values[base + j]))
                                 .ok_or_else(|| overflow("gradient"))?,
@@ -766,6 +766,9 @@ mod tfhe_backend {
                     path.display()
                 )))
             };
+            // `bad` is used twice below, so it cannot be moved into `map_err`:
+            // the borrow is load-bearing, and clippy's suggestion does not apply.
+            #[allow(clippy::needless_borrows_for_generic_args)]
             let mtime = std::fs::metadata(path)
                 .map_err(&bad)?
                 .modified()
