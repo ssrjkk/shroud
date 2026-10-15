@@ -126,7 +126,7 @@
   <div class="tblwrap rv"><table class="tbl">
     <tr><th data-i18n="idx.th.g">Гарантия</th><th data-i18n="idx.th.h">Как</th><th data-i18n="idx.th.s">Статус</th></tr>
     <tr><td data-i18n="idx.e1k">Сквозное FHE</td><td data-i18n="idx.e1v">строки шифруются на клиенте и никогда не расшифровываются; веса раскрывает комитет после settlement</td><td><span class="stamp ok">enforced</span></td></tr>
-    <tr><td data-i18n="idx.e2k">Явные бюджеты</td><td><code>createTask(budget, params)</code> <span data-i18n="idx.e2v">эскроуирует ровно названное — ни больше</span></td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e2k">Явные бюджеты</td><td><code>createTask(budget, params)</code> <span data-i18n="idx.e2v">createTask(budget, params) эскроуирует ровно названное — ни больше</span></td><td><span class="stamp ok">enforced</span></td></tr>
     <tr><td data-i18n="idx.e3k">Сеттлмент всегда завершается</td><td data-i18n="idx.e3v">всех сразу не оплатить (~584M газа при лимите 30M), поэтому settleFrom(taskId, cursor) — по 200 за вызов</td><td><span class="stamp ok">enforced</span></td></tr>
     <tr><td data-i18n="idx.e4k">Раскрытие аттестовано</td><td data-i18n="idx.e4v">Disclosed только после threshold частичных расшифровок; покупатель церемонию не срезает</td><td><span class="stamp ok">enforced</span></td></tr>
     <tr><td data-i18n="idx.e5k">Ротация ключей не врёт</td><td data-i18n="idx.e5v">NetworkParams привязывает кандидата к хэшу при предложении и перепроверяет при исполнении</td><td><span class="stamp ok">enforced</span></td></tr>

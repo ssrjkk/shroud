@@ -52,13 +52,26 @@
   }
   function zeros(f) { var a = []; for (var i = 0; i < f; i++) a.push(0); return a; }
 
+  function splitRow(ln) {
+    // Excel-стиль: колонки через ";", десятичная запятая внутри чисел.
+    // Без ";" — старый формат: запятая/пробел/табуляция, точка в дробях.
+    if (ln.indexOf(";") !== -1) {
+      return ln.split(";").map(function (p) {
+        var s = p.trim().replace(/\s+/g, "");
+        if (/^-?\d+,\d+$/.test(s)) s = s.replace(",", ".");
+        return s;
+      }).filter(function (x) { return x !== ""; });
+    }
+    return ln.split(/[,\t ]+/).filter(function (x) { return x !== ""; });
+  }
+
   function parseCsv(text) {
     var rows = [];
     var lines = String(text).replace(/^﻿/, "").split(/\r?\n/);
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i].trim();
       if (!ln || ln[0] === "#") continue;
-      var parts = ln.split(/[;,\t ]+/).filter(function (x) { return x !== ""; });
+      var parts = splitRow(ln);
       var nums = parts.map(Number);
       if (nums.some(function (x) { return !isFinite(x); })) {
         throw new Error(t("lab.e.rowline") + (i + 1) + t("lab.e.notnum") + ln + "»");

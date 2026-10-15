@@ -36,22 +36,22 @@
 <main id="main">
 <section class="sect">
   <div class="sect-head"><span class="sect-num" data-i18n="lab.n">LAB / 01–06</span><h2 class="sect-title" data-i18n="lab.t">Протокол — руками, в браузере</h2></div>
-  <p class="sect-lede" data-i18n="lab.lede">Шесть стендов слева — журнал справа. Движок тот же, что в node/src/fhe.rs и @shroud/sdk: квантование round(v·scale), reference-SGD с фиксированной точкой, keccak-транскрипт, proof-референс с префиксом STAR. Демо-раскладка шарда — shroud/noop/v1 (боевая — relayer/TFHE, смысл байтов тот же). Итог — веса, дайджесты и JSON-отчёт.</p>
-  <div class="notice warn"><b class="t" data-i18n="lab.honest">Честно о стенде</b><span data-i18n="lab.honestp">Reference-движок считает в открытую из демо-байтов, чтобы показать механику. Боевой узел считает TFHE по шифротексту и коммитит 32-байтный референс, который проверяется только на mock-верифаере. Криптографических гарантий стенд не даёт — он показывает порядок шагов и форматы.</span></div>
+  <p class="sect-lede" data-i18n="lab.lede">Шесть стендов плюс журнал с итогами. Математика — как в node/src/fhe.rs и @shroud/sdk (квантование, reference-SGD, keccak-транскрипт, STAR-референс), сверено скриптом web/tests/equiv.mjs. Демо-раскладка шарда — shroud/noop/v1 (боевая — relayer/TFHE, смысл байтов тот же). Итог — веса, дайджесты и JSON-отчёт.</p>
+  <div class="notice warn"><b class="t" data-i18n="lab.honest">Честно о стенде</b><span data-i18n="lab.honestp">Reference-движок считает в открытую из демо-байтов (dev-путь узла: shroud/noop/v1, без шифрования). Боевой TFHE-путь включается флагом prover, полной ончейн-проверки STARK пока нет, первого живого commitEpoch ещё не было — см. docs/05 §8. Стенд показывает порядок шагов и форматы, а не криптографические гарантии.</span></div>
 
   <div class="lab-modes"><div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Новичкам</button><button data-mode-btn="pro" data-i18n="mode.pro">Профи</button></div></div>
 
   <div class="lab">
   <div>
     <fieldset class="bench only-new"><legend data-i18n="lab.simp">Быстрый запуск</legend><div class="bench-in">
-      <p class="hint" data-i18n="lab.simph">Нажми одну кнопку: данные зашифруются, эпоха посчитается, выплаты рассчитаются. Подробности — в журнале справа.</p>
+      <p class="hint" data-i18n="lab.simph">Нажми одну кнопку: данные зашифруются, эпоха посчитается, выплаты рассчитаются. Подробности — в журнале.</p>
       <div class="btnrow"><button class="btn btn-primary btn-sm" id="runAll" data-i18n="lab.run">Запустить демо</button></div>
       <div aria-live="polite" id="msg0"></div>
       <div class="simple-out" id="simpleOut" data-i18n="lab.simple0">здесь появится итог простыми словами</div>
     </div></fieldset>
 
     <fieldset class="bench"><legend data-i18n="lab.b1">Стенд 01 — данные</legend><div class="bench-in">
-      <p class="hint" data-i18n="lab.b1h">CSV «признаки,метка», по строке на запись. Только неотрицательные — TFHE шифрует беззнаковые целые.</p>
+      <p class="hint" data-i18n="lab.b1h">CSV «признаки,метка», по строке на запись. Числа с точкой; разделитель — запятая, точка с запятой, пробел или табуляция. Только неотрицательные — TFHE шифрует беззнаковые целые.</p>
       <div class="field"><label data-i18n="lab.preset">Пресет</label><select id="preset">
         <option value="housing" data-i18n="lab.p1">Жильё — 2 признака + цена</option>
         <option value="medical" data-i18n="lab.p2">Медицина — 3 признака + риск</option>

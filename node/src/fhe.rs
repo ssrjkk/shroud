@@ -1352,4 +1352,131 @@ mod tests {
             .execute_epoch(&inputs_for(&[2.0, 3.0], Weights::zeros(2).unwrap()))
             .is_err());
     }
+
+    /// The site lab (`web/`) must compute the same digests as this engine.
+    ///
+    /// `web/tests/vectors.json` pins golden pipeline outputs; this test and the
+    /// site's `node web/tests/equiv.mjs` check both pin the same file, so drift
+    /// on either side fails its own CI job. See the vectors file header for how
+    /// the goldens were cross-validated (ethers keccak256, built `@shroud/sdk`,
+    /// this exact layout).
+    #[test]
+    fn site_vectors_pin_the_digest_layout() {
+        use std::str::FromStr;
+
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct VectorFile {
+            pipelines: Vec<Pipeline>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Pipeline {
+            name: String,
+            features: u32,
+            rows: Vec<Vec<f64>>,
+            scale: u32,
+            lr_q16: u32,
+            l2_q16: u32,
+            minibatch: usize,
+            seed: u64,
+            expect: Expect,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Expect {
+            bytes: usize,
+            commit: String,
+            cid: String,
+            lanes: Vec<i32>,
+            loss_mean_q: String,
+            n_rows: u64,
+            weights_digest: String,
+            trace_digest: String,
+            proof_ref: String,
+        }
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../web/tests/vectors.json");
+        let raw = std::fs::read_to_string(&path).expect("web/tests/vectors.json must exist");
+        let vectors: VectorFile = serde_json::from_str(&raw).expect("vectors.json parses");
+        assert!(!vectors.pipelines.is_empty(), "no golden pipelines pinned");
+
+        for p in &vectors.pipelines {
+            let flat: Vec<f64> = p.rows.iter().flatten().copied().collect();
+            // Shard bytes exactly like the SDK's `NoopEncryptor`, then CID + commitment.
+            let bytes = noop_bytes(p.features, &flat);
+            assert_eq!(bytes.len(), p.expect.bytes, "{}: shard length", p.name);
+            assert_eq!(
+                format!("{:#x}", keccak256(&bytes)),
+                p.expect.cid,
+                "{}: shard CID",
+                p.name
+            );
+            let mut preimage = b"shroud/noop-row/v1\0".to_vec();
+            for v in &flat {
+                preimage.extend_from_slice(&v.to_le_bytes());
+            }
+            assert_eq!(
+                format!("{:#x}", keccak256(&preimage)),
+                p.expect.commit,
+                "{}: row commitment",
+                p.name
+            );
+
+            // Full epoch through the real engine, same pins as the golden.
+            let inputs = EpochInputs {
+                task_id: U256::from_be_slice(keccak256(b"demo-task-1").as_slice()),
+                epoch: 0,
+                chain_id: 31_337,
+                cipher_task: Address::from_str("0x5FbDB2315678afecb367f032d93F642f64180aa3")
+                    .expect("cipher task parses"),
+                ct_root: B256::from_str(&p.expect.cid).expect("cid parses"),
+                prev_weights_digest: B256::ZERO,
+                features: p.features,
+                scale: p.scale,
+                lr_q16: p.lr_q16,
+                l2_q16: p.l2_q16,
+                minibatch: p.minibatch,
+                seed: p.seed,
+                prev_weights: Some(Weights::zeros(p.features).expect("genesis zeros")),
+                prev_weights_bytes: Vec::new(),
+                shards: vec![ShardInput {
+                    leaf_index: 0,
+                    cid: B256::from_str(&p.expect.cid).expect("cid parses"),
+                    ct_digest: B256::from_str(&p.expect.commit).expect("ct parses"),
+                    bytes,
+                }],
+            };
+            let engine = ReferenceCpuEngine::new(p.scale, p.lr_q16, p.l2_q16, p.minibatch);
+            let out = engine.execute_epoch(&inputs).expect("golden epoch executes");
+            let lanes: Vec<i32> = out.weights.lanes.iter().map(|w| *w as i32).collect();
+            assert_eq!(lanes, p.expect.lanes, "{}: lanes", p.name);
+            assert_eq!(
+                out.loss_mean_q,
+                Some(p.expect.loss_mean_q.parse::<i128>().expect("loss parses")),
+                "{}: loss",
+                p.name
+            );
+            assert_eq!(out.rows, p.expect.n_rows, "{}: rows", p.name);
+            assert_eq!(
+                format!("{:#x}", out.weights_digest),
+                p.expect.weights_digest,
+                "{}: weights digest",
+                p.name
+            );
+            assert_eq!(
+                format!("{:#x}", out.trace_digest),
+                p.expect.trace_digest,
+                "{}: trace digest",
+                p.name
+            );
+            assert_eq!(
+                format!("{:#x}", proof_reference(out.trace_digest)),
+                p.expect.proof_ref,
+                "{}: proof reference",
+                p.name
+            );
+        }
+    }
 }

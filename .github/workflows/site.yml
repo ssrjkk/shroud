@@ -54,7 +54,11 @@ jobs:
           if missing:
               print("missing README shots:"); print("\n".join(missing)); sys.exit(1)
           print(f"README shots OK: {len(shots)} files")
+          # Site math must match the golden vectors pinned with the Rust node
+          # (node/src/fhe.rs pins the same file from the other side).
           EOF
+      - name: check site math matches golden vectors
+        run: node web/tests/equiv.mjs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

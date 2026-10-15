@@ -91,7 +91,7 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 ```sh
 # contracts
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 110 + 2 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 110 passing
 
 # sdk
 cd packages/sdk
