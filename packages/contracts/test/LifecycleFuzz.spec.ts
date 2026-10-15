@@ -243,13 +243,23 @@ describe("LifecycleFuzz", () => {
             const id = pickPhase(2, 5) ?? anyAlive();
             if (id === null) continue;
             const t = await task.tasks(id);
-            const n = pick(nodes);
             act = `dispute/${id}/${t.nextEpoch}`;
-            const mine = await task.commits(id, t.nextEpoch, n.address);
-            // No verified commit of ours, no report: counting this as an attempt would
-            // inflate dispute coverage without sending anything.
-            if (!mine.verified || mine.traceDigest === ethers.ZeroHash) continue;
-            await task.connect(n).reportDispute(id, t.nextEpoch, mine.traceDigest);
+            // Every node whose verified commit differs from the claim reports it: with
+            // divergent commits in flight this reaches quorum organically and exercises
+            // the rejection path, not just single reports. Reports that agree with the
+            // claim (or repeat) revert inside and are skipped, not counted.
+            let sent = 0;
+            for (const n of nodes) {
+              const mine = await task.commits(id, t.nextEpoch, n.address);
+              if (!mine.verified || mine.traceDigest === ethers.ZeroHash) continue;
+              try {
+                await task.connect(n).reportDispute(id, t.nextEpoch, mine.traceDigest);
+                sent++;
+              } catch {
+                // Agrees with the claim, already recorded, or outside the window.
+              }
+            }
+            if (sent === 0) continue;
           } else if (roll < 90) {
             const id = pickPhase(2, 5) ?? anyAlive();
             if (id === null) continue;

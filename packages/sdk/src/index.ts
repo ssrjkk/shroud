@@ -299,10 +299,13 @@ export class ShroudSdk {
     }
 
     // 3. Commit the shard to the task.
+    // An omitted shape proof is empty bytes: the contract only rejects those when it
+    // requires proofs (checked above), and passing `undefined` through would die inside
+    // ethers' ABI encoder with an obscure BytesLike error instead of uploading.
     const shard: PreparedShard = {
       ciphertextCid: cid,
       ctDigest,
-      shapeProof: opts.shapeProof as Hex,
+      shapeProof: (opts.shapeProof ?? "0x") as Hex,
       rowCommitment,
       rows,
     };

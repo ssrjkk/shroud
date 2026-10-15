@@ -55,15 +55,19 @@ export class MemoryShardStore implements ShardStore {
   async put(payload: Uint8Array): Promise<{ cid: string; digest: string }> {
     // Content-addressed: the local keccak256 is both the cid and the on-chain pin, so the two
     // cannot drift apart the way a separate transport hash would.
-    const digest = ethers.keccak256(payload);
-    this.objects.set(digest, payload);
+    // Copied on the way in and on the way out (see FileShardStore): the caller keeps a live
+    // reference otherwise, and mutating it afterwards would corrupt every later read —
+    // including another party's `getVerified` in the same process.
+    const bytes = Uint8Array.from(payload);
+    const digest = ethers.keccak256(bytes);
+    this.objects.set(digest, bytes);
     return { cid: digest, digest };
   }
 
   async get(cid: string): Promise<Uint8Array> {
     const hit = this.objects.get(cid);
     if (!hit) throw new Error(`shard ${cid} not found`);
-    return hit;
+    return Uint8Array.from(hit);
   }
 
   async getVerified(cid: string, expectedCtDigest: string): Promise<Uint8Array> {
@@ -162,9 +166,13 @@ export class HttpShardStore implements ShardStore {
     });
 
     // Validate whatever address the store handed back before it can be committed on-chain.
-    if (typeof body.cid !== "string" || !CID_RE.test(body.cid)) {
+    // `assertSafeCid`, not a bare regex: the regex alone admits "a.." (dots are legal
+    // inside), which `get` would then refuse — a store could hand back a CID that commits
+    // fine and never reads back. One validator for both directions, no drift.
+    if (typeof body.cid !== "string") {
       throw new Error(`shard store returned an unusable cid ${JSON.stringify(body.cid)}`);
     }
+    assertSafeCid(body.cid);
 
     // The on-chain pin is derived here, not read from the response. A store that echoes a wrong
     // digest would otherwise be able to steer what gets committed.

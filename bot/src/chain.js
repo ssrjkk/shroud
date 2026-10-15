@@ -472,6 +472,22 @@ const grab = async (name) =>
   }
 }
 
+/**
+ * Task ids for the pool screen, newest first.
+ *
+ * On-chain ids start at 1 and `taskCount()` is the newest id, so the window is
+ * `(count-shown, count]` — not `[count-shown, count)`. The old loop started at
+ * `count - 1`: it never showed the newest task and always queried id 0, which
+ * reverts. Pure, so the off-by-one is pinned by a test instead of a chat log.
+ */
+export function poolIds(count, shown) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  const s = Math.max(0, Math.floor(Number(shown) || 0));
+  const ids = [];
+  for (let i = n; i > Math.max(0, n - s); i--) ids.push(BigInt(i));
+  return ids;
+}
+
 /** Mirrors `ICipherTask.TaskStatus` so the bot never invents a status name. */
 export function taskStatusName(status) {
   return (

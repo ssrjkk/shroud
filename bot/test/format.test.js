@@ -22,6 +22,7 @@ import {
   renderHelp,
   htmlEscape,
 } from "../src/format.js";
+import { createHandlers, mismatchArgs } from "../src/index.js";
 
 const ZERO32 = "0x" + "0".repeat(64);
 const ZERO20 = "0x" + "0".repeat(40);
@@ -174,6 +175,70 @@ test("renderTask shows quorum progress as have over need", () => {
   const out = renderTask({ task, commits: [], winner: null, quorum: { need: 3, have: 1 } }, "42");
   assert.ok(out.includes("1/3"), "progress shown");
   assert.ok(!out.includes("NaN"), "never NaN");
+});
+
+test("mismatchArgs carries the previous digest to the renderer", () => {
+  const ev = {
+    args: {
+      taskId: 9n,
+      epoch: 2,
+      node: "0x" + "5".repeat(40),
+      traceDigest: "0x" + "ab".repeat(32),
+    },
+  };
+  const out = renderCommitMismatch(mismatchArgs(ev, "0x" + "cd".repeat(32)));
+  assert.ok(out.includes("epoch 2"));
+  assert.ok(!out.includes("previously —"), "previous digest present, not a dash");
+});
+
+test("pool handler reads newest-first and skips nothing", async () => {
+  // The off-by-one this pins: ids start at 1, taskCount() is the newest id.
+  const seen = [];
+  const stub = {
+    taskCount: async () => 3,
+    task: async (id) => {
+      seen.push(id);
+      return { taskId: String(id), status: 2, statusName: "Collecting", budget: 1n, locked: 0n, contributors: 1, shards: 1, nextEpoch: 0, ctRoot: "0x", ctRootSet: false, params: null };
+    },
+  };
+  const { pool } = createHandlers(stub, {});
+  const out = await pool();
+  assert.deepEqual(seen, [3n, 2n, 1n]);
+  assert.ok(out.includes("Collecting"));
+});
+
+test("task handler threads the running epoch through commits, winner and quorum", async () => {
+  const calls = [];
+  const fakeTask = { taskId: "7", status: 5, statusName: "EpochCommitting", budget: 1n, locked: 0n, contributors: 1, shards: 1, nextEpoch: 4, ctRoot: "0x", ctRootSet: false, params: null };
+  const stub = {
+    task: async (id) => {
+      calls.push(["task", id]);
+      return id === 7n ? fakeTask : null;
+    },
+    commitsForEpoch: async (id, epoch) => {
+      calls.push(["commitsForEpoch", id, epoch]);
+      return [];
+    },
+    epochWinner: async (id, epoch) => {
+      calls.push(["epochWinner", id, epoch]);
+      return null;
+    },
+    disputeQuorum: async (id) => {
+      calls.push(["disputeQuorum", id]);
+      return { need: 3, have: 0 };
+    },
+  };
+  const { task } = createHandlers(stub, {});
+  const out = await task(["7"]);
+  assert.deepEqual(calls, [
+    ["task", 7n],
+    ["commitsForEpoch", 7n, 4],
+    ["epochWinner", 7n, 4],
+    ["disputeQuorum", 7n],
+  ]);
+  assert.ok(out.includes("0/3"), "quorum progress shown");
+  assert.ok((await task([])).includes("usage"));
+  assert.ok((await task(["abc"])).includes("decimal integers"));
 });
 
 test("renderTask says 'no task' rather than rendering an empty task", () => {

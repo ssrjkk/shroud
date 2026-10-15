@@ -179,6 +179,20 @@ test("MemoryShardStore round-trips by content address", async () => {
   assert.deepEqual(got, payload);
 });
 
+test("MemoryShardStore isolates callers from its internals", async () => {
+  // The store is shared in-process (uploads next to node reads in dev flows). Without
+  // copies both ways, whoever holds the payload reference can corrupt every later
+  // read, including another party's integrity check.
+  const store: ShardStore = new MemoryShardStore();
+  const payload = new TextEncoder().encode("shared");
+  const { cid } = await store.put(payload);
+  payload[0] = 0xff;
+  assert.deepEqual(await store.get(cid), new TextEncoder().encode("shared"));
+  const got = await store.get(cid);
+  got[0] = 0xff;
+  assert.deepEqual(await store.get(cid), new TextEncoder().encode("shared"));
+});
+
 test("MemoryShardStore returns a local keccak digest, and get() can reach every put", async () => {
   // `get` being absent from the `ShardStore` interface meant a re-executing node could not fetch
   // a committed shard through the typed API at all.
@@ -317,7 +331,22 @@ test("HttpShardStore rejects a store that returns an unusable cid", async () => 
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ cid: "../escape" }), { status: 200 })) as typeof fetch;
     const store = new HttpShardStore("http://da.invalid");
-    await assert.rejects(() => store.put(payload), /unusable cid/);
+    await assert.rejects(() => store.put(payload), /unusable cid|unsafe shard cid/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("HttpShardStore rejects a cid that passes the regex but not the traversal check", async () => {
+  // "a.." matches CID_RE (dots are legal inside) yet must never reach a request path
+  // or an on-chain commit: `get` refuses it via assertSafeCid, so `put` must too.
+  const payload = new TextEncoder().encode("payload");
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ cid: "a.." }), { status: 200 })) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid");
+    await assert.rejects(() => store.put(payload), /unsafe shard cid/);
   } finally {
     globalThis.fetch = original;
   }
@@ -740,4 +769,134 @@ test("ShroudSdk publishes seed weights the node decodes", async () => {
   assert.deepEqual(decodeWeights(stored, 2), [60000, 30000]);
   assert.equal(weightsDigest.length, 66);
   await assert.rejects(() => sdk.publishWeights(2, [1.5, 0]), /integer/);
+});
+
+test("uploadAndMonetize omits the shape proof as empty bytes when none is required", async () => {
+  // Full upload path against a fetch-stubbed RPC: task view, contribution view,
+  // shapeProofsRequired=false, then a real signed submitContribution whose calldata
+  // is decoded back. Without the `?? "0x"` default this dies in the ABI encoder.
+  const cipherTask = "0x00000000000000000000000000000000000000c1";
+  const vault = "0x00000000000000000000000000000000000000c2";
+  const wallet = new ethers.Wallet(ethers.id("upload-test").slice(2, 66));
+  const me = await wallet.getAddress();
+  const iface = new ethers.Interface(sdkAbi("CipherTask"));
+  const sel = (sig: string) => iface.getFunction(sig)!.selector;
+
+  const taskTuple = [
+    [
+      me, // buyer
+      ethers.ZeroAddress, // updateManager
+      3, 1, 100, 1, 2, 8, 86400, 3600, 600, 1000, 8000, 1500, 500, 200,
+      ethers.ZeroHash, ethers.ZeroHash, 1,
+    ],
+    1_000_000_000n, 0n, 0n, 0n, 0n, 0n, 0, 0, 0,
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 1, false,
+  ];
+  // Note: the stored Contribution keeps `shapeProof` as a bytes32 *digest* of the
+  // submitted bytes (the contract hashes on submit), so this fixture uses ZeroHash.
+  const emptyContribution = [
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 0, 0, 0, 0, false, false,
+  ];
+  let submitted: string | undefined;
+  // The provider's transport is stubbed at the FetchRequest layer: ethers v6 never
+  // calls global fetch for RPC (it uses its own getUrl), so mocking globalThis.fetch
+  // would silently let everything through to the real network.
+  const fr = new ethers.FetchRequest("http://stub.invalid");
+  fr.getUrlFunc = (async (req: { body?: Uint8Array }) => {
+    const serveOne = (payload: { id?: unknown; method: string; params: any[] }): unknown => {
+      switch (payload.method) {
+        case "eth_chainId":
+          return "0x7a69";
+        case "eth_blockNumber":
+          return "0x2";
+        case "eth_getTransactionCount":
+          return "0x0";
+        case "eth_maxPriorityFeePerGas":
+        case "eth_gasPrice":
+          return "0x1";
+        case "eth_getBlockByNumber":
+          return {
+            number: "0x2", hash: ethers.ZeroHash, parentHash: ethers.ZeroHash,
+            timestamp: "0x1", nonce: "0x0000000000000000", difficulty: "0x0",
+            gasLimit: "0xffffffffff", gasUsed: "0x0", miner: ethers.ZeroAddress,
+            extraData: "0x", baseFeePerGas: "0x1", receiptsRoot: ethers.ZeroHash,
+            stateRoot: ethers.ZeroHash, transactionsRoot: ethers.ZeroHash,
+            sha3Uncles: ethers.ZeroHash, logsBloom: "0x" + "0".repeat(512),
+            mixHash: ethers.ZeroHash, size: "0x1", totalDifficulty: "0x1",
+            uncles: [], transactions: [],
+          };
+        case "eth_estimateGas":
+          return "0x200000";
+        case "eth_call": {
+          const data: string = payload.params[0].data;
+          if (data.startsWith(sel("taskCount"))) return iface.encodeFunctionResult("taskCount", [1n]);
+          if (data.startsWith(sel("tasks"))) return iface.encodeFunctionResult("tasks", [taskTuple]);
+          if (data.startsWith(sel("contributions"))) {
+            return iface.encodeFunctionResult("contributions", [emptyContribution]);
+          }
+          if (data.startsWith(sel("shapeProofsRequired"))) {
+            return iface.encodeFunctionResult("shapeProofsRequired", [false]);
+          }
+          throw new Error(`stub: unexpected eth_call ${data.slice(0, 10)}`);
+        }
+        case "eth_sendRawTransaction":
+          submitted = payload.params[0];
+          return ethers.keccak256(submitted);
+        case "eth_getTransactionReceipt":
+          return {
+            status: "0x1", blockNumber: "0x1", transactionHash: ethers.id("sent-tx"),
+            index: "0x0", transactionIndex: "0x0", blockHash: ethers.ZeroHash,
+            gasUsed: "0x100000", cumulativeGasUsed: "0x100000",
+            logs: [], logsBloom: "0x" + "0".repeat(512),
+            contractAddress: null, type: "0x2",
+          };
+        case "eth_getTransactionByHash":
+          return {
+            hash: payload.params[0], blockNumber: "0x1", transactionIndex: "0x0",
+            from: me, to: cipherTask, value: "0x0", nonce: "0x0", data: "0x",
+            gasLimit: "0x200000", maxFeePerGas: "0x1", maxPriorityFeePerGas: "0x1",
+            chainId: "0x7a69", type: "0x2", v: "0x0", r: ethers.ZeroHash, s: ethers.ZeroHash,
+          };
+        default:
+          throw new Error(`stub: unhandled method ${payload.method}`);
+      }
+    };
+    const envelope = (id: unknown, result: unknown) => ({
+      statusCode: 200,
+      statusMessage: "OK",
+      headers: {},
+      body: ethers.toUtf8Bytes(JSON.stringify({ jsonrpc: "2.0", id: id ?? 1, result })),
+    });
+    const parsed = JSON.parse(ethers.toUtf8String(req.body ?? new Uint8Array()));
+    if (Array.isArray(parsed)) {
+      const parts = parsed.map((p) => ({ jsonrpc: "2.0", id: p.id ?? 1, result: serveOne(p) }));
+      return {
+        statusCode: 200,
+        statusMessage: "OK",
+        headers: {},
+        body: ethers.toUtf8Bytes(JSON.stringify(parts)),
+      };
+    }
+    return envelope(parsed.id, serveOne(parsed));
+  }) as unknown as (req: never) => Promise<never>;
+
+  {
+    const provider = new ethers.JsonRpcProvider(fr);
+    const sdk = new ShroudSdk({
+      cipherTask,
+      paymentVault: vault,
+      signer: new ethers.Wallet(wallet.privateKey, provider),
+      provider,
+      chainId: 31337n,
+    });
+    const out = await sdk.uploadAndMonetize([1, 2, 3, 4, 5, 6], 1n, {
+      features: 3,
+      allowUnencrypted: true,
+    });
+    assert.ok(submitted, "a transaction was sent");
+    const calldata = ethers.Transaction.from(submitted!).data;
+    const parsed = iface.parseTransaction({ data: calldata });
+    assert.equal(parsed?.args.shapeProof, "0x");
+    assert.match(out.contributionTx, /^0x[0-9a-f]{64}$/);
+  }
 });

@@ -13,11 +13,12 @@
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { loadConfig, configuredContracts, ConfigError, ROOT } from "./config.js";
 import { TelegramBot } from "./telegram.js";
-import { ChainReader, makeInterfaces, shortId, shortAddr } from "./chain.js";
+import { ChainReader, makeInterfaces, poolIds, shortId, shortAddr } from "./chain.js";
 import {
   renderStatus,
   renderPool,
@@ -84,6 +85,69 @@ async function saveCursor(cursor) {
     // start; it must not take the bot down.
     console.warn("could not persist cursor:", err.message);
   }
+}
+
+/**
+ * Arguments for the commit-mismatch alert from a re-commit event and the digest
+ * previously seen for the same (task, epoch, node).
+ *
+ * Pure so the mapping is pinned by a test: an earlier revision passed the previous
+ * digest as `winnerDigest` (which the renderer ignores) and omitted `previousDigest`,
+ * so every alert read "previously —".
+ */
+export function mismatchArgs(ev, prev) {
+  return {
+    taskId: ev.args.taskId,
+    epoch: ev.args.epoch,
+    challenger: ev.args.node,
+    challengerDigest: ev.args.traceDigest,
+    previousDigest: prev,
+  };
+}
+
+/**
+ * Command handlers over an already-resolved chain reader.
+ *
+ * Exported for tests: `main` wires the real reader, tests hand a stub whose calls
+ * are recorded, which is what pins the pool window and the /task composition
+ * (commits/winner/quorum for the running epoch) without a chain.
+ */
+export function createHandlers(chain, config) {
+  return {
+    async help() {
+      return renderHelp();
+    },
+    async limits() {
+      return renderLimits();
+    },
+    async status() {
+      const chainIdNow = await chain.chainId();
+      const np = await chain.networkParams();
+      const pending = np ? await chain.pendingRotation() : null;
+      return renderStatus(
+        { chainId: chainIdNow, blockNumber: await chain.blockNumber(), networkParams: np, pendingRotation: pending },
+        config
+      );
+    },
+    async pool() {
+      const count = await chain.taskCount();
+      const items = [];
+      for (const id of poolIds(count, 12)) {
+        items.push(await chain.task(id));
+      }
+      return renderPool(items);
+    },
+    async task(args) {
+      if (!args.length) return "usage: /task &lt;id&gt;";
+      if (!/^\d+$/.test(args[0])) return "task ids are decimal integers. Try /pool.";
+      const id = BigInt(args[0]);
+      const t = await chain.task(id);
+      const commits = t ? await chain.commitsForEpoch(id, t.nextEpoch) : [];
+      const winner = t ? await chain.epochWinner(id, t.nextEpoch) : null;
+      const quorum = t ? await chain.disputeQuorum(id) : null;
+      return renderTask({ task: t, commits, winner, quorum }, id);
+    },
+  };
 }
 
 async function main() {
@@ -173,44 +237,12 @@ async function main() {
   }
 
   // --- commands ------------------------------------------------------------
+  //
+  // Built by a factory, not inline, so the composition (which ids the pool reads,
+  // which epoch's commits /task shows) is unit-testable without a chain: handlers
+  // take an already-resolved chain reader, and the tests hand them a stub.
 
-  const handlers = {
-    async help() {
-      return renderHelp();
-    },
-    async limits() {
-      return renderLimits();
-    },
-    async status() {
-      const chainIdNow = await chain.chainId();
-      const np = await chain.networkParams();
-      const pending = np ? await chain.pendingRotation() : null;
-      return renderStatus(
-        { chainId: chainIdNow, blockNumber: await chain.blockNumber(), networkParams: np, pendingRotation: pending },
-        config
-      );
-    },
-    async pool() {
-      const count = await chain.taskCount();
-      const items = [];
-      const shown = Math.min(count, 12);
-      for (let i = count - 1; i >= Math.max(0, count - shown); i--) {
-        const t = await chain.task(BigInt(i));
-        items.push(t);
-      }
-      return renderPool(items);
-    },
-    async task(args) {
-      if (!args.length) return "usage: /task &lt;id&gt;";
-      if (!/^\d+$/.test(args[0])) return "task ids are decimal integers. Try /pool.";
-      const id = BigInt(args[0]);
-      const t = await chain.task(id);
-      const commits = t ? await chain.commitsForEpoch(id, t.nextEpoch) : [];
-      const winner = t ? await chain.epochWinner(id, t.nextEpoch) : null;
-      const quorum = t ? await chain.disputeQuorum(id) : null;
-      return renderTask({ task: t, commits, winner, quorum }, id);
-    },
-  };
+  const handlers = createHandlers(chain, config);
 
   async function handleCommand(msg) {
     const text = msg.text ?? "";
@@ -288,16 +320,7 @@ async function main() {
         const prev = seenDigest.get(key);
         seenDigest.set(key, ev.args.traceDigest);
         if (alertsCfg.commitMismatch && prev && prev !== ev.args.traceDigest) {
-          alerts.push(
-            renderCommitMismatch({
-              taskId: ev.args.taskId,
-              epoch: ev.args.epoch,
-              winner: ev.args.node,
-              winnerDigest: prev,
-              challenger: ev.args.node,
-              challengerDigest: ev.args.traceDigest,
-            })
-          );
+          alerts.push(renderCommitMismatch(mismatchArgs(ev, prev)));
         }
       }
     }
@@ -366,7 +389,10 @@ async function main() {
   await Promise.all([pollCommands(), pollAlerts()]);
 }
 
-main().catch((err) => {
-  console.error("fatal:", err);
-  process.exit(1);
-});
+const isMain = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMain) {
+  main().catch((err) => {
+    console.error("fatal:", err);
+    process.exit(1);
+  });
+}

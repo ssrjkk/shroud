@@ -17,7 +17,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { ethers } from "ethers";
-import { ChainReader, makeInterfaces } from "../src/chain.js";
+import { ChainReader, makeInterfaces, poolIds } from "../src/chain.js";
 
 const TASK = "0x1111111111111111111111111111111111111111";
 const VAULT = "0x2222222222222222222222222222222222222222";
@@ -111,6 +111,16 @@ async function setup(t) {
   });
   return { reader, routes, ifaces };
 }
+
+test("poolIds windows newest-first from id 1, never 0", () => {
+  assert.deepEqual(poolIds(5, 12), [5n, 4n, 3n, 2n, 1n]);
+  assert.deepEqual(poolIds(5, 3), [5n, 4n, 3n]);
+  assert.deepEqual(poolIds(1, 12), [1n]);
+  assert.deepEqual(poolIds(0, 12), []);
+  // Hostile inputs degrade to empty, never to a revert-inducing id 0 query.
+  assert.deepEqual(poolIds(-3, 12), []);
+  assert.deepEqual(poolIds("abc", 12), []);
+});
 
 test("taskCount reads the view", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
