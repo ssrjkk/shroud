@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0e3a7a" />
 <title data-i18n="pro.title">Протокол — Shroud: архитектура, контракты, SDK, узел, запуск</title>
 <meta name="description" data-i18n-desc="pro.desc" content="Полное описание протокола Shroud: trust model, ключи, 29 шагов, автомат состояний, FHE, атаки, выплаты, контракты, SDK, узел, devnet, roadmap." />
-<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
+<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);else if(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)document.documentElement.setAttribute("data-theme","paper");var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 38'%3E%3Crect width='38' height='38' fill='%230E3A7A'/%3E%3Ctext x='19' y='27' font-family='Arial' font-weight='bold' font-size='21' fill='%23FFFFFF' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
 </head>
@@ -27,8 +28,7 @@
     <a href="./license.html" data-i18n="nav.lic">Лицензия</a>
   </nav>
   <div class="controls">
-    <div class="seg" role="group" aria-label="theme"><button data-theme-btn="ink" class="on">Ink</button><button data-theme-btn="paper">Paper</button></div>
-    <div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Просто</button><button data-mode-btn="pro" data-i18n="mode.pro">Про</button></div>
+    <button class="iconbtn" data-theme-toggle aria-pressed="false" data-i18n-aria="theme.toggle" title="Theme"><span class="g-moon">☾</span><span class="g-sun">☀</span></button>
     <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
   </div>
 </div></header>
@@ -133,9 +133,9 @@
     <div class="role rv"><div class="role-head"><h3 data-i18n="pro.ro3">Оператор узла</h3><span data-i18n="pro.ro3s">earn epochs</span></div><div class="role-body"><span data-i18n-html="pro.rl3"><code>docker compose up -d node-a</code> (ручки — <code>infra/README.md</code> §3) или собери <code>node/</code>. Узел регистрируется, исполняет, коммитит, спорит и забирает каналы.</span></div></div>
     <div class="role rv"><div class="role-head"><h3 data-i18n="pro.ro4">Наблюдатель</h3><span data-i18n="pro.ro4s">ops-bot</span></div><div class="role-body"><span data-i18n-html="pro.rl4">Telegram-бот из <code>bot/</code> (токен + allowlist в <code>bot/.env</code>): <code>/pool</code>, <code>/task &lt;id&gt;</code>, алерты споров и ротаций.</span></div></div>
   </div>
-  <div style="margin-top:18px" class="rv"><pre class="code"><span class="c"># contracts — 110</span>  cd packages/contracts &amp;&amp; npm ci &amp;&amp; npx hardhat test &amp;&amp; npx tsc --noEmit
-<span class="c"># sdk — 39</span>         cd packages/sdk &amp;&amp; npm ci &amp;&amp; npm test
-<span class="c"># bot — 39</span>         cd bot &amp;&amp; npm ci &amp;&amp; npm test
+  <div style="margin-top:18px" class="rv"><pre class="code"><span class="c"># contracts</span>  cd packages/contracts &amp;&amp; npm ci &amp;&amp; npx hardhat test &amp;&amp; npx tsc --noEmit
+<span class="c"># sdk</span>         cd packages/sdk &amp;&amp; npm ci &amp;&amp; npm test
+<span class="c"># bot</span>         cd bot &amp;&amp; npm ci &amp;&amp; npm test
 <span class="c"># node</span>             cd node &amp;&amp; cargo check --all-features
 <span class="c"># site</span>             cd web &amp;&amp; python -m http.server 4173</pre></div>
 </section>

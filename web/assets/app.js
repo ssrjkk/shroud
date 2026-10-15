@@ -2,17 +2,27 @@
 (function () {
   "use strict";
   var THEME_KEY = "shroud-theme";
+  function systemTheme() {
+    try {
+      if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) return "paper";
+    } catch (e) {}
+    return "ink";
+  }
   function getTheme() {
     try {
       var t = localStorage.getItem(THEME_KEY);
       if (t === "paper" || t === "ink") return t;
     } catch (e) {}
-    return "ink";
+    return systemTheme();
   }
   function applyTheme(theme) {
     document.documentElement.setAttribute("data-theme", theme);
     document.querySelectorAll("[data-theme-btn]").forEach(function (b) {
       b.classList.toggle("on", b.getAttribute("data-theme-btn") === theme);
+      b.setAttribute("aria-pressed", b.getAttribute("data-theme-btn") === theme ? "true" : "false");
+    });
+    document.querySelectorAll("[data-theme-toggle]").forEach(function (b) {
+      b.setAttribute("aria-pressed", theme === "paper" ? "true" : "false");
     });
     try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
   }
@@ -21,7 +31,9 @@
     if (mode !== "pro" && mode !== "new") mode = "new";
     document.documentElement.setAttribute("data-mode", mode);
     document.querySelectorAll("[data-mode-btn]").forEach(function (b) {
-      b.classList.toggle("on", b.getAttribute("data-mode-btn") === mode);
+      var on = b.getAttribute("data-mode-btn") === mode;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
     });
     try { localStorage.setItem(MODE_KEY, mode); } catch (e) {}
   }
@@ -46,6 +58,12 @@
     });
     document.querySelectorAll("[data-theme-btn]").forEach(function (b) {
       b.addEventListener("click", function () { applyTheme(b.getAttribute("data-theme-btn")); });
+    });
+    document.querySelectorAll("[data-theme-toggle]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var cur = document.documentElement.getAttribute("data-theme") === "paper" ? "paper" : "ink";
+        applyTheme(cur === "paper" ? "ink" : "paper");
+      });
     });
     document.querySelectorAll("[data-lang]").forEach(function (b) {
       b.addEventListener("click", function () {

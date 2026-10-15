@@ -37,7 +37,8 @@ jobs:
           bad = []
           for html in web.glob("*.html"):
               text = html.read_text()
-              for m in re.finditer(r'''(?:href|src)="([^"#]+)"''', text):
+              # only resource-bearing tags: <base href> is deployment config, not a file
+              for m in re.finditer(r'''<(?:a|link|script|img)[^>]+(?:href|src)="([^"#]+)"''', text):
                   target = m.group(1)
                   if target.startswith(("http", "data:", "mailto:")):
                       continue
@@ -47,6 +48,12 @@ jobs:
           if bad:
               print("broken site links:"); print("\n".join(bad)); sys.exit(1)
           print(f"site links OK: {len(pages)} pages")
+          # README-embedded screenshots must exist too (docs/shots/*)
+          shots = [m.group(1) for m in re.finditer(r'''\((docs/shots/[^)]+)\)''', Path("README.md").read_text())]
+          missing = [s for s in shots if not Path(s).is_file()]
+          if missing:
+              print("missing README shots:"); print("\n".join(missing)); sys.exit(1)
+          print(f"README shots OK: {len(shots)} files")
           EOF
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -54,7 +54,7 @@
 
   function parseCsv(text) {
     var rows = [];
-    var lines = String(text).split(/\r?\n/);
+    var lines = String(text).replace(/^﻿/, "").split(/\r?\n/);
     for (var i = 0; i < lines.length; i++) {
       var ln = lines[i].trim();
       if (!ln || ln[0] === "#") continue;

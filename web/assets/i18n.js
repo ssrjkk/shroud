@@ -24,7 +24,8 @@
       "idx.h1": "Обучай модель на чужих <span class=\"acc\">зашифрованных</span> данных — <span class=\"line2\">не видя их.</span>",
       "idx.lede": "Shroud — app-chain на полностью гомоморфном шифровании. Покупатель кладёт бюджет в <strong>эскроу</strong>, узлы считают обучение <strong>по шифротексту</strong>, каждая эпоха фиксируется <strong>proof-of-compute дайджестом</strong>, который можно перепроверить и отклонить, а выплаты текут <strong>потоковыми каналами</strong>. Продай ценность данных, не раскрывая данные.",
       "idx.cta1": "Открыть лабораторию", "idx.cta2": "Читать протокол",
-      "idx.f1s": "тестов: контракты · SDK · бот",
+      "idx.f1s": "тесты: статус в CI",
+      "idx.audit": "Не аудировано — не использовать с реальными деньгами. <a href=\"./security.html\">Почему</a>",
       "idx.f2s": "контрактов: эскроу · каналы · раскрытие",
       "idx.f3s": "выплат за вызов settleFrom",
       "idx.sp.head": "Спецификация / выпуск 01",
@@ -113,11 +114,11 @@
 
       "lab.title": "Лаборатория — Shroud: весь протокол в браузере",
       "lab.n": "LAB / 01–06", "lab.t": "Протокол — руками, в браузере",
-      "lab.lede": "Шесть стендов слева — журнал справа. Движок тот же, что в node/src/fhe.rs и @shroud/sdk: квантование round(v·scale), reference-SGD с фиксированной точкой, keccak-транскрипт, proof-референс с префиксом STAR. Демо-раскладка шарда — shroud/noop/v1 (боевая — relayer/TFHE, смысл байтов тот же). Итог — веса, дайджесты и JSON-отчёт.",
+      "lab.lede": "Шесть стендов плюс журнал с итогами. Математика — как в node/src/fhe.rs и @shroud/sdk (квантование, reference-SGD, keccak-транскрипт, STAR-референс), сверено скриптом web/tests/equiv.mjs. Демо-раскладка шарда — shroud/noop/v1 (боевая — relayer/TFHE, смысл байтов тот же). Итог — веса, дайджесты и JSON-отчёт.",
       "lab.honest": "Честно о стенде",
-      "lab.honestp": "Reference-движок считает в открытую из демо-байтов, чтобы показать механику. Боевой узел считает TFHE по шифротексту и коммитит 32-байтный референс, который проверяется только на mock-верифаере. Криптографических гарантий стенд не даёт — он показывает порядок шагов и форматы.",
+      "lab.honestp": "Reference-движок считает в открытую из демо-байтов (dev-путь узла: shroud/noop/v1, без шифрования). Боевой TFHE-путь включается флагом prover, полной ончейн-проверки STARK пока нет, первого живого commitEpoch ещё не было — см. docs/05 §8. Стенд показывает порядок шагов и форматы, а не криптографические гарантии.",
       "lab.b1": "Стенд 01 — данные",
-      "lab.b1h": "CSV «признаки,метка», по строке на запись. Только неотрицательные — TFHE шифрует беззнаковые целые.",
+      "lab.b1h": "CSV «признаки,метка», по строке на запись. Числа с точкой; разделитель — запятая, точка с запятой, пробел или табуляция. Только неотрицательные — TFHE шифрует беззнаковые целые.",
       "lab.preset": "Пресет", "lab.p1": "Жильё — 2 признака + цена",
       "lab.p2": "Медицина — 3 признака + риск", "lab.p3": "Скоринг — 4 признака + лимит",
       "lab.csv": "CSV", "lab.feat": "features (колонок)", "lab.scale": "scale (квант)",
@@ -266,7 +267,7 @@
       "sec.n": "SEC / STATUS", "sec.t": "Что enforced. И что нет.",
       "sec.lede": "Протокол двигает деньги. Зелёная таблица без красного стоила бы ничего — поэтому провалы лежат здесь с тем же кеглем, что победы. Решаешь, доверять ли ценность, — читай красный раздел первым. Полный разбор: docs/04-threat-model.md (35 находок) и docs/05-honest-limitations.md.",
       "sec.st": "Статус",
-      "sec.stp": "Код двигает средства и не проходил внешнего аудита. Не использовать с реальной ценностью. Тесты: контракты 110, SDK 39, бот 39, узел 165+. «Протестировано» ≠ «аудировано».",
+      "sec.stp": "Код двигает средства и не проходил внешнего аудита. Не использовать с реальной ценностью. Актуальные числа прогонов — в CI. «Протестировано» ≠ «аудировано».",
       "sec.c1t": "14 — enforced и покрыто",
       "sec.c1p": "Учёт эскроу, реентрантность, пулы, abort, таргет споров, оплата ре-экзекьюторов, порог раскрытия, key-pin в SDK, запрет cleartext по умолчанию, hostile-DA, ротации.",
       "sec.c2t": "4 — задокументировано, не реализовано",
@@ -326,6 +327,7 @@
       "lic.n1": "Гарантий — «AS IS»", "lic.n2": "Ответственности авторов за ущерб",
       "lic.n3": "Патентного гранта сверх текста", "lic.n4": "Права на товарный знак",
       "mode.simple": "Новичкам", "mode.pro": "Профи",
+      "theme.toggle": "Переключить тему",
       "idx.gn": "00 / ПРОСТЫМИ СЛОВАМИ", "idx.gt": "Три шага — без жаргона",
       "idx.gs1t": "Данные шифруются у владельца",
       "idx.gs1p": "Таблица превращается в шифротекст прямо в браузере. Сервер видит только «запечатанный пакет».",
@@ -343,7 +345,7 @@
       "idx.px5k": "Ротация", "idx.px5v": "предложение → 7 дней таймлока → исполнение кем угодно",
       "idx.px6k": "Веса", "idx.px6v": "файл shroud/weights/v1: magic + u32 features + i32 лейны; дайджест — keccak LE-байтов",
       "lab.simp": "Быстрый запуск",
-      "lab.simph": "Нажми одну кнопку: данные зашифруются, эпоха посчитается, выплаты рассчитаются. Подробности — в журнале справа.",
+      "lab.simph": "Нажми одну кнопку: данные зашифруются, эпоха посчитается, выплаты рассчитаются. Подробности — в журнале.",
       "lab.run": "Запустить демо",
       "lab.simple0": "здесь появится итог простыми словами",
       "lab.seed": "seed трейса", "lab.prev0x": "prevDigest (hex, пусто = нули)",
@@ -407,7 +409,8 @@
       "idx.h1": "Train on other people’s <span class=\"acc\">encrypted</span> data — <span class=\"line2\">without seeing it.</span>",
       "idx.lede": "Shroud is an app chain over fully homomorphic encryption. The buyer locks a budget in <strong>escrow</strong>, nodes train <strong>over ciphertext</strong>, every epoch is pinned by a <strong>proof-of-compute digest</strong> anyone can re-execute and reject, and payouts flow through <strong>streaming channels</strong>. Sell the value of data without revealing the data.",
       "idx.cta1": "Open the lab", "idx.cta2": "Read the protocol",
-      "idx.f1s": "tests: contracts · SDK · bot",
+      "idx.f1s": "tests: live status in CI",
+      "idx.audit": "Not audited — do not use with real funds. <a href=\"./security.html\">Why</a>",
       "idx.f2s": "contracts: escrow · channels · reveal",
       "idx.f3s": "payouts per settleFrom call",
       "idx.sp.head": "Spec / issue 01",
@@ -496,11 +499,11 @@
 
       "lab.title": "Lab — Shroud: the whole protocol in your browser",
       "lab.n": "LAB / 01–06", "lab.t": "The protocol — by hand, in your browser",
-      "lab.lede": "Six benches on the left, the journal on the right. The engine matches node/src/fhe.rs and @shroud/sdk: quantization round(v·scale), fixed-point reference SGD, keccak transcript, STAR-prefixed proof reference. The demo shard layout is shroud/noop/v1 (production is relayer/TFHE, same byte semantics). Output: weights, digests and a JSON report.",
+      "lab.lede": "Six benches plus a journal with the outputs. The math mirrors node/src/fhe.rs and @shroud/sdk (quantization, reference SGD, keccak transcript, STAR reference), cross-checked by web/tests/equiv.mjs. The demo shard layout is shroud/noop/v1 (production is relayer/TFHE, same byte semantics). Output: weights, digests and a JSON report.",
       "lab.honest": "Honest note about the bench",
-      "lab.honestp": "The reference engine computes in the open from demo bytes to show the mechanics. The production node computes TFHE over ciphertext and commits a 32-byte reference verified on mock-verifier chains only. The bench gives no cryptographic guarantees — it shows the step order and the formats.",
+      "lab.honestp": "The reference engine computes in the open from demo bytes (the node's dev path: shroud/noop/v1, unencrypted). The production TFHE path is behind the prover flag, there is no full on-chain STARK check yet, and the first live commitEpoch has not happened — see docs/05 §8. The bench shows the step order and the formats, not cryptographic guarantees.",
       "lab.b1": "Bench 01 — data",
-      "lab.b1h": "CSV “features,label”, one record per line. Non-negative only — TFHE encrypts unsigned integers.",
+      "lab.b1h": "CSV “features,label”, one record per line. Dotted decimals; separate with a comma, semicolon, space or tab. Non-negative only — TFHE encrypts unsigned integers.",
       "lab.preset": "Preset", "lab.p1": "Housing — 2 features + price",
       "lab.p2": "Medicine — 3 features + risk", "lab.p3": "Scoring — 4 features + limit",
       "lab.csv": "CSV", "lab.feat": "features (columns)", "lab.scale": "scale (quant)",
@@ -649,7 +652,7 @@
       "sec.n": "SEC / STATUS", "sec.t": "What is enforced. And what is not.",
       "sec.lede": "A protocol that moves money with an all-green table would be worthless — so failures sit here in the same type as wins. Deciding whether to trust it with value? Read the red section first. Full analysis: docs/04-threat-model.md (35 findings) and docs/05-honest-limitations.md.",
       "sec.st": "Status",
-      "sec.stp": "The code moves funds and has not been externally audited. Do not deploy with real value. Tests: 110 contracts, 39 SDK, 39 bot, 165+ node. “Tested” ≠ “audited”.",
+      "sec.stp": "The code moves funds and has not been externally audited. Do not deploy with real value. Current run counts live in CI. “Tested” ≠ “audited”.",
       "sec.c1t": "14 — enforced and covered",
       "sec.c1p": "Escrow accounting, reentrancy, pools, abort, dispute target, re-executor pay, reveal threshold, SDK key pin, no-cleartext default, hostile DA, rotations.",
       "sec.c2t": "4 — documented, not implemented",
@@ -709,6 +712,7 @@
       "lic.n1": "No warranties — “AS IS”", "lic.n2": "No author liability for damages",
       "lic.n3": "No patent grant beyond the text", "lic.n4": "No trademark rights",
       "mode.simple": "Newcomers", "mode.pro": "Pros",
+      "theme.toggle": "Toggle theme",
       "idx.gn": "00 / IN PLAIN WORDS", "idx.gt": "Three steps — no jargon",
       "idx.gs1t": "Data is encrypted by its owner",
       "idx.gs1p": "A table becomes ciphertext right in the browser. The server only sees a “sealed package”.",
@@ -800,8 +804,14 @@
       var k = el.getAttribute("data-i18n-desc");
       if (d[k] !== undefined) el.setAttribute("content", d[k]);
     });
+    document.querySelectorAll("[data-i18n-aria]").forEach(function (el) {
+      var k = el.getAttribute("data-i18n-aria");
+      if (d[k] !== undefined) el.setAttribute("aria-label", d[k]);
+    });
     document.querySelectorAll("[data-lang]").forEach(function (b) {
-      b.classList.toggle("on", b.getAttribute("data-lang") === lang);
+      var on = b.getAttribute("data-lang") === lang;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
     });
     try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
     try { document.dispatchEvent(new CustomEvent("shroud:lang", { detail: lang })); } catch (e) {}

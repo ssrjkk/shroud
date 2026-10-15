@@ -3,9 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0e3a7a" />
 <title data-i18n="idx.title">Shroud — приватное программируемое ML: зашифрованные данные, проверяемые вычисления</title>
 <meta name="description" data-i18n-desc="idx.desc" content="Shroud — fhEVM-протокол: обучение моделей на чужих зашифрованных данных без доступа к ним. Эскроу, STARK proof-of-compute, потоковые выплаты. Живая лаборатория в браузере и честные ограничения." />
-<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
+<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);else if(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)document.documentElement.setAttribute("data-theme","paper");var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
 <link rel="stylesheet" href="./assets/style.css" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 38'%3E%3Crect width='38' height='38' fill='%230E3A7A'/%3E%3Ctext x='19' y='27' font-family='Arial' font-weight='bold' font-size='21' fill='%23FFFFFF' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
 </head>
@@ -29,8 +30,7 @@
     <a href="./license.html" data-i18n="nav.lic">Лицензия</a>
   </nav>
   <div class="controls">
-    <div class="seg" role="group" aria-label="theme"><button data-theme-btn="ink" class="on">Ink</button><button data-theme-btn="paper">Paper</button></div>
-    <div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Просто</button><button data-mode-btn="pro" data-i18n="mode.pro">Про</button></div>
+    <button class="iconbtn" data-theme-toggle aria-pressed="false" data-i18n-aria="theme.toggle" title="Theme"><span class="g-moon">☾</span><span class="g-sun">☀</span></button>
     <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
   </div>
 </div></header>
@@ -45,8 +45,9 @@
       <a class="btn btn-primary" href="./playground.html" data-i18n="idx.cta1">Открыть лабораторию</a>
       <a class="btn btn-ghost" href="./protocol.html" data-i18n="idx.cta2">Читать протокол</a>
     </div>
+    <div class="notice warn hero-warn" data-i18n-html="idx.audit">Не аудировано — не использовать с реальными деньгами. <a href="./security.html">Почему</a></div>
     <div class="hero-facts">
-      <div><b>110 <em>+</em> 39 <em>+</em> 39</b><span data-i18n="idx.f1s">тестов: контракты · SDK · бот</span></div>
+      <a href="https://github.com/ssrjkk/shroud/actions"><b>CI</b><span data-i18n="idx.f1s">тесты: статус в CI</span></a>
       <div><b>5</b><span data-i18n="idx.f2s">контрактов: эскроу · каналы · раскрытие</span></div>
       <div><b>200</b><span data-i18n="idx.f3s">выплат за вызов settleFrom</span></div>
     </div>
@@ -148,11 +149,11 @@
   <div class="sect-head"><span class="sect-num" data-i18n="idx.s05n">05 / REPO</span><h2 class="sect-title" data-i18n="idx.s05t">Репозиторий</h2></div>
   <div class="tblwrap rv"><table class="tbl">
     <tr><th data-i18n="idx.th.p">Путь</th><th data-i18n="idx.th.w">Что внутри</th><th data-i18n="idx.th.tt">Тесты</th></tr>
-    <tr><td><code>packages/contracts</code></td><td data-i18n="idx.rp1">fhEVM Solidity: CipherTask, PaymentVault, DecryptionGate, NetworkParams, ProofVerifier; lifecycle, fuzz, газ-снапшот, векторы байт-раскладки</td><td>110</td></tr>
-    <tr><td><code>packages/sdk</code></td><td data-i18n="idx.rp2">@shroud/sdk: uploadAndMonetize, publishWeights, EIP-712, DA-клиент, key-pin, weight-файлы</td><td>39</td></tr>
-    <tr><td><code>node</code></td><td data-i18n="idx.rp3">Rust-узел: follower цепочки, детерминированный движок, tfhe-rs за фичей prover, gRPC-mesh, контент-адресный DA</td><td>165+</td></tr>
-    <tr><td><code>bot</code></td><td data-i18n="idx.rp45">Telegram-опс</td><td>39</td></tr>
-    <tr><td><code>infra</code></td><td data-i18n="idx.rp4">docker devnet: fhEVM-нода, ShardStore (лимиты + range), 3 узла; ранбук оператора</td><td>8</td></tr>
+    <tr><td><code>packages/contracts</code></td><td data-i18n="idx.rp1">fhEVM Solidity: CipherTask, PaymentVault, DecryptionGate, NetworkParams, ProofVerifier; lifecycle, fuzz, газ-снапшот, векторы байт-раскладки</td><td><a href="https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml">CI</a></td></tr>
+    <tr><td><code>packages/sdk</code></td><td data-i18n="idx.rp2">@shroud/sdk: uploadAndMonetize, publishWeights, EIP-712, DA-клиент, key-pin, weight-файлы</td><td><a href="https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml">CI</a></td></tr>
+    <tr><td><code>node</code></td><td data-i18n="idx.rp3">Rust-узел: follower цепочки, детерминированный движок, tfhe-rs за фичей prover, gRPC-mesh, контент-адресный DA</td><td><a href="https://github.com/ssrjkk/shroud/actions/workflows/rust.yml">CI</a></td></tr>
+    <tr><td><code>bot</code></td><td data-i18n="idx.rp45">Telegram-опс</td><td><a href="https://github.com/ssrjkk/shroud/actions/workflows/bot.yml">CI</a></td></tr>
+    <tr><td><code>infra</code></td><td data-i18n="idx.rp4">docker devnet: fhEVM-нода, ShardStore (лимиты + range), 3 узла; ранбук оператора</td><td><a href="https://github.com/ssrjkk/shroud/actions/workflows/shardstore.yml">CI</a></td></tr>
     <tr><td><code>docs</code></td><td data-i18n="idx.rp5">архитектура, криптография, proof-of-compute, threat model, честные ограничения</td><td>—</td></tr>
   </table></div>
   <div class="cols2">
