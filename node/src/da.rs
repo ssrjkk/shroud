@@ -239,7 +239,7 @@ fn object_path(prefix: &str, cid: &B256) -> object_store::path::Path {
 
 #[cfg(feature = "da")]
 async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> {
-    use object_store::ObjectStore;
+    use object_store::{ObjectStore, ObjectStoreExt};
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
@@ -263,7 +263,7 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
 
 #[cfg(feature = "da")]
 async fn store_remote(url: &str, cid: &B256, bytes: &[u8]) -> Result<()> {
-    use object_store::ObjectStore;
+    use object_store::{ObjectStore, ObjectStoreExt};
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
