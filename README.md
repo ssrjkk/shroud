@@ -42,7 +42,7 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 | path | what |
 |------|------|
 | `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (110 tests: lifecycle, stateful fuzz, gas snapshot, admin controls, byte-layout vectors) |
-| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (37 tests) |
+| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (39 tests) |
 | `node/` | Rust compute node: chain follower + epoch executor (deterministic reference engine, `tfhe-rs` behind `prover`), gRPC mesh, content-addressed DA (`da` feature for remote) — see [Node](#node) |
 | `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (39 tests, incl. stub-RPC read coverage) |
 | `web/` | Project site — landing page and the full honest security posture |
@@ -58,7 +58,7 @@ npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 110 + 
 
 # sdk
 cd packages/sdk
-npm ci && npm test                                                       # 37 passing
+npm ci && npm test                                                       # 39 passing
 
 # ops bot (no token and no chain needed for the tests)
 cd bot
@@ -84,9 +84,10 @@ duties (finalize/settle/redeem/reclaim/claim/bond). What it is today:
   `--features prover`), with the genuine constraints documented in the module docs.
 - **Commits a 32-byte proof *reference*** that verifies on mock-verifier chains; a real
   proving system is Phase 3.
-- **Verified by CI on Linux, never locally**: this repo's sandbox blocks loading freshly
-  built DLLs, so `cargo check`/`cargo test` cannot run here — see
-  [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) §8. `cargo fmt` is green.
+- **Verified by CI on Linux, never locally**: on machines where freshly built binaries
+  cannot load (locked-down Windows/Smart App Control), `cargo check`/`cargo test` cannot
+  run at all — see [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) §8.
+  `cargo fmt` is green.
 
 Operator configuration (backends, DA, key pin, timeouts) is documented in
 [`infra/README.md`](infra/README.md) §3.
