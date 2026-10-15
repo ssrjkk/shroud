@@ -402,6 +402,9 @@ mod tests {
         let err = fetch(dir.path(), "https://da.example/shards", &cid, 1 << 20)
             .await
             .expect_err("needs the da feature");
-        assert!(matches!(err, Error::ShardStore(ShardError::Malformed { .. })));
+        assert!(matches!(
+            err,
+            Error::ShardStore(ShardError::Malformed { .. })
+        ));
     }
 }

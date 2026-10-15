@@ -694,7 +694,7 @@ mod tfhe_backend {
     use tfhe::safe_serialization::safe_deserialize;
     use tfhe::{CompressedServerKey, FheUint32, ServerKey};
 
-    use super::{EpochInputs, EpochOutput, TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC, Weights};
+    use super::{EpochInputs, EpochOutput, Weights, TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC};
     use crate::error::{Error, FheError, Result, ShardError};
 
     /// Maximum serialised object this backend will deserialise (server keys are GB-scale).
