@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="ink" data-mode="new">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title data-i18n="pro.title">Протокол — Shroud: архитектура, контракты, SDK, узел, запуск</title>
+<meta name="description" data-i18n-desc="pro.desc" content="Полное описание протокола Shroud: trust model, ключи, 29 шагов, автомат состояний, FHE, атаки, выплаты, контракты, SDK, узел, devnet, roadmap." />
+<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
+<link rel="stylesheet" href="./assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 38'%3E%3Crect width='38' height='38' fill='%230E3A7A'/%3E%3Ctext x='19' y='27' font-family='Arial' font-weight='bold' font-size='21' fill='%23FFFFFF' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+<a class="skip" href="#main" data-i18n="meta.skip">К содержанию</a>
+<div class="topbar"><div class="topbar-in">
+  <span class="st"><span class="pulse"></span><span data-i18n="doctop.status">документ SHR-2026-01 · полный протокол · без маркетинга</span></span>
+  <span><a href="./index.html" data-i18n="nav.home">Главная</a> · <a href="./playground.html" data-i18n="nav.lab">Лаборатория</a></span>
+</div></div>
+<header class="masthead"><div class="masthead-in">
+  <a class="brand" href="./index.html"><span class="brand-mark">S</span>
+    <span><span class="brand-name">Shroud</span><br /><span class="brand-sub" data-i18n="probrand.sub">protocol papers</span></span></a>
+  <button class="burger" data-burger>Меню</button>
+  <nav class="nav" data-nav>
+    <a href="./index.html" data-i18n="nav.home">Главная</a>
+    <a href="./playground.html" data-i18n="nav.lab">Лаборатория</a>
+    <a href="./protocol.html" class="active" data-i18n="nav.proto">Протокол</a>
+    <a href="./security.html" data-i18n="nav.sec">Безопасность</a>
+    <a href="./license.html" data-i18n="nav.lic">Лицензия</a>
+  </nav>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="theme"><button data-theme-btn="ink" class="on">Ink</button><button data-theme-btn="paper">Paper</button></div>
+    <div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Просто</button><button data-mode-btn="pro" data-i18n="mode.pro">Про</button></div>
+    <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
+  </div>
+</div></header>
+
+<main id="main">
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.n">DOC / SHR-2026-01</span><h2 class="sect-title" data-i18n="pro.t">Протокол целиком</h2></div>
+  <p class="sect-lede" data-i18n="pro.lede">Один абзац: пользователь шифрует запись на своём устройстве сетевым FHE-ключом и публикует только шифротекст. Покупатель кладёт бюджет в USDC и публикует спек модели. Любой узел может выполнить обучение по шифротекстам — арифметика FHE даёт шифротексты. Узлы коммитят каждую эпоху в ZK proof-of-compute; по принятии эскроу стримится контрибьюторам и узлам. Веса покупатель получает через пороговый комитет и только после settlement. Отдельные записи не расшифровываются никем и никогда.</p>
+  <div class="notice"><b class="t" data-i18n="pro.inv">Три инварианта</b><span data-i18n="pro.invp">INV-1: plaintext виден только владельцу; в открытую выходит лишь выход модели и лишь после TaskSettled. INV-2: секрет FHE-ключа никогда не собран в одной памяти — Шамир t-of-n, n ≥ 3t−1. INV-3: врать узлу невыгодно — либо STARK сошёлся на настоящих дайджестах, либо fraud-окно и слэш большинством.</span></div>
+</section>
+
+<section class="sect only-new">
+  <div class="plain-card rv"><h3 data-i18n="pro.tldr">Коротко своими словами</h3><p data-i18n="pro.tldrp">Чужие таблицы учат твою модель, не показывая тебе ни одной строки. Деньги лежат в сейфе-контракте и раздаются только за проверенную работу. Ниже — детали для любопытных, в лаборатории — всё руками.</p><div class="btnrow"><a class="btn btn-primary btn-sm" href="./playground.html" data-i18n="idx.u1b">Открыть лабораторию</a></div></div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s01n">01 / TRUST</span><h2 class="sect-title" data-i18n="pro.s01t">Модель доверия и ключи</h2></div>
+  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="pro.th1">Сторона</th><th data-i18n="pro.th2">Доверено</th><th data-i18n="pro.th3">Не доверено</th></tr>
+    <tr><td data-i18n="pro.tr1a">Пользователь</td><td data-i18n="pro.tr1b">свой plaintext, свой ключ</td><td data-i18n="pro.tr1c">всё остальное</td></tr>
+    <tr><td>Web2 + SDK</td><td data-i18n="pro.tr2b">ничего — plaintext не покидает браузер</td><td>—</td></tr>
+    <tr><td data-i18n="pro.tr3a">Покупатель</td><td data-i18n="pro.tr3b">бюджет, спек модели</td><td data-i18n="pro.tr3c">plaintext чужих строк</td></tr>
+    <tr><td data-i18n="pro.tr4a">Узел</td><td data-i18n="pro.tr4b">набор шифротекстов (уже публичен в DA)</td><td data-i18n="pro.tr4c">plaintext, секретный ключ</td></tr>
+    <tr><td data-i18n="pro.tr5a">Комитет (t-of-n)</td><td data-i18n="pro.tr5b">совместно — только выходные шифротексты</td><td data-i18n="pro.tr5c">индивидуальные записи</td></tr>
+    <tr><td data-i18n="pro.tr6a">Секвенсор</td><td data-i18n="pro.tr6b">порядок транзакций</td><td>plaintext</td></tr>
+    <tr><td data-i18n="pro.tr7a">fhEVM-сопроцессор</td><td data-i18n="pro.tr7b">операции над шифротекстом, ротация ключей</td><td>plaintext</td></tr>
+  </table></div>
+  <div class="cols2">
+    <div class="card rv"><span class="tag">DKG n=7 · t=4</span><h3 data-i18n="pro.k1">Иерархия ключей</h3><p data-i18n="pro.k1p">s_pub публикуется в params-бандле и пинится в NetworkParams (защита от подмены). committeePub — BLS-агрегат для reveal без транзакции на члена. nodeId = keccak(blsPubKey[0:20] ‖ operator) связывает узел со стейком.</p></div>
+    <div class="card rv"><span class="tag">LAYOUT</span><h3 data-i18n="pro.k2">Правило раскладки</h3><p data-i18n="pro.k2p">В цепочке — обязательства и зашифрованное состояние; bulk-шифротекст — в DA. STARK проверяется по ончейн-ctRoot, поэтому fhEVM-нагрузка ограничена, а проверяемость сохранена.</p></div>
+  </div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s02n">02 / FLOW</span><h2 class="sect-title" data-i18n="pro.s02t">Сквозной путь: 29 шагов</h2></div>
+  <div class="tblwrap rv"><table class="tbl"><tr><th>#</th><th data-i18n="pro.fh1">Шаг</th><th data-i18n="pro.fh2">Кто → куда</th></tr>
+    <tr><td>1–3</td><td data-i18n="pro.f1">GET s_pub → вектор + Groth16 «знаю строку такой формы» → FHEWasm-шифрование батчами по 8</td><td data-i18n="pro.f1w">устройство</td></tr>
+    <tr><td>4–6</td><td data-i18n="pro.f2">PUT bundle в DA → EIP-712 привязка хэша к кошельку → submitContribution</td><td data-i18n="pro.f2w">SDK → DA → секвенсор</td></tr>
+    <tr><td>7–9</td><td data-i18n="pro.f3">tx в CipherTask.submitContribution → учёт эскроу → событие нового ctRoot</td><td>L3</td></tr>
+    <tr><td>10–13</td><td data-i18n="pro.f4">openEpoch → чекпоинт encState → EpochOpened → узлы тянут шарды range-pull</td><td data-i18n="pro.f4w">покупатель → узлы</td></tr>
+    <tr><td>14–18</td><td data-i18n="pro.f5">TFHE SGD без расшифровки → хэш-чейн трейса → STARK → PUT в DA → commitEpoch</td><td data-i18n="pro.f5w">узел → цепочка</td></tr>
+    <tr><td>19–23</td><td data-i18n="pro.f6">verify по publicInputs → слайс узлу; при споре fraud-окно, ре-экзекьюшн, слэш</td><td data-i18n="pro.f6w">контракт</td></tr>
+    <tr><td>24–29</td><td data-i18n="pro.f7">requestReveal → BLS-гейт → t частичных расшифровок выходов → withdrawWeights</td><td data-i18n="pro.f7w">покупатель + комитет</td></tr>
+  </table></div>
+  <div class="scheme rv"><div class="scheme-head"><span data-i18n="pro.sch">Автомат состояний CipherTask</span><span data-i18n="pro.schev">все переходы — событиями</span></div>
+    <div class="scheme-body"><pre class="code" data-i18n="pro.fsm">createTask (escrow) → OPENING → COLLECTING → SEALED
+  → EPOCH_OPEN → EPOCH_COMMITTING → EPOCH_SETTLED (×E)
+  → SETTLING → REVEALING → DISCLOSED
+  fraud quorum / timeout → ABORTED (refund незапущенного)</pre></div></div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s03n">03 / MATH</span><h2 class="sect-title" data-i18n="pro.s03t">FHE-выбор и математика выплат</h2></div>
+  <div class="cols2">
+    <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="pro.mh1">Вопрос</th><th data-i18n="pro.mh2">Решение</th></tr>
+      <tr><td data-i18n="pro.m1a">Схема</td><td data-i18n="pro.m1b">TFHE (tfhe-rs / Zama fhEVM) — программируемый бутстреп для глубоких конвейеров</td></tr>
+      <tr><td data-i18n="pro.m2a">Лейны</td><td data-i18n="pro.m2b">euint32: табличные данные и веса без взрыва шума CKKS</td></tr>
+      <tr><td data-i18n="pro.m3a">Непрерывные признаки</td><td data-i18n="pro.m3b">квантование в u32, scale 1e4 — целочисленный SGD точен и дешёв для STARK</td></tr>
+      <tr><td data-i18n="pro.m4a">Батчинг</td><td data-i18n="pro.m4b">8 лейнов на шифротекст — амортизация бутстрепов</td></tr>
+      <tr><td data-i18n="pro.m5a">Шум</td><td data-i18n="pro.m5b">бюджет 2^40 safe-msg-bits; рекей каждые 2 эпохи (RekeyGuard)</td></tr>
+    </table></div>
+    <div><div class="card solid rv"><span class="tag">SETTLE</span><h3 data-i18n="pro.stitle">Деление бюджета B, эпох E</h3><p data-i18n="pro.stxp">contributorPool = B·8000/10000; nodePool = B·1500/10000; treasury = остаток. contributor_i = pool · w_i / Σw, где w_i = sqrt(rows_i)·liveness — sqrt душит китов, liveness штрафует опоздавших. node_n = nodePool / (E·q) поровну по валидным коммитам. Остатки от деления — участнику с наибольшим address (детерминировано).</p><div class="foot-line" data-i18n="pro.sfl">попробуй числа на стенде 03–06 в лаборатории</div></div></div>
+  </div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s04n">04 / ATTACKS</span><h2 class="sect-title" data-i18n="pro.s04t">Атаки и контрмеры</h2></div>
+  <div class="tblwrap rv"><table class="tbl"><tr><th>#</th><th data-i18n="pro.ah1">Атака</th><th data-i18n="pro.ah2">Контрмера</th></tr>
+    <tr><td>A1</td><td data-i18n="pro.a1a">Мусорные строки ради эскроу</td><td data-i18n="pro.a1b">Groth16-привязка к shape-корню покупателя + слэш кворумом</td></tr>
+    <tr><td>A2</td><td data-i18n="pro.a2a">STARK под другой датасет</td><td data-i18n="pro.a2b">public input: ctRoot, эпоха, chainId, адрес контракта</td></tr>
+    <tr><td>A3</td><td data-i18n="pro.a3a">Веса с чужого набора</td><td data-i18n="pro.a3b">хэш-чейн AIR по дайджестам шардов до ctRoot</td></tr>
+    <tr><td>A4</td><td data-i18n="pro.a4a">Накрутка прогресса ради микроплатежей</td><td data-i18n="pro.a4b">слайсы подписываются лишь за EPOCH_SETTLED</td></tr>
+    <tr><td>A5–A6</td><td data-i18n="pro.a5a">Сговор комитета (&lt; t / ≥ t)</td><td data-i18n="pro.a5b">расшифровка только выходов settled-задач; сговор большинства — остаточный риск F-10</td></tr>
+    <tr><td>A7</td><td data-i18n="pro.a7a">Подмена s_pub секвенсором</td><td data-i18n="pro.a7b">пин keccak(s_pub) в NetworkParams; SDK и узлы отказываются</td></tr>
+    <tr><td>A8</td><td data-i18n="pro.a8a">Фронтраннинг чужого шарда</td><td data-i18n="pro.a8b">один шард на адрес + EIP-712 привязка к отправителю</td></tr>
+    <tr><td>A9</td><td data-i18n="pro.a9a">Abort после трат узлов</td><td data-i18n="pro.a9b">эскроу лочится на openEpoch; возврат — только незапущенные эпохи</td></tr>
+    <tr><td>A10</td><td data-i18n="pro.a10a">DoS размером датасета</td><td data-i18n="pro.a10b">лимиты maxContributors/maxShards/maxCiphertextBytes/minRowsPerShard</td></tr>
+    <tr><td>A11</td><td data-i18n="pro.a11a">Реорг settled-эпохи</td><td data-i18n="pro.a11b">вотчеры только по finalized; settlement идемпотентен</td></tr>
+    <tr><td>A12</td><td data-i18n="pro.a12a">Декомпрессионная бомба на узел</td><td data-i18n="pro.a12b">range-pull с бюджетом + проверка дайджеста до парсинга</td></tr>
+  </table></div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s05n">05 / CODE</span><h2 class="sect-title" data-i18n="pro.s05t">Код: контракты, SDK, узел</h2></div>
+  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="pro.ch1">Контракт</th><th data-i18n="pro.ch2">Роль</th></tr>
+    <tr><td><code>CipherTask</code></td><td data-i18n="pro.c1">эскроу + FSM + дивиденды + fraud-окно; только коммиты по 32 байта</td></tr>
+    <tr><td><code>PaymentVault</code></td><td data-i18n="pro.c2">стриминг-каналы EIP-712; инвариант totalLocked == subBalances + channelLocks за O(1)</td></tr>
+    <tr><td><code>DecryptionGate</code></td><td data-i18n="pro.c3">BLS-гейт частичных расшифровок; withdraw требует реального threshold</td></tr>
+    <tr><td><code>NetworkParams</code></td><td data-i18n="pro.c4">пин FHE-ключа; ротация: предложение → таймлок → исполнение</td></tr>
+    <tr><td><code>ProofVerifier</code></td><td data-i18n="pro.c5">сэмплированная ончейн-проверка + 7-дневный таймлок ротации</td></tr>
+  </table></div>
+  <div class="cols2">
+    <div class="card rv"><span class="tag">SDK · @shroud/sdk</span><h3 data-i18n="pro.sdk">uploadAndMonetize</h3><p data-i18n="pro.sdkp">sdk.uploadAndMonetize(data, taskId, { features, allowUnencrypted }) — шифрует локально, кладёт в DA, проверяет все условия submitContribution до траты газа. publishWeights — генезис-веса shroud/weights/v1. Key-pin, chainId-check, hardened DA-клиент с getVerified.</p><div class="foot-line" data-i18n="pro.sdkf">реальное шифрование — @shroud/sdk/relayer (нода); по умолчанию NoopEncryptor только для dev</div></div>
+    <div class="card rv"><span class="tag">NODE · Rust</span><h3 data-i18n="pro.ndt">Исполнитель эпох</h3><p data-i18n="pro.ndp">Reorg-safe вотчер → derived fold; reference-cpu движок (golden-тесты) + tfhe-rs за prover; контент-адресный DA (da — remote); споры из собственных коммитов; сбор каналов finalize/settle/redeem/reclaim/claim/bond.</p><div class="foot-line" data-i18n="pro.ndf">конфиг: бэкенды, DA, key-pin, таймауты — infra/README §3</div></div>
+  </div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s06n">06 / RUN</span><h2 class="sect-title" data-i18n="pro.s06t">Запуск и роли</h2></div>
+  <div class="cols2">
+    <div class="role rv"><div class="role-head"><h3 data-i18n="pro.ro1">Покупатель</h3><span data-i18n="pro.ro1s">fund a task</span></div><div class="role-body"><span data-i18n-html="pro.rl1">Эскроу: <code>createTask(budget, params)</code> → <code>sealTask</code> → <code>openEpoch</code> на каждую эпоху → <code>requestReveal</code> и <code>withdraw</code>. Пример: <code>packages/contracts/scripts/devnet-e2e-check.ts</code>.</span></div></div>
+    <div class="role rv"><div class="role-head"><h3 data-i18n="pro.ro2">Контрибьютор</h3><span data-i18n="pro.ro2s">sell value, not data</span></div><div class="role-body"><span data-i18n-html="pro.rl2">Шифруй локально: <code>sdk.uploadAndMonetize(data, taskId, { features })</code>. В проде — <code>@shroud/sdk/relayer</code>. Механику попробуй в лаборатории.</span></div></div>
+    <div class="role rv"><div class="role-head"><h3 data-i18n="pro.ro3">Оператор узла</h3><span data-i18n="pro.ro3s">earn epochs</span></div><div class="role-body"><span data-i18n-html="pro.rl3"><code>docker compose up -d node-a</code> (ручки — <code>infra/README.md</code> §3) или собери <code>node/</code>. Узел регистрируется, исполняет, коммитит, спорит и забирает каналы.</span></div></div>
+    <div class="role rv"><div class="role-head"><h3 data-i18n="pro.ro4">Наблюдатель</h3><span data-i18n="pro.ro4s">ops-bot</span></div><div class="role-body"><span data-i18n-html="pro.rl4">Telegram-бот из <code>bot/</code> (токен + allowlist в <code>bot/.env</code>): <code>/pool</code>, <code>/task &lt;id&gt;</code>, алерты споров и ротаций.</span></div></div>
+  </div>
+  <div style="margin-top:18px" class="rv"><pre class="code"><span class="c"># contracts — 110</span>  cd packages/contracts &amp;&amp; npm ci &amp;&amp; npx hardhat test &amp;&amp; npx tsc --noEmit
+<span class="c"># sdk — 39</span>         cd packages/sdk &amp;&amp; npm ci &amp;&amp; npm test
+<span class="c"># bot — 39</span>         cd bot &amp;&amp; npm ci &amp;&amp; npm test
+<span class="c"># node</span>             cd node &amp;&amp; cargo check --all-features
+<span class="c"># site</span>             cd web &amp;&amp; python -m http.server 4173</pre></div>
+</section>
+
+<section class="sect only-pro">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.pxn">08 / PARAMS</span><h2 class="sect-title" data-i18n="pro.pxt">Параметры для прошаренных</h2></div>
+  <div class="tblwrap rv"><table class="tbl">
+    <tr><th data-i18n="pro.pmh1">Узел</th><th data-i18n="pro.pmh2">Поля и форматы</th></tr>
+    <tr><td data-i18n="pro.pm1k">TaskParams</td><td data-i18n="pro.pm1v">minRowsPerShard, maxContributors, maxShards, maxCiphertextBytes, окно взносов, minContributors до seal — всё валидируется при createTask</td></tr>
+    <tr><td data-i18n="pro.pm2k">Транскрипт эпохи</td><td>taskId · epoch · chainId · CipherTask · ctRoot · prevDigest · features · scale · lrQ16 · l2Q16 · minibatch · seed · nRows · lossMeanQ · <span data-i18n="pro.pm2x">листья</span> · nextDigest</td></tr>
+    <tr><td data-i18n="pro.pm3k">Proof-референс</td><td data-i18n="pro.pm3v">0x53544152 («STAR») + 28 байт keccak(транскрипт); верифицируется только на mock-верифаере</td></tr>
+    <tr><td data-i18n="pro.pm4k">Шард shroud/noop/v1</td><td data-i18n="pro.pm4v">magic + «features\\0rows\\0» + f64 LE-матрица; commitment — keccak по строкам</td></tr>
+    <tr><td data-i18n="pro.pm5k">Сеттлмент</td><td data-i18n="pro.pm5v">settleFrom(taskId, cursor) по 200; финальная страница платит комитету и возвращает остаток покупателю</td></tr>
+  </table></div>
+</section>
+
+<section class="sect" style="padding-bottom:40px">
+  <div class="sect-head"><span class="sect-num" data-i18n="pro.s07n">07 / ROAD</span><h2 class="sect-title" data-i18n="pro.s07t">Сделано и дальше</h2></div>
+  <div class="cols2">
+    <div class="card rv" style="border-left:6px solid var(--good)"><span class="tag green">DONE</span><h3 data-i18n="pro.rd1">Ядро готово</h3><p data-i18n="pro.rd1p">FSM + эскроу + каналы + threshold-reveal + таймлоки; кворум споров со слэшем бонда; детерминированный движок + tfhe-rs; SDK с key-pin и DA-закалкой; бот с покрытием; devnet; fuzz и газ-снапшот.</p></div>
+    <div class="card rv" style="border-left:6px solid var(--warn)"><span class="tag line">NEXT · 3–4</span><h3 data-i18n="pro.rd2">Доказательства и экономика</h3><p data-i18n="pro.rd2p">zkVM-гость поверх 8-полевого транскрипта + рекурсивная агрегация (ончейн-проверка буквально); commit-reveal репортов, stake-взвешенные ре-экзекьюторы со слэшем в обе стороны, Gateway re-encryption, Foundry-инварианты, бенчмарки CPU/GPU.</p></div>
+  </div>
+  <p style="margin-top:16px"><span data-i18n="pro.docs">Документы: 01-architecture · 02-cryptography · 03-proof-of-compute · 04-threat-model · 05-honest-limitations.</span> <a href="https://github.com/ssrjkk/shroud/tree/main/docs">docs →</a></p>
+</section>
+</main>
+
+<footer class="foot"><div class="foot-in">
+  <div><p class="foot-brand">Shroud</p><p data-i18n="f.pronote">Референсная реализация приватных вычислений. Не аудировано — с реальными деньгами не использовать.</p></div>
+  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/tree/main/docs" data-i18n="f.docs">Документы</a><br /><a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a></p></div>
+</div><div class="foot-base"><span>© 2026 ssrjkk · SHR-2026-01</span><span data-i18n="f.base3">docs 01–05 · threats 35</span></div></footer>
+<script src="./assets/i18n.js"></script>
+<script src="./assets/app.js"></script>
+</body>
+</html>

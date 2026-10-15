@@ -1,228 +1,191 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru" data-theme="ink" data-mode="new">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Shroud — private, programmable ML with verifiable compute</title>
-<meta name="description" content="An fhEVM app chain where data never leaves its owner's device in cleartext. Train a model over encrypted data, prove the work with a STARK, get paid per epoch." />
+<title data-i18n="idx.title">Shroud — приватное программируемое ML: зашифрованные данные, проверяемые вычисления</title>
+<meta name="description" data-i18n-desc="idx.desc" content="Shroud — fhEVM-протокол: обучение моделей на чужих зашифрованных данных без доступа к ним. Эскроу, STARK proof-of-compute, потоковые выплаты. Живая лаборатория в браузере и честные ограничения." />
+<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
 <link rel="stylesheet" href="./assets/style.css" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305070a'/%3E%3Cpath d='M9 21c4-9 10-9 14 0' stroke='%2334e0c8' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='13' r='2.6' fill='%238b5cf6'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 38'%3E%3Crect width='38' height='38' fill='%230E3A7A'/%3E%3Ctext x='19' y='27' font-family='Arial' font-weight='bold' font-size='21' fill='%23FFFFFF' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
+<a class="skip" href="#main" data-i18n="meta.skip">К содержанию</a>
 
-<div class="grain" aria-hidden="true"></div>
-<canvas id="mesh" class="mesh" aria-hidden="true"></canvas>
+<div class="topbar"><div class="topbar-in">
+  <span class="st"><span class="pulse"></span><span data-i18n="top.status">исследовательская реализация · аудита нет · с реальными деньгами не использовать</span></span>
+  <span>ref. SHR-2026-01 · <a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a></span>
+</div></div>
 
-<a class="skip" href="#main">Skip to content</a>
-
-<header class="nav">
-  <div class="nav-in">
-    <a class="brand" href="./index.html">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="26" height="26"><path d="M6 22c5-11 15-11 20 0" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><circle cx="16" cy="11" r="2.8" fill="#8b5cf6"/></svg>
-      </span>
-      <span class="brand-name">Shroud</span>
-    </a>
-    <nav class="links">
-      <a href="#how">How it works</a>
-      <a href="#properties">Properties</a>
-      <a href="./security.html">Security</a>
-      <a href="https://github.com/ssrjkk/shroud" class="btn btn-ghost">GitHub</a>
-    </nav>
+<header class="masthead"><div class="masthead-in">
+  <a class="brand" href="./index.html"><span class="brand-mark">S</span>
+    <span><span class="brand-name">Shroud</span><br /><span class="brand-sub" data-i18n="brand.sub">private programmable ML</span></span></a>
+  <button class="burger" data-burger>Меню</button>
+  <nav class="nav" data-nav>
+    <a href="./index.html" class="active" data-i18n="nav.home">Главная</a>
+    <a href="./playground.html" data-i18n="nav.lab">Лаборатория</a>
+    <a href="./protocol.html" data-i18n="nav.proto">Протокол</a>
+    <a href="./security.html" data-i18n="nav.sec">Безопасность</a>
+    <a href="./license.html" data-i18n="nav.lic">Лицензия</a>
+  </nav>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="theme"><button data-theme-btn="ink" class="on">Ink</button><button data-theme-btn="paper">Paper</button></div>
+    <div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Просто</button><button data-mode-btn="pro" data-i18n="mode.pro">Про</button></div>
+    <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
   </div>
-</header>
+</div></header>
 
 <main id="main">
-
-  <section class="hero">
-    <p class="eyebrow">fhEVM · verifiable compute · streaming payouts</p>
-    <h1 class="hero-h">
-      Train a model over other people's<br />
-      <span class="grad">encrypted data</span> — without<br />
-      ever seeing it.
-    </h1>
-    <p class="lede">
-      Shroud is an app chain where data never leaves its owner's device in cleartext.
-      Buyers escrow a budget, nodes execute training over ciphertext, prove the work with a
-      STARK, and settle through streaming payment channels.
-    </p>
-    <div class="cta">
-      <a class="btn" href="#how">See the pipeline</a>
-      <a class="btn btn-ghost" href="./security.html">Read what is <em>not</em> enforced</a>
+<section class="hero"><div class="hero-in">
+  <div class="hero-left">
+    <p class="kicker" data-i18n="idx.kick">fhEVM · FHE · STARK · потоковые выплаты</p>
+    <h1 class="display" data-i18n-html="idx.h1">Обучай модель на чужих <span class="acc">зашифрованных</span> данных — <span class="line2">не видя их.</span></h1>
+    <p class="lede" data-i18n-html="idx.lede">Shroud — app-chain на полностью гомоморфном шифровании. Покупатель кладёт бюджет в <strong>эскроу</strong>, узлы считают обучение <strong>по шифротексту</strong>, каждая эпоха фиксируется <strong>proof-of-compute дайджестом</strong>, который можно перепроверить и отклонить, а выплаты текут <strong>потоковыми каналами</strong>. Продай ценность данных, не раскрывая данные.</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="./playground.html" data-i18n="idx.cta1">Открыть лабораторию</a>
+      <a class="btn btn-ghost" href="./protocol.html" data-i18n="idx.cta2">Читать протокол</a>
     </div>
-
-    <div class="hero-note">
-      <span class="dot" aria-hidden="true"></span>
-      This code moves funds and has <strong>not</strong> been externally audited.
-      <a href="./security.html">The full status table</a> is part of the docs, not a footnote.
+    <div class="hero-facts">
+      <div><b>110 <em>+</em> 39 <em>+</em> 39</b><span data-i18n="idx.f1s">тестов: контракты · SDK · бот</span></div>
+      <div><b>5</b><span data-i18n="idx.f2s">контрактов: эскроу · каналы · раскрытие</span></div>
+      <div><b>200</b><span data-i18n="idx.f3s">выплат за вызов settleFrom</span></div>
     </div>
-  </section>
+  </div>
+  <aside class="hero-right spec">
+    <div class="spec-head"><span data-i18n="idx.sp.head">Спецификация / выпуск 01</span><span>SHR-2026</span></div>
+    <table>
+      <tr><td data-i18n="idx.sp.r1k">Цепочка</td><td data-i18n="idx.sp.r1v">fhEVM L3, эскроу в USDC, FSM задачи: Opening → Collecting → Sealed → Epoch → Settling → Revealing → Disclosed</td></tr>
+      <tr><td data-i18n="idx.sp.r2k">Данные</td><td data-i18n="idx.sp.r2v">строки шифруются на устройстве (FHEWasm / relayer), в цепочке только CID и дайджесты по 32 байта</td></tr>
+      <tr><td data-i18n="idx.sp.r3k">Доказательство</td><td data-i18n="idx.sp.r3v">STARK-транскрипт: chainId, задача, ctRoot, веса; кворум из 3 независимых ре-экзекьюторов</td></tr>
+      <tr><td data-i18n="idx.sp.r4k">Деньги</td><td data-i18n="idx.sp.r4v">contributors 80% · nodes 15% · остаток — комитету и возврат; reclaim и refund из разных пулов</td></tr>
+      <tr><td data-i18n="idx.sp.r5k">Раскрытие</td><td data-i18n="idx.sp.r5v">только порог комитета; покупатель сам себе «раскрыто» не подпишет</td></tr>
+    </table>
+    <div class="spec-note"><span data-i18n="idx.sp.note">Что реально enforced, а что нет — в разделе «Безопасность». Красное читай первым.</span> <a href="./security.html" data-i18n="nav.sec">Безопасность</a></div>
+  </aside>
+</div></section>
 
-  <section id="how" class="sect">
-    <h2 class="sect-h">The pipeline</h2>
-    <p class="sect-lede">
-      Plaintext is encrypted in the browser. From that point on nothing on the chain, and nothing
-      in a node's memory, ever holds it.
-    </p>
+<div class="ticker" aria-hidden="true"><div class="ticker-in">
+  <span data-i18n="idx.tick1">◆ escrow — бюджет фиксируется целиком</span><span data-i18n="idx.tick2">◆ FHE — plaintext не покидает устройство</span><span data-i18n="idx.tick3">◆ ctRoot — один корень на весь датасет</span><span data-i18n="idx.tick4">◆ dispute — 3 репортера отклоняют эпоху</span><span data-i18n="idx.tick5">◆ channels — выплаты слайсами EIP-712</span><span data-i18n="idx.tick6">◆ threshold — раскрытие только комитетом</span>
+</div></div>
 
-    <div class="flow" role="img" aria-label="Data flows from plaintext through client-side FHEWasm encryption into ciphertext, then into the data-availability layer, then into a node that executes it with FHE and produces a STARK proof, which is recorded on the CipherTask contract alongside escrow, a state machine and payment channels.">
-      <div class="flow-row">
-        <div class="flow-box plain"><span class="fb-t">plaintext</span><span class="fb-s">on your device</span></div>
-        <span class="arw" aria-hidden="true"></span>
-        <div class="flow-box enc"><span class="fb-t">FHEWasm</span><span class="fb-s">in-browser encrypt</span></div>
-        <span class="arw" aria-hidden="true"></span>
-        <div class="flow-box ct"><span class="fb-t">ciphertext</span><span class="fb-s">sealed rows</span></div>
-      </div>
-      <div class="flow-row">
-        <span class="arw down" aria-hidden="true"></span>
-      </div>
-      <div class="flow-row">
-        <div class="flow-box da"><span class="fb-t">data availability</span><span class="fb-s">shards + ctDigest</span></div>
-        <span class="arw" aria-hidden="true"></span>
-        <div class="flow-box node"><span class="fb-t">node</span><span class="fb-s">FHE execute</span></div>
-        <span class="arw" aria-hidden="true"></span>
-        <div class="flow-box proof"><span class="fb-t">STARK proof</span><span class="fb-s">binds chain, task, weights</span></div>
-      </div>
-      <div class="flow-foot">
-        <code>buyer ──► CipherTask (escrow + state machine + payment channels)</code>
-      </div>
+<section class="sect only-new">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.gn">00 / ПРОСТЫМИ СЛОВАМИ</span><h2 class="sect-title" data-i18n="idx.gt">Три шага — без жаргона</h2></div>
+  <div class="guide">
+    <div class="gstep rv"><b class="n">1</b><h3 data-i18n="idx.gs1t">Данные шифруются у владельца</h3><p data-i18n="idx.gs1p">Таблица превращается в шифротекст прямо в браузере. Сервер видит только «запечатанный пакет».</p></div>
+    <div class="gstep rv"><b class="n">2</b><h3 data-i18n="idx.gs2t">Узлы учатся вслепую</h3><p data-i18n="idx.gs2p">Модель обучается операциями над шифротекстом. Каждая эпоха получает проверяемый отпечаток.</p></div>
+    <div class="gstep rv"><b class="n">3</b><h3 data-i18n="idx.gs3t">Деньги делятся сами</h3><p data-i18n="idx.gs3p">Эскроу платит владельцам данных, узлам и комитету по мере готовности эпох.</p></div>
+  </div>
+</section>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.s01n">01 / PIPELINE</span><h2 class="sect-title" data-i18n="idx.s01t">Конвейер: от plaintext до денег</h2></div>
+  <p class="sect-lede" data-i18n="idx.s01l">Шифрование происходит в браузере. С этого момента ни цепочка, ни память узла plaintext не содержат. Полная последовательность из 29 шагов — на странице «Протокол»; здесь — скелет.</p>
+  <div class="scheme rv">
+    <div class="scheme-head"><span data-i18n="idx.sch.head">Схема A — движение данных и денег</span><span data-i18n="idx.sch.side">лист 01 · масштаб 1:1</span></div>
+    <div class="scheme-body">
+      <svg viewBox="0 0 980 300" width="100%" role="img" aria-label="data flow" style="min-width:640px;display:block">
+        <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="currentColor" stroke-width="1.6"/></marker></defs>
+        <g font-family="ui-monospace,Menlo,monospace" font-size="12">
+          <rect x="10" y="60" width="150" height="86" fill="none" stroke="currentColor" stroke-width="2"/><text x="85" y="94" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.plain">plaintext</text><text x="85" y="112" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.plain2">у вас дома</text><text x="85" y="130" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.plain3">CSV → вектор</text>
+          <rect x="190" y="60" width="150" height="86" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="265" y="94" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.enc">FHEWasm</text><text x="265" y="112" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.enc2">шифрование</text><text x="265" y="130" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.enc3">в браузере</text>
+          <rect x="370" y="60" width="150" height="86" fill="none" stroke="currentColor" stroke-width="3"/><text x="445" y="94" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.ct">ciphertext</text><text x="445" y="112" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.ct2">запечатанные строки</text><text x="445" y="130" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.ct3">CID + ctDigest</text>
+          <rect x="190" y="190" width="150" height="80" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="265" y="216" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.da">ShardStore</text><text x="265" y="234" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.da2">DA · range-pull</text>
+          <rect x="370" y="190" width="150" height="80" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="445" y="216" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.node">узел</text><text x="445" y="234" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.node2">FHE-исполнение</text>
+          <rect x="550" y="190" width="150" height="80" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="625" y="216" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.stark">STARK</text><text x="625" y="234" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.stark2">trace digest</text>
+          <rect x="730" y="60" width="240" height="210" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="7 4"/><text x="850" y="88" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="idx.svg.ctt">CipherTask</text><text x="850" y="108" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="idx.svg.ctt2">escrow + FSM + каналы</text><text x="850" y="140" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.s1">createTask → seal →</text><text x="850" y="158" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.s2">openEpoch → commit →</text><text x="850" y="176" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.s3">settleFrom → reveal</text><text x="850" y="208" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.s4">PaymentVault · EIP-712</text><text x="850" y="228" text-anchor="middle" fill="currentColor" data-i18n="idx.svg.s5">DecryptionGate · t-of-n</text>
+          <line x1="160" y1="103" x2="186" y2="103" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/><line x1="340" y1="103" x2="366" y2="103" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="445" y1="146" x2="445" y2="186" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="340" y1="230" x2="366" y2="230" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/><line x1="520" y1="230" x2="546" y2="230" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="700" y1="230" x2="726" y2="230" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="625" y1="186" x2="625" y2="150" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+        </g>
+      </svg>
     </div>
+    <div class="scheme-foot" data-i18n="idx.sch.foot">покупатель ──► CipherTask (escrow + автомат состояний + платёжные каналы) ◄── STARK-дайджест эпохи</div>
+  </div>
+  <div class="cols3">
+    <article class="card solid rv"><span class="tag">FHE</span><h3 data-i18n="idx.c1t">Считаем, не глядя</h3><p data-i18n="idx.c1p">ZK доказывает, что посчитано. FHE убирает саму нужду показывать вход. Разница между «проверь результат» и «тебе вообще нечего смотреть».</p><div class="foot-line" data-i18n="idx.c1f">вход: euint32 · масштаб 1e4 · батч 8</div></article>
+    <article class="card solid rv"><span class="tag">PROOF</span><h3 data-i18n="idx.c2t">Доказательство работы</h3><p data-i18n="idx.c2p">Эпоха привязана к chainId, задаче, корню датасета и прошлым весам. Три независимых ре-экзекьютора с другим дайджестом — эпоха отклонена, выплат нет.</p><div class="foot-line" data-i18n="idx.c2f">кворум 3 · бонд победителя сжигается в refund</div></article>
+    <article class="card solid rv"><span class="tag">MONEY</span><h3 data-i18n="idx.c3t">Потоковые выплаты</h3><p data-i18n="idx.c3p">PaymentVault платит слайсами по мере эпох. Невостребованное узел забирает сам через reclaim; покупатель чужого не тронет — пулы не пересекаются.</p><div class="foot-line" data-i18n="idx.c3f">settleFrom · курсор · 200 за вызов</div></article>
+  </div>
+</section>
 
-    <div class="grid-3">
-      <article class="card">
-        <h3>Compute on encrypted data</h3>
-        <p>
-          ZK proved <em>what</em> was computed. FHE removes the need to reveal <em>the input</em>
-          at all. That is the difference between proving a result and never having to expose a
-          row.
-        </p>
-      </article>
-      <article class="card">
-        <h3>Proof of compute</h3>
-        <p>
-          Each epoch is pinned by a STARK public input binding the chain, task, dataset root and
-          prior weights. A registered node can re-execute and report a different digest; a quorum
-          of three distinct reporters rejects the epoch and pays nobody.
-        </p>
-      </article>
-      <article class="card">
-        <h3>Streaming payments</h3>
-        <p>
-          <code>PaymentVault</code> settles in slices via EIP-1271, so contributors and nodes are
-          paid as epochs land. An unredeemed remainder can be reclaimed by the node itself.
-        </p>
-      </article>
-    </div>
-  </section>
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.s02n">02 / USE</span><h2 class="sect-title" data-i18n="idx.s02t">Пользоваться — прямо здесь</h2></div>
+  <p class="sect-lede" data-i18n="idx.s02l">Лаборатория считает той же математикой, что боевой узел и SDK: квантование, reference-SGD, trace-дайджест, proof-референс. Без сервера, без кошелька, без отправки данных.</p>
+  <div class="cols2">
+    <article class="card solid rv"><span class="tag red">LAB · 01–06</span><h3 data-i18n="idx.u1t">Полный цикл за 3 минуты</h3><p data-i18n="idx.u1p">Вставь CSV → зашифруй → задай бюджет → выполни эпоху → собери STARK-транскрипт → рассчитай выплаты. На выходе — веса, дайджесты и JSON-отчёт.</p><div class="btnrow"><a class="btn btn-primary btn-sm" href="./playground.html" data-i18n="idx.u1b">Открыть лабораторию</a></div><div class="foot-line" data-i18n="idx.u1f">файл: web/assets/crypto.js · детерминировано · воспроизводимо узлом</div></article>
+    <article class="card rv"><span class="tag line">ROLES</span><h3 data-i18n="idx.u2t">Четыре входа в протокол</h3><p data-i18n="idx.u2p">Покупатель — эскроу и openEpoch. Контрибьютор — шифруй локально, монетизируй шард. Оператор узла — исполняй, коммить, оспаривай, забирай каналы. Наблюдатель — Telegram-бот: пул, таски, споры, ротации.</p><div class="foot-line" data-i18n="idx.u2f">роли и команды — на странице «Протокол»</div></article>
+  </div>
+</section>
 
-  <section id="properties" class="sect alt">
-    <h2 class="sect-h">Properties that are actually enforced</h2>
-    <p class="sect-lede">
-      Every row below is checked by a test. The rows that are <em>not</em> enforced are on the
-      <a href="./security.html">security page</a> instead of being quietly omitted.
-    </p>
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.s03n">03 / ENFORCED</span><h2 class="sect-title" data-i18n="idx.s03t">Что реально enforced</h2></div>
+  <p class="sect-lede" data-i18n="idx.s03l">Каждая строка ниже покрыта тестом, который падает без фикса. Строки, которые не enforced, — на странице «Безопасность», с тем же кеглем.</p>
+  <div class="tblwrap rv"><table class="tbl">
+    <tr><th data-i18n="idx.th.g">Гарантия</th><th data-i18n="idx.th.h">Как</th><th data-i18n="idx.th.s">Статус</th></tr>
+    <tr><td data-i18n="idx.e1k">Сквозное FHE</td><td data-i18n="idx.e1v">строки шифруются на клиенте и никогда не расшифровываются; веса раскрывает комитет после settlement</td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e2k">Явные бюджеты</td><td><code>createTask(budget, params)</code> <span data-i18n="idx.e2v">эскроуирует ровно названное — ни больше</span></td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e3k">Сеттлмент всегда завершается</td><td data-i18n="idx.e3v">всех сразу не оплатить (~584M газа при лимите 30M), поэтому settleFrom(taskId, cursor) — по 200 за вызов</td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e4k">Раскрытие аттестовано</td><td data-i18n="idx.e4v">Disclosed только после threshold частичных расшифровок; покупатель церемонию не срезает</td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e5k">Ротация ключей не врёт</td><td data-i18n="idx.e5v">NetworkParams привязывает кандидата к хэшу при предложении и перепроверяет при исполнении</td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e6k">Верифаер не подменить мгновенно</td><td data-i18n="idx.e6v">предложение → 7-дневный таймлок → исполнение кем угодно, заморозка невозможна</td><td><span class="stamp ok">enforced</span></td></tr>
+  </table></div>
+</section>
 
-    <ul class="props">
-      <li>
-        <span class="tick" aria-hidden="true"></span>
-        <div><h4>FHE end-to-end</h4><p>Input rows are encrypted client-side and never decrypted. Final weights are committee-revealed after settlement.</p></div>
-      </li>
-      <li>
-        <span class="tick" aria-hidden="true"></span>
-        <div><h4>Explicit budgets</h4><p><code>createTask(budget, params)</code> escrows exactly what the buyer names — no more.</p></div>
-      </li>
-      <li>
-        <span class="tick" aria-hidden="true"></span>
-        <div><h4>Settlement always completes</h4><p>Paying every contributor in one call measured ~584M gas against a 30M block limit, so <code>settleFrom(taskId, cursor)</code> pages at 200 per call.</p></div>
-      </li>
-      <li>
-        <span class="tick" aria-hidden="true"></span>
-        <div><h4>Disclosure is attested</h4><p>A task only reaches <code>Disclosed</code> once the committee has submitted <code>threshold</code> distinct partial decryptions. The buyer cannot shortcut the ceremony.</p></div>
-      </li>
-      <li>
-        <span class="tick" aria-hidden="true"></span>
-        <div><h4>Key rotation cannot lie</h4><p><code>NetworkParams</code> binds a candidate to its hash at proposal time and re-validates at execution, so the struct that was checked is the struct that lands.</p></div>
-      </li>
-      <li>
-        <span class="tick" aria-hidden="true"></span>
-        <div><h4>The verifier cannot be swapped instantly</h4><p>Propose → 7-day timelock → execute, with permissionless execution so a queued rotation cannot be frozen by a compromised owner.</p></div>
-      </li>
-    </ul>
-  </section>
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.s04n">04 / NOT YET</span><h2 class="sect-title" data-i18n="idx.s04t">Три вещи, которые пока неправда</h2></div>
+  <p class="sect-lede" data-i18n="idx.s04l">Протокол, который двигает деньги, обязан показывать мягкие места. Вот главные.</p>
+  <div class="cols3">
+    <article class="card rv"><span class="tag red">PRICED</span><h3 data-i18n="idx.w1t">Кворум споров не Sybil-устойчив</h3><p data-i18n="idx.w1p">Бонд + запрет повторных BLS-ключей + слэш. Но кворум — плоское «3 адреса», капитал возвращается. Кольцо из трёх адресов может лишить узел награды и сжечь его бонд — украсть не может.</p></article>
+    <article class="card rv"><span class="tag red">MISSING</span><h3 data-i18n="idx.w2t">Нет бонда контрибьютора и полной STARK-проверки</h3><p data-i18n="idx.w2p">Фермерство строк сдерживается только sqrt(rows) + один шард на адрес. Проверка в цепочке — сэмплированная, полная — off-chain.</p></article>
+    <article class="card rv"><span class="tag red">RESIDUAL</span><h3 data-i18n="idx.w3t">Большинство комитета видит строки</h3><p data-i18n="idx.w3p">Свойство пороговой схемы, а не баг: меньшинство не расшифрует, сговор большинства — может. Зафиксировано как F-10.</p></article>
+  </div>
+  <p style="margin-top:16px"><a href="./security.html" data-i18n="idx.more">Все находки threat model →</a></p>
+</section>
 
-  <section class="sect">
-    <h2 class="sect-h">Three things that are not true yet</h2>
-    <p class="sect-lede">
-      A protocol that moves money should tell you where it is soft. These are the ones that matter.
-    </p>
+<section class="sect" style="padding-bottom:40px">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.s05n">05 / REPO</span><h2 class="sect-title" data-i18n="idx.s05t">Репозиторий</h2></div>
+  <div class="tblwrap rv"><table class="tbl">
+    <tr><th data-i18n="idx.th.p">Путь</th><th data-i18n="idx.th.w">Что внутри</th><th data-i18n="idx.th.tt">Тесты</th></tr>
+    <tr><td><code>packages/contracts</code></td><td data-i18n="idx.rp1">fhEVM Solidity: CipherTask, PaymentVault, DecryptionGate, NetworkParams, ProofVerifier; lifecycle, fuzz, газ-снапшот, векторы байт-раскладки</td><td>110</td></tr>
+    <tr><td><code>packages/sdk</code></td><td data-i18n="idx.rp2">@shroud/sdk: uploadAndMonetize, publishWeights, EIP-712, DA-клиент, key-pin, weight-файлы</td><td>39</td></tr>
+    <tr><td><code>node</code></td><td data-i18n="idx.rp3">Rust-узел: follower цепочки, детерминированный движок, tfhe-rs за фичей prover, gRPC-mesh, контент-адресный DA</td><td>165+</td></tr>
+    <tr><td><code>bot</code></td><td data-i18n="idx.rp45">Telegram-опс</td><td>39</td></tr>
+    <tr><td><code>infra</code></td><td data-i18n="idx.rp4">docker devnet: fhEVM-нода, ShardStore (лимиты + range), 3 узла; ранбук оператора</td><td>8</td></tr>
+    <tr><td><code>docs</code></td><td data-i18n="idx.rp5">архитектура, криптография, proof-of-compute, threat model, честные ограничения</td><td>—</td></tr>
+  </table></div>
+  <div class="cols2">
+    <div><pre class="code"><span class="c"># devnet: 3 commands</span>
+<span class="k">cd</span> infra &amp;&amp; docker compose up -d --build devnet shardstore
+<span class="k">cd</span> ../packages/contracts &amp;&amp; npm run deploy:devnet
+npx hardhat run scripts/devnet-e2e-check.ts --network localhost</pre></div>
+    <div class="notice"><b class="t" data-i18n="idx.dev">Почему --network localhost</b><span data-i18n="idx.devp">Плагин fhevm ставит mock-сопроцессор только под этим именем (8545, chainId 31337). Любая другая сеть — provider Unknown, конструктор CipherTask ревертится без причины.</span></div>
+  </div>
+</section>
 
-    <div class="grid-3">
-      <article class="card warn">
-        <span class="pill pill-bad">priced, not prevented</span>
-        <h3>The dispute quorum is not Sybil-resistant</h3>
-        <p>
-          <code>registerNode</code> pulls a registration bond and rejects reused BLS keys, and a
-          quorum slashes the winner's bond — but locked capital returns after terminality and the
-          quorum is still a flat count of three, so a ring of three funded addresses can deny a
-          node its reward and burn its bond with it. It cannot steal the reward.
-        </p>
-      </article>
-      <article class="card warn">
-        <span class="pill pill-bad">not implemented</span>
-        <h3>No contribution bond, and no on-chain STARK check</h3>
-        <p>
-          Sybil row-farming is mitigated only by <code>sqrt(rows)</code> weighting plus one shard per
-          address. Verification is sampled on chain and completed off-chain.
-        </p>
-      </article>
-      <article class="card warn">
-        <span class="pill pill-bad">residual</span>
-        <h3>A committee majority can decrypt user rows</h3>
-        <p>
-          This is documented as residual F-10 and is a property of the threshold scheme, not a bug
-          to be patched later.
-        </p>
-      </article>
-    </div>
-
-    <p class="more"><a href="./security.html">All 35 findings in the threat model →</a></p>
-  </section>
-
-  <section class="sect alt">
-    <h2 class="sect-h">Repository</h2>
-    <div class="grid-2">
-      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/packages/contracts">
-        <h3>packages/contracts</h3>
-        <p>fhEVM Solidity: <code>CipherTask</code>, <code>PaymentVault</code>, <code>DecryptionGate</code>, <code>NetworkParams</code>, <code>ProofVerifier</code>. 69 Hardhat tests.</p>
-      </a>
-      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/packages/sdk">
-        <h3>packages/sdk</h3>
-        <p><code>@shroud/sdk</code> — local FHE encryption, shard upload, EIP-712 payment binding, hardened DA client. 20 tests.</p>
-      </a>
-      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/node">
-        <h3>node</h3>
-        <p>Rust compute node: tonic gRPC, alloy JSON-RPC, deterministic execution engine, tfhe-rs FHE.</p>
-      </a>
-      <a class="card link" href="https://github.com/ssrjkk/shroud/tree/main/infra">
-        <h3>infra</h3>
-        <p>docker-compose devnet: fhEVM node, ShardStore data availability, three compute nodes.</p>
-      </a>
-    </div>
-  </section>
-
+<section class="sect only-pro" style="padding-bottom:40px">
+  <div class="sect-head"><span class="sect-num" data-i18n="idx.pxn">06 / PRO</span><h2 class="sect-title" data-i18n="idx.pxt">Цифры для прошаренных</h2></div>
+  <p class="sect-lede" data-i18n="idx.pxl">Константы, которые обычно ищут в коде. Все — из контрактов и ноды, а не из головы.</p>
+  <div class="tblwrap rv"><table class="tbl">
+    <tr><th data-i18n="idx.pxh1">Параметр</th><th data-i18n="idx.pxh2">Значение</th></tr>
+    <tr><td data-i18n="idx.px1k">Доли пулов</td><td data-i18n="idx.px1v">8000 / 1500 / 500 bps: контрибьюторы / узлы / казна</td></tr>
+    <tr><td data-i18n="idx.px2k">Страница сеттлмента</td><td data-i18n="idx.px2v">200 получателей за вызов; полный проход — ~584M газа при лимите блока 30M</td></tr>
+    <tr><td data-i18n="idx.px3k">Кворум споров</td><td data-i18n="idx.px3v">3 разных репортера + слэш бонда победителя в refund; бонд возвращается после терминальности</td></tr>
+    <tr><td data-i18n="idx.px4k">Раскрытие</td><td data-i18n="idx.px4v">t-of-n частичных расшифровок; withdraw требует реального threshold</td></tr>
+    <tr><td data-i18n="idx.px5k">Ротация</td><td data-i18n="idx.px5v">предложение → 7 дней таймлока → исполнение кем угодно</td></tr>
+    <tr><td data-i18n="idx.px6k">Веса</td><td data-i18n="idx.px6v">файл shroud/weights/v1: magic + u32 features + i32 лейны; дайджест — keccak LE-байтов</td></tr>
+  </table></div>
+</section>
 </main>
 
-<footer class="foot">
-  <div class="foot-in">
-    <p>MIT licensed. Built as a reference implementation of private compute, not as a product.</p>
-    <p class="foot-links">
-      <a href="https://github.com/ssrjkk/shroud">Source</a>
-      <a href="./security.html">Security status</a>
-      <a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md">Report a vulnerability</a>
-    </p>
-  </div>
-</footer>
+<footer class="foot"><div class="foot-in">
+  <div><p class="foot-brand">Shroud</p><p data-i18n="f.about">Приватное программируемое ML с проверяемыми вычислениями и потоковыми выплатами. Референсная реализация, не продукт.</p></div>
+  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a><br /><a href="https://github.com/ssrjkk/shroud/tree/main/docs" data-i18n="f.docs">Документы</a></p></div>
+</div><div class="foot-base"><span>© 2026 ssrjkk · SHR-2026-01</span><span data-i18n="f.base">plaintext никогда не покидает устройство</span></div></footer>
 
+<script src="./assets/i18n.js"></script>
 <script src="./assets/app.js"></script>
 </body>
 </html>

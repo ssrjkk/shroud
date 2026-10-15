@@ -1,154 +1,102 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru" data-theme="ink" data-mode="new">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Security status — Shroud</title>
-<meta name="description" content="What Shroud enforces on chain today, and what it does not. 35 threat-model findings, in full." />
+<title data-i18n="sec.title">Безопасность — Shroud: что enforced, а что нет</title>
+<meta name="description" data-i18n-desc="sec.desc" content="Честный статус безопасности Shroud: что enforced и покрыто тестами, а что — известные пробелы." />
+<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
 <link rel="stylesheet" href="./assets/style.css" />
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2305070a'/%3E%3Cpath d='M9 21c4-9 10-9 14 0' stroke='%2334e0c8' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='13' r='2.6' fill='%238b5cf6'/%3E%3C/svg%3E" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 38'%3E%3Crect width='38' height='38' fill='%230E3A7A'/%3E%3Ctext x='19' y='27' font-family='Arial' font-weight='bold' font-size='21' fill='%23FFFFFF' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
-
-<div class="grain" aria-hidden="true"></div>
-<canvas id="mesh" class="mesh" aria-hidden="true"></canvas>
-
-<a class="skip" href="#main">Skip to content</a>
-
-<header class="nav">
-  <div class="nav-in">
-    <a class="brand" href="./index.html">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" width="26" height="26"><path d="M6 22c5-11 15-11 20 0" stroke="currentColor" stroke-width="2.4" fill="none" stroke-linecap="round"/><circle cx="16" cy="11" r="2.8" fill="#8b5cf6"/></svg>
-      </span>
-      <span class="brand-name">Shroud</span>
-    </a>
-    <nav class="links">
-      <a href="./index.html">Home</a>
-      <a href="https://github.com/ssrjkk/shroud" class="btn btn-ghost">GitHub</a>
-    </nav>
+<a class="skip" href="#main" data-i18n="meta.skip">К содержанию</a>
+<div class="topbar"><div class="topbar-in">
+  <span class="st"><span class="pulse"></span><span data-i18n="sectop.status">security status · красное читать первым · аудита нет</span></span>
+  <span><a href="./index.html" data-i18n="nav.home">Главная</a> · <a href="./protocol.html" data-i18n="nav.proto">Протокол</a></span>
+</div></div>
+<header class="masthead"><div class="masthead-in">
+  <a class="brand" href="./index.html"><span class="brand-mark">S</span>
+    <span><span class="brand-name">Shroud</span><br /><span class="brand-sub" data-i18n="secbrand.sub">security papers</span></span></a>
+  <button class="burger" data-burger>Меню</button>
+  <nav class="nav" data-nav>
+    <a href="./index.html" data-i18n="nav.home">Главная</a>
+    <a href="./playground.html" data-i18n="nav.lab">Лаборатория</a>
+    <a href="./protocol.html" data-i18n="nav.proto">Протокол</a>
+    <a href="./security.html" class="active" data-i18n="nav.sec">Безопасность</a>
+    <a href="./license.html" data-i18n="nav.lic">Лицензия</a>
+  </nav>
+  <div class="controls">
+    <div class="seg" role="group" aria-label="theme"><button data-theme-btn="ink" class="on">Ink</button><button data-theme-btn="paper">Paper</button></div>
+    <div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Просто</button><button data-mode-btn="pro" data-i18n="mode.pro">Про</button></div>
+    <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
   </div>
-</header>
+</div></header>
 
 <main id="main">
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="sec.n">SEC / STATUS</span><h2 class="sect-title" data-i18n="sec.t">Что enforced. И что нет.</h2></div>
+  <p class="sect-lede" data-i18n="sec.lede">Протокол двигает деньги. Зелёная таблица без красного стоила бы ничего — поэтому провалы лежат здесь с тем же кеглем, что победы. Решаешь, доверять ли ценность, — читай красный раздел первым. Полный разбор: docs/04-threat-model.md (35 находок) и docs/05-honest-limitations.md.</p>
+  <div class="notice"><b class="t" data-i18n="sec.st">Статус</b><span data-i18n="sec.stp">Код двигает средства и не проходил внешнего аудита. Не использовать с реальной ценностью. Тесты: контракты 110, SDK 39, бот 39, узел 165+. «Протестировано» ≠ «аудировано».</span></div>
+  <div class="cols3">
+    <article class="card rv" style="border-left:6px solid var(--good)"><h3 data-i18n="sec.c1t">14 — enforced и покрыто</h3><p data-i18n="sec.c1p">Учёт эскроу, реентрантность, пулы, abort, таргет споров, оплата ре-экзекьюторов, порог раскрытия, key-pin в SDK, запрет cleartext по умолчанию, hostile-DA, ротации.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--warn)"><h3 data-i18n="sec.c2t">4 — задокументировано, не реализовано</h3><p data-i18n="sec.c2p">Сегментированные пруфы недостижимы, devnet-нюансы, immature-каналы, часть экономики — описаны как отсутствие, а не как механизм.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--bad)"><h3 data-i18n="sec.c3t">4 — известные пробелы</h3><p data-i18n="sec.c3p">Sybil-кворум, бонд контрибьютора, полная STARK-проверка, подмена ключа по умолчанию. Ниже — каждый с последствиями.</p></article>
+  </div>
+</section>
 
-  <section class="hero hero-tight">
-    <p class="eyebrow">security status</p>
-    <h1 class="hero-h">What is enforced.<br /><span class="grad">And what is not.</span></h1>
-    <p class="lede">
-      This protocol moves funds. Anyone can write a security section that is all green, and it
-      would be worthless. So this page lists the rows that <em>fail</em>, with the same prominence
-      as the ones that pass. If you are deciding whether to trust this with value, read the red
-      section first.
-    </p>
-    <div class="hero-note">
-      <span class="dot" aria-hidden="true"></span>
-      Not externally audited. Do not deploy with real value.
-    </div>
-  </section>
+<section class="sect only-new">
+  <div class="plain-card rv"><h3 data-i18n="sec.sn">Что это значит для тебя</h3><ul><li data-i18n="sec.sp1">Не клади реальные деньги — аудита не было.</li><li data-i18n="sec.sp2">Зелёное — проверено тестами, красное — известные дыры.</li><li data-i18n="sec.sp3">Главный риск: сговор трёх адресов может сжечь награду узла.</li></ul></div>
+</section>
 
-  <section class="sect">
-    <div class="tally">
-      <div class="tally-item good"><b>14</b><span>enforced &amp; tested</span></div>
-      <div class="tally-item warn"><b>4</b><span>documented, not implemented</span></div>
-      <div class="tally-item bad"><b>4</b><span>known gaps</span></div>
-    </div>
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="sec.gn">01 / GAPS</span><h2 class="sect-title" data-i18n="sec.gt">Не enforced — то, что укусит</h2></div>
+  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="pro.ah1">Атака</th><th data-i18n="sec.gh2">Что это значит</th><th>Ref</th></tr>
+    <tr><td><span data-i18n="sec.g1t">Кворум споров не Sybil-устойчив</span> <span class="stamp no">3 / 3</span></td><td data-i18n="sec.g1p">Бонд + запрет повторных BLS-ключей, но кворум — плоские 3 адреса, капитал возвращается. Кольцо из 3 адресов лишает узел награды и сжигает его бонд; украсть награду или протащить лживую эпоху не может.</td><td>F-01, F-19</td></tr>
+    <tr><td><span data-i18n="sec.g2t">Подмену FHE-ключа не видно по умолчанию</span> <span class="stamp no">F-08</span></td><td data-i18n="sec.g2p">NetworkParams пинит ключ корректно, но по умолчанию его никто не читает: SDK — только при переданных networkParams + fhePublicKeyHash, проверка узла — opt-in. Форензика задним числом возможна.</td><td>F-08</td></tr>
+    <tr><td><span data-i18n="sec.g3t">Нет слэшабельного бонда взносов</span> <span class="stamp no">missing</span></td><td data-i18n="sec.g3p">Фермерство фейковых строк сдерживается лишь sqrt(rows) + один шард на адрес. Бонда нет нигде в дереве.</td><td>F-01</td></tr>
+    <tr><td><span data-i18n="sec.g4t">Цепочка не проверяет STARK целиком</span> <span class="stamp no">sampled</span></td><td data-i18n="sec.g4p">Ончейн — привязка транскрипта и сэмпл сегментов; полная проверка — off-chain в ops-контуре.</td><td>§3</td></tr>
+    <tr><td><span data-i18n="sec.g5t">Большинство комитета расшифрует строки</span> <span class="stamp mid">by design</span></td><td data-i18n="sec.g5p">Свойство пороговой схемы: меньшинство не может, сговор большинства — может.</td><td>F-10</td></tr>
+  </table></div>
+</section>
 
-    <h2 class="sect-h" id="not-enforced">Not enforced</h2>
-    <p class="sect-lede">These are the ones that would bite you.</p>
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="sec.en">02 / ENFORCED</span><h2 class="sect-title" data-i18n="sec.et">Enforced и покрыто тестами</h2></div>
+  <p class="sect-lede" data-i18n="sec.el">У каждого пункта есть тест, падающий без фикса.</p>
+  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="idx.th.g">Гарантия</th><th data-i18n="idx.th.h">Как</th></tr>
+    <tr><td data-i18n="sec.e1">Учёт эскроу согласован</td><td data-i18n="sec.e1h">PaymentVault: totalLocked == subBalances + channelLocks на каждом движении, O(1) + fuzz</td></tr>
+    <tr><td data-i18n="sec.e2">Реентрантность закрыта</td><td data-i18n="sec.e2h">hostile-токен с колбэком mid-transferFrom; гард держит</td></tr>
+    <tr><td data-i18n="sec.e3">Покупатель не трогает чужое</td><td data-i18n="sec.e3h">settle и reclaim — из непересекающихся пулов</td></tr>
+    <tr><td data-i18n="sec.e4">abort ничего не бросает</td><td data-i18n="sec.e4h">удерживается лишь проверенный work-in-progress — как выкупаемый канал</td></tr>
+    <tr><td data-i18n="sec.e5">Спор бьёт в победителя</td><td data-i18n="sec.e5h">проигравший коммиттер не перенаправит спор на честную эпоху</td></tr>
+    <tr><td data-i18n="sec.e6">Спорить рационально</td><td data-i18n="sec.e6h">reexecutionBps — репортерам; бонд победителя — в refund</td></tr>
+    <tr><td data-i18n="sec.e7">Disclosed значит расшифровано</td><td data-i18n="sec.e7h">withdraw требует порога гейта</td></tr>
+    <tr><td data-i18n="sec.e8">SDK не грузит cleartext</td><td data-i18n="sec.e8h">требуется providesConfidentiality; NoopEncryptor без allowUnencrypted отклоняется</td></tr>
+    <tr><td data-i18n="sec.e9">DA-клиент параноик</td><td data-i18n="sec.e9h">валидация CID, лимиты, таймауты, getVerified перехэширует против ctDigest</td></tr>
+    <tr><td data-i18n="sec.e10">Ротация ставит проверенное</td><td data-i18n="sec.e10h">кандидат привязан к хэшу и перепроверен при исполнении</td></tr>
+    <tr><td data-i18n="sec.e11">Верифаер не подменить</td><td data-i18n="sec.e11h">предложение → 7 дней → исполнение кем угодно</td></tr>
+    <tr><td data-i18n="sec.e12">Поверхность не врёт</td><td data-i18n="sec.e12h">недостижимые декларации удалены, а не оставлены</td></tr>
+  </table></div>
+</section>
 
-    <div class="rows">
-      <article class="row bad">
-        <div class="row-h"><span class="pill pill-bad">priced, not prevented</span><h3>The dispute quorum is not Sybil-resistant</h3></div>
-        <p><code>registerNode</code> pulls a registration bond (vault custody) and rejects reused BLS keys, and a dispute quorum slashes the winner's bond into the buyer refund. The quorum is still a flat count of three distinct registered addresses and locked capital returns after terminality, so three funded addresses can deny a node its reward for an epoch and burn its bond with it. It cannot steal the reward, and it cannot accept a dishonest one — only refuse an honest node.</p>
-        <p class="ref">Threat model F-01, F-19 · limitations §2a</p>
-      </article>
-
-      <article class="row bad">
-        <div class="row-h"><span class="pill pill-bad">not enforced</span><h3>Participants cannot detect a substituted FHE public key</h3></div>
-        <p><code>NetworkParams</code> pins the key correctly on chain, but nothing reads it by default. The SDK refuses to upload only when the caller passes <code>networkParams</code> + <code>fhePublicKeyHash</code>, and the node's <code>enforce_key_pin</code> startup check is opt-in — off unless an operator turns it on, and even then it runs once at boot. A malicious sequencer can swap the key and harvest ciphertexts undetectably. The on-chain history does allow forensic detection afterwards.</p>
-        <p class="ref">Threat model F-08</p>
-      </article>
-
-      <article class="row bad">
-        <div class="row-h"><span class="pill pill-bad">not implemented</span><h3>No slashable contribution bond</h3></div>
-        <p>Fake-row farming is mitigated only by <code>sqrt(rows)</code> weighting plus one shard per address. There is no bond anywhere in the tree. An earlier version of the threat model claimed otherwise and has been corrected — a claim in a security doc that the code does not support is worse than no claim.</p>
-        <p class="ref">Threat model F-01 · limitations §2</p>
-      </article>
-
-      <article class="row bad">
-        <div class="row-h"><span class="pill pill-bad">not implemented</span><h3>The chain does not fully verify the STARK</h3></div>
-        <p>Verification is sampled on chain and completed off-chain. On-chain sampling bounds cost, not trust: a prover that passes sampling still owes the network an off-chain check.</p>
-        <p class="ref">limitations §3</p>
-      </article>
-
-      <article class="row warnrow">
-        <div class="row-h"><span class="pill pill-warn">residual, by design</span><h3>A committee majority can decrypt user rows</h3></div>
-        <p>This is a property of the threshold scheme rather than a bug. A majority of the decryption committee can reconstruct the plaintext; the scheme protects against a minority, not against collusion.</p>
-        <p class="ref">Threat model F-10</p>
-      </article>
-    </div>
-
-    <h2 class="sect-h" id="enforced">Enforced and tested</h2>
-    <p class="sect-lede">Each of these has a test that fails without the fix.</p>
-
-    <ul class="props">
-      <li><span class="tick" aria-hidden="true"></span><div><h4>Escrow accounting is internally consistent</h4><p><code>PaymentVault</code> asserts <code>totalLocked == subBalancesTotal + channelLocksTotal</code> on every balance movement, and the check is O(1).</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>A reentrancy guard covers the money path</h4><p>Tested with a hostile token that calls back mid-<code>transferFrom</code>.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>Buyers cannot take funds owed to others</h4><p><code>settle</code> and <code>reclaimUnspentEpochs</code> draw from disjoint pools, and reclaim reserves the contributor and committee shares.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>Nothing is stranded by <code>abort</code></h4><p>The work-in-progress slice is only withheld when a node actually verified an epoch, and it is paid as a redeemable channel rather than burned.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>The winner's digest is the dispute target</h4><p>A losing committer cannot redirect the dispute and get an honest epoch rejected for free.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>Re-executors are paid</h4><p><code>reexecutionBps</code> of the disputed lock is split between the reporters, so disputing is rational rather than free.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4><code>Disclosed</code> means the committee decrypted</h4><p><code>withdraw</code> requires the gate to have reached <code>threshold</code>; the buyer cannot shortcut the ceremony.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>The SDK cannot upload cleartext by omission</h4><p><code>Encryptor.providesConfidentiality</code> is required, and the <code>NoopEncryptor</code> default is refused unless <code>allowUnencrypted</code> is set explicitly.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>The DA client treats CIDs as hostile</h4><p>CIDs come from on-chain data any contributor controls, so they are validated before entering a request path; responses are size-capped and timed out, and <code>getVerified</code> re-hashes bytes against the on-chain <code>ctDigest</code>.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>Parameter rotation installs exactly what it validated</h4><p>The candidate is bound to its hash at proposal time and re-validated at execution, so the struct that was checked is the struct that lands.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>The payout-gating verifier cannot be swapped instantly</h4><p>Propose → 7-day timelock → execute, with permissionless execution so a queued rotation cannot be frozen by a compromised owner.</p></div></li>
-      <li><span class="tick" aria-hidden="true"></span><div><h4>The surface does not imply guarantees that don't exist</h4><p>Unreachable declarations that implied missing mechanisms — a slashable bond, a rejected-contribution event, a finalize step that never ran — were removed rather than left to be misread.</p></div></li>
-    </ul>
-
-    <h2 class="sect-h" id="known-issues">Known issues worth knowing</h2>
-
-    <div class="rows">
-      <article class="row warnrow">
-        <div class="row-h"><span class="pill pill-warn">known issue</span><h3>The devnet deployment is broken with the pinned plugin</h3></div>
-        <p><code>hardhat run</code> does not install the FHE mock coprocessor, so <code>CipherTask</code>'s constructor reverts with no reason; and the plugin refuses to deploy to a standalone <code>hardhat node</code> (<code>Provider type mismatch</code>). <code>deploy.ts</code> detects both and prints the diagnosis instead of a bare revert. The contracts are still fully exercised by the test suite.</p>
-        <p class="ref">Threat model F-31</p>
-      </article>
-
-      <article class="row warnrow">
-        <div class="row-h"><span class="pill pill-warn">deferred</span><h3>Segmented proofs are documented as reachable but are not</h3></div>
-        <p>No segmented proof implementation exists in the tree. The docs now say so rather than describing a mechanism that is not there.</p>
-        <p class="ref">Threat model F-33</p>
-      </article>
-
-      <article class="row warnrow">
-        <div class="row-h"><span class="pill pill-warn">protocol change needed</span><h3>Immature channels shrink the contributor pool at settlement</h3></div>
-        <p>Contributors that never redeem are reclaimed only at settlement, so a task at its contributor cap can end each epoch with too few contributors to settle. This needs a protocol change, not a patch.</p>
-        <p class="ref">Threat model F-22</p>
-      </article>
-    </div>
-
-    <p class="more">
-      The full analysis is in <code>docs/04-threat-model.md</code> (35 findings) and
-      <code>docs/05-honest-limitations.md</code>.
-      <a href="https://github.com/ssrjkk/shroud/tree/main/docs">Read the docs →</a>
-    </p>
-  </section>
-
+<section class="sect" style="padding-bottom:40px">
+  <div class="sect-head"><span class="sect-num" data-i18n="sec.kn">03 / KNOWN</span><h2 class="sect-title" data-i18n="sec.kt">Известные нюансы</h2></div>
+  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="sec.kh1">Нюанс</th><th data-i18n="sec.kh2">Суть</th></tr>
+    <tr><td data-i18n="sec.k1t">Devnet и пиновый плагин</td><td data-i18n="sec.k1p">hardhat run без моков ревертит конструктор без причины; deploy.ts печатает диагноз вместо голого реверта. Сьюта контракты покрывает полностью.</td></tr>
+    <tr><td data-i18n="sec.k2t">Сегментированные пруфы</td><td data-i18n="sec.k2p">Документированы как достижимые, но реализации в дереве нет. Доки так и говорят.</td></tr>
+    <tr><td data-i18n="sec.k3t">Незрелые каналы жмут пул</td><td data-i18n="sec.k3p">Невыкупленные контрибьюторы возвращаются лишь при settlement. Лечится протоколом, не патчем.</td></tr>
+    <tr><td data-i18n="sec.k4t">Зависимости-аудиты</td><td data-i18n="sec.k4p">npm audit ругается на транзитивы Hardhat 2 — это раннер тестов, не байткод. Фикс — мажор Hardhat 2→3 после релиза fhevm-плагина.</td></tr>
+  </table></div>
+  <div class="notice good"><b class="t" data-i18n="sec.rep">Сообщить об уязвимости</b><span data-i18n="sec.repp">Приватно через GitHub Security Advisories: github.com/ssrjkk/shroud/security/advisories/new. Не открывай публичный issue, не прикладывай ключи и креды. Подтверждение — в течение 3 рабочих дней. В скоупе: логика CipherTask/PaymentVault/DecryptionGate/NetworkParams/ProofVerifier, криптомисюз, утечки секретов. Вне скоупа: задокументированные ограничения FHE/STARK, операторские single-ключи, фичреквесты.</span></div>
+</section>
 </main>
 
-<footer class="foot">
-  <div class="foot-in">
-    <p>MIT licensed. Built as a reference implementation of private compute.</p>
-    <p class="foot-links">
-      <a href="./index.html">Home</a>
-      <a href="https://github.com/ssrjkk/shroud">Source</a>
-      <a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md">Report a vulnerability</a>
-    </p>
-  </div>
-</footer>
-
+<footer class="foot"><div class="foot-in">
+  <div><p class="foot-brand">Shroud</p><p data-i18n="f.secnote">Протокол двигает деньги. Красное читай первым.</p></div>
+  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md" data-i18n="f.secp">Security policy</a><br /><a href="https://github.com/ssrjkk/shroud/tree/main/docs" data-i18n="f.docs">Документы</a></p></div>
+</div><div class="foot-base"><span>© 2026 ssrjkk</span><span data-i18n="f.base4">threats 35 · honest first</span></div></footer>
+<script src="./assets/i18n.js"></script>
 <script src="./assets/app.js"></script>
 </body>
 </html>
