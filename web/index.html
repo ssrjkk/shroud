@@ -40,7 +40,7 @@
   <div class="hero-left">
     <p class="kicker" data-i18n="idx.kick">fhEVM · FHE · STARK · потоковые выплаты</p>
     <h1 class="display" data-i18n-html="idx.h1">Обучай модель на чужих <span class="acc">зашифрованных</span> данных — <span class="line2">не видя их.</span></h1>
-    <p class="lede" data-i18n-html="idx.lede">Shroud — app-chain на полностью гомоморфном шифровании. Покупатель кладёт бюджет в <strong>эскроу</strong>, узлы считают обучение <strong>по шифротексту</strong>, каждая эпоха фиксируется <strong>proof-of-compute дайджестом</strong>, который можно перепроверить и отклонить, а выплаты текут <strong>потоковыми каналами</strong>. Продай ценность данных, не раскрывая данные.</p>
+    <p class="lede" data-i18n-html="idx.lede">Shroud — app-chain на полностью гомоморфном шифровании. Покупатель кладёт бюджет в <strong>эскроу</strong>, в боевом пути узлы считают обучение <strong>по шифротексту</strong>, каждая эпоха фиксируется <strong>proof-of-compute дайджестом</strong>, который можно перепроверить и отклонить, а выплаты текут <strong>потоковыми каналами</strong>. Продай ценность данных, не раскрывая данные.</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="./playground.html" data-i18n="idx.cta1">Открыть лабораторию</a>
       <a class="btn btn-ghost" href="./protocol.html" data-i18n="idx.cta2">Читать протокол</a>
@@ -57,7 +57,7 @@
     <table>
       <tr><td data-i18n="idx.sp.r1k">Цепочка</td><td data-i18n="idx.sp.r1v">fhEVM L3, эскроу в USDC, FSM задачи: Opening → Collecting → Sealed → Epoch → Settling → Revealing → Disclosed</td></tr>
       <tr><td data-i18n="idx.sp.r2k">Данные</td><td data-i18n="idx.sp.r2v">строки шифруются на устройстве (FHEWasm / relayer), в цепочке только CID и дайджесты по 32 байта</td></tr>
-      <tr><td data-i18n="idx.sp.r3k">Доказательство</td><td data-i18n="idx.sp.r3v">STARK-транскрипт: chainId, задача, ctRoot, веса; кворум из 3 независимых ре-экзекьюторов</td></tr>
+      <tr><td data-i18n="idx.sp.r3k">Доказательство</td><td data-i18n="idx.sp.r3v">STARK-транскрипт: chainId, задача, ctRoot, веса; кворум из 3 ре-экзекьюторов</td></tr>
       <tr><td data-i18n="idx.sp.r4k">Деньги</td><td data-i18n="idx.sp.r4v">contributors 80% · nodes 15% · остаток — комитету и возврат; reclaim и refund из разных пулов</td></tr>
       <tr><td data-i18n="idx.sp.r5k">Раскрытие</td><td data-i18n="idx.sp.r5v">только порог комитета; покупатель сам себе «раскрыто» не подпишет</td></tr>
     </table>
@@ -72,7 +72,7 @@
 <section class="sect only-new">
   <div class="sect-head"><span class="sect-num" data-i18n="idx.gn">00 / ПРОСТЫМИ СЛОВАМИ</span><h2 class="sect-title" data-i18n="idx.gt">Три шага — без жаргона</h2></div>
   <div class="guide">
-    <div class="gstep rv"><b class="n">1</b><h3 data-i18n="idx.gs1t">Данные шифруются у владельца</h3><p data-i18n="idx.gs1p">Таблица превращается в шифротекст прямо в браузере. Сервер видит только «запечатанный пакет».</p></div>
+    <div class="gstep rv"><b class="n">1</b><h3 data-i18n="idx.gs1t">Данные шифруются у владельца</h3><p data-i18n="idx.gs1p">В боевом пути таблица превращается в шифротекст на устройстве контрибьютора. Сервер видит только «запечатанный пакет».</p></div>
     <div class="gstep rv"><b class="n">2</b><h3 data-i18n="idx.gs2t">Узлы учатся вслепую</h3><p data-i18n="idx.gs2p">Модель обучается операциями над шифротекстом. Каждая эпоха получает проверяемый отпечаток.</p></div>
     <div class="gstep rv"><b class="n">3</b><h3 data-i18n="idx.gs3t">Деньги делятся сами</h3><p data-i18n="idx.gs3p">Эскроу платит владельцам данных, узлам и комитету по мере готовности эпох.</p></div>
   </div>
@@ -80,7 +80,7 @@
 
 <section class="sect">
   <div class="sect-head"><span class="sect-num" data-i18n="idx.s01n">01 / PIPELINE</span><h2 class="sect-title" data-i18n="idx.s01t">Конвейер: от plaintext до денег</h2></div>
-  <p class="sect-lede" data-i18n="idx.s01l">Шифрование происходит в браузере. С этого момента ни цепочка, ни память узла plaintext не содержат. Полная последовательность из 29 шагов — на странице «Протокол»; здесь — скелет.</p>
+  <p class="sect-lede" data-i18n="idx.s01l">В боевом пути шифрование происходит на устройстве контрибьютора (SDK/relayer); стенд ниже считает локально. С этого момента ни цепочка, ни память узла plaintext не содержат. Полная последовательность из 29 шагов — на странице «Протокол»; здесь — скелет.</p>
   <div class="scheme rv">
     <div class="scheme-head"><span data-i18n="idx.sch.head">Схема A — движение данных и денег</span><span data-i18n="idx.sch.side">лист 01 · масштаб 1:1</span></div>
     <div class="scheme-body">
@@ -106,7 +106,7 @@
   </div>
   <div class="cols3">
     <article class="card solid rv"><span class="tag">FHE</span><h3 data-i18n="idx.c1t">Считаем, не глядя</h3><p data-i18n="idx.c1p">ZK доказывает, что посчитано. FHE убирает саму нужду показывать вход. Разница между «проверь результат» и «тебе вообще нечего смотреть».</p><div class="foot-line" data-i18n="idx.c1f">вход: euint32 · масштаб 1e4 · батч 8</div></article>
-    <article class="card solid rv"><span class="tag">PROOF</span><h3 data-i18n="idx.c2t">Доказательство работы</h3><p data-i18n="idx.c2p">Эпоха привязана к chainId, задаче, корню датасета и прошлым весам. Три независимых ре-экзекьютора с другим дайджестом — эпоха отклонена, выплат нет.</p><div class="foot-line" data-i18n="idx.c2f">кворум 3 · бонд победителя сжигается в refund</div></article>
+    <article class="card solid rv"><span class="tag">PROOF</span><h3 data-i18n="idx.c2t">Доказательство работы</h3><p data-i18n="idx.c2p">Эпоха привязана к chainId, задаче, корню датасета и прошлым весам. Три ре-экзекьютора с другим дайджестом — эпоха отклонена, выплат нет.</p><div class="foot-line" data-i18n="idx.c2f">кворум 3 · бонд победителя сжигается в refund</div></article>
     <article class="card solid rv"><span class="tag">MONEY</span><h3 data-i18n="idx.c3t">Потоковые выплаты</h3><p data-i18n="idx.c3p">PaymentVault платит слайсами по мере эпох. Невостребованное узел забирает сам через reclaim; покупатель чужого не тронет — пулы не пересекаются.</p><div class="foot-line" data-i18n="idx.c3f">settleFrom · курсор · 200 за вызов</div></article>
   </div>
 </section>
@@ -115,8 +115,8 @@
   <div class="sect-head"><span class="sect-num" data-i18n="idx.s02n">02 / USE</span><h2 class="sect-title" data-i18n="idx.s02t">Пользоваться — прямо здесь</h2></div>
   <p class="sect-lede" data-i18n="idx.s02l">Лаборатория считает той же математикой, что боевой узел и SDK: квантование, reference-SGD, trace-дайджест, proof-референс. Без сервера, без кошелька, без отправки данных.</p>
   <div class="cols2">
-    <article class="card solid rv"><span class="tag red">LAB · 01–06</span><h3 data-i18n="idx.u1t">Полный цикл за 3 минуты</h3><p data-i18n="idx.u1p">Вставь CSV → зашифруй → задай бюджет → выполни эпоху → собери STARK-транскрипт → рассчитай выплаты. На выходе — веса, дайджесты и JSON-отчёт.</p><div class="btnrow"><a class="btn btn-primary btn-sm" href="./playground.html" data-i18n="idx.u1b">Открыть лабораторию</a></div><div class="foot-line" data-i18n="idx.u1f">файл: web/assets/crypto.js · детерминировано · воспроизводимо узлом</div></article>
-    <article class="card rv"><span class="tag line">ROLES</span><h3 data-i18n="idx.u2t">Четыре входа в протокол</h3><p data-i18n="idx.u2p">Покупатель — эскроу и openEpoch. Контрибьютор — шифруй локально, монетизируй шард. Оператор узла — исполняй, коммить, оспаривай, забирай каналы. Наблюдатель — Telegram-бот: пул, таски, споры, ротации.</p><div class="foot-line" data-i18n="idx.u2f">роли и команды — на странице «Протокол»</div></article>
+    <article class="card solid rv"><span class="tag red">LAB · 01–06</span><h3 data-i18n="idx.u1t">Полный цикл за 3 минуты</h3><p data-i18n="idx.u1p">Вставь CSV → собери шард → задай бюджет → выполни эпоху → собери STARK-транскрипт → рассчитай выплаты. На выходе — веса, дайджесты и JSON-отчёт.</p><div class="btnrow"><a class="btn btn-primary btn-sm" href="./playground.html" data-i18n="idx.u1b">Открыть лабораторию</a></div><div class="foot-line" data-i18n="idx.u1f">файл: web/assets/crypto.js · детерминировано · воспроизводимо узлом</div></article>
+    <article class="card rv"><span class="tag line">ROLES</span><h3 data-i18n="idx.u2t">Четыре входа в протокол</h3><p data-i18n="idx.u2p">Покупатель — эскроу и openEpoch. Контрибьютор — собери шард локально, монетизируй. Оператор узла — исполняй, коммить, оспаривай, забирай каналы. Наблюдатель — Telegram-бот: пул, таски, споры, ротации.</p><div class="foot-line" data-i18n="idx.u2f">роли и команды — на странице «Протокол»</div></article>
   </div>
 </section>
 
@@ -125,7 +125,7 @@
   <p class="sect-lede" data-i18n="idx.s03l">Каждая строка ниже покрыта тестом, который падает без фикса. Строки, которые не enforced, — на странице «Безопасность», с тем же кеглем.</p>
   <div class="tblwrap rv"><table class="tbl">
     <tr><th data-i18n="idx.th.g">Гарантия</th><th data-i18n="idx.th.h">Как</th><th data-i18n="idx.th.s">Статус</th></tr>
-    <tr><td data-i18n="idx.e1k">Сквозное FHE</td><td data-i18n="idx.e1v">строки шифруются на клиенте и никогда не расшифровываются; веса раскрывает комитет после settlement</td><td><span class="stamp ok">enforced</span></td></tr>
+    <tr><td data-i18n="idx.e1k">Сквозное FHE — цель</td><td data-i18n="idx.e1v">боевой путь: строки шифруются на клиенте и никогда не расшифровываются; веса раскрывает комитет после settlement. Сегодня стенд и reference-движок работают с открытыми dev-байтами — см. docs/05 §8</td><td><span class="stamp mid">goal</span></td></tr>
     <tr><td data-i18n="idx.e2k">Явные бюджеты</td><td><code>createTask(budget, params)</code> <span data-i18n="idx.e2v">createTask(budget, params) эскроуирует ровно названное — ни больше</span></td><td><span class="stamp ok">enforced</span></td></tr>
     <tr><td data-i18n="idx.e3k">Сеттлмент всегда завершается</td><td data-i18n="idx.e3v">всех сразу не оплатить (~584M газа при лимите 30M), поэтому settleFrom(taskId, cursor) — по 200 за вызов</td><td><span class="stamp ok">enforced</span></td></tr>
     <tr><td data-i18n="idx.e4k">Раскрытие аттестовано</td><td data-i18n="idx.e4v">Disclosed только после threshold частичных расшифровок; покупатель церемонию не срезает</td><td><span class="stamp ok">enforced</span></td></tr>
@@ -183,7 +183,7 @@ npx hardhat run scripts/devnet-e2e-check.ts --network localhost</pre></div>
 <footer class="foot"><div class="foot-in">
   <div><p class="foot-brand">Shroud</p><p data-i18n="f.about">Приватное программируемое ML с проверяемыми вычислениями и потоковыми выплатами. Референсная реализация, не продукт.</p></div>
   <div><h5 data-i18n="f.map">Карта</h5><p><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
-  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a><br /><a href="https://github.com/ssrjkk/shroud/tree/main/docs" data-i18n="f.docs">Документы</a></p></div>
+  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
 </div><div class="foot-base"><span>© 2026 ssrjkk · SHR-2026-01</span><span data-i18n="f.base">plaintext никогда не покидает устройство</span></div></footer>
 
 <script src="./assets/i18n.js"></script>
