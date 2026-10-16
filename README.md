@@ -78,10 +78,10 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 
 | path | what |
 |------|------|
-| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (119 tests: lifecycle, stateful fuzz, gas snapshot, admin controls, byte-layout vectors) |
-| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files (45 tests) |
+| `packages/contracts/` | fhEVM Solidity: `CipherTask`, `PaymentVault`, `DecryptionGate`, `NetworkParams`, `ProofVerifier` + Hardhat suite (lifecycle, stateful fuzz, gas snapshot, admin controls, byte-layout vectors — [counts live in CI](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml)) |
+| `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files ([counts live in CI](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml)) |
 | `node/` | Rust compute node: chain follower + epoch executor (deterministic reference engine, `tfhe-rs` behind `prover`), gRPC mesh, content-addressed DA (`da` feature for remote) — see [Node](#node) |
-| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** (54 tests, incl. stub-RPC read coverage) |
+| `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** ([counts live in CI](https://github.com/ssrjkk/shroud/actions/workflows/bot.yml), incl. stub-RPC read coverage) |
 | `web/` | Project site (static, no build): home, in-browser lab, protocol, security status, license — RU/EN, ink/paper themes, newcomer/pro modes |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA, size-capped + range-pull), 3 nodes — operator runbook in [`infra/README.md`](infra/README.md) |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |
@@ -91,20 +91,21 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 ```sh
 # contracts
 cd packages/contracts
-npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # 119 passing
+npm ci && npx hardhat compile && npx hardhat test && npx tsc --noEmit   # counts in CI
 
 # sdk
 cd packages/sdk
-npm ci && npm test                                                       # 45 passing
+npm ci && npm test                                                       # counts in CI
 
 # ops bot (no token and no chain needed for the tests)
 cd bot
-npm ci && npm test                                                       # 54 passing
+npm ci && npm test                                                       # counts in CI
 npm start                                                                # needs bot/.env
 
 # node — needs protoc and a C toolchain; see the note below
 cd node
-cargo check --all-features
+cargo check --all-features && cargo check --no-default-features
+cargo test --all-features && cargo test --no-default-features
 
 # site — any static server
 cd web && python -m http.server 4173
