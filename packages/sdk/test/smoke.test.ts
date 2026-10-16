@@ -277,6 +277,25 @@ test("relayer quantization is exact and refuses the unrepresentable", async () =
   assert.notEqual(c1, relayerRowCommitment([15001n, 22500n]));
 });
 
+test("RelayerEncryptor refuses binding-neutral proofs (no CipherTask, no commit)", async () => {
+  // `createEncryptedInput(0x0, 0x0)` produces a proof bound to nothing: the same
+  // handles/proof replay on any task. The contract address is therefore required —
+  // fail-closed at config time, before any network call — while the user address may
+  // stay neutral (zero) for callers that bind the contributor elsewhere.
+  const { assertInputBinding } = await import("../dist/relayer-encryptor.js");
+  const task = "0x" + "11".repeat(20);
+  const user = "0x" + "22".repeat(20);
+  assert.throws(() => assertInputBinding(undefined, user), /contractAddress/);
+  assert.throws(() => assertInputBinding(ethers.ZeroAddress, user), /contractAddress/);
+  assert.throws(() => assertInputBinding("not-an-address", user), /contractAddress/);
+  assert.throws(() => assertInputBinding(task, "not-an-address"), /userAddress/);
+  assert.deepEqual(assertInputBinding(task, undefined), {
+    contractAddress: task,
+    userAddress: ethers.ZeroAddress,
+  });
+  assert.deepEqual(assertInputBinding(task, user), { contractAddress: task, userAddress: user });
+});
+
 test("FileShardStore persists across instances and verifies like the memory store", async () => {
   const { FileShardStore } = await import("../dist/file-store.js");
   const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-"));
