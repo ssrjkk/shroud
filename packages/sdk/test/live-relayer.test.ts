@@ -21,9 +21,12 @@ import {
 
 const LIVE = process.env.SHROUD_LIVE_RELAYER === "1";
 const RPC = process.env.SHROUD_LIVE_RPC ?? "https://ethereum-sepolia-rpc.publicnode.com";
+// Binding context for the proof under test. Any non-zero address exercises the
+// fail-closed path; override with a real CipherTask when replaying against one.
+const TASK = process.env.SHROUD_LIVE_TASK ?? `0x${"cc".repeat(20)}`;
 
 test("live: encrypts two values under the Sepolia network key", { skip: !LIVE }, async () => {
-  const enc = await RelayerEncryptor.create({ network: RPC });
+  const enc = await RelayerEncryptor.create({ network: RPC, contractAddress: TASK });
   assert.equal(enc.providesConfidentiality, true);
   assert.ok(enc.publicKeyHash && /^0x[0-9a-f]{64}$/.test(enc.publicKeyHash), "pin hash shape");
   assert.ok(enc.publicKeyId, "key id present");
