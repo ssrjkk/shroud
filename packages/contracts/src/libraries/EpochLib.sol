@@ -131,12 +131,13 @@ library CommitLib {
         c.revealNonce = 1;
         c.verified = true;
 
-        // First verified commit is the candidate winner; ties resolve to the lower address,
-        // fixed before the dispute window opens so nobody can buy the tie-break. The claimed
-        // digest follows the winner only (F-15): a losing committer must not move the dispute
-        // target onto its own value.
+        // First verified commit takes the winner seat and keeps it: ties resolve by commit
+        // order, not by address. Resolving to the lower address let anyone replay a proof seen
+        // in the mempool from a ground address and take the epoch without doing the work.
+        // Front-running the first commit would require predicting its trace digest, which the
+        // reporter cannot know before it is published; disagreements go through disputes.
         address incumbent = winners[taskId][epoch];
-        if (incumbent == address(0) || node < incumbent) {
+        if (incumbent == address(0)) {
             winners[taskId][epoch] = node;
             claimed[taskId][epoch] = traceDigest;
         }

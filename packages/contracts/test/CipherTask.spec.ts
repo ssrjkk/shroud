@@ -133,10 +133,10 @@ describe("CipherTask", () => {
    * transcript is derived from `(taskId, epoch, traceDigest)` and the mock verifier consumes a
    * transcript on first use.
    *
-   * The claimant is the *lowest address* of the set, because that is the tie-break `commitEpoch`
-   * applies � Hardhat signer addresses are not ordered by index, so picking `node` because it
-   * commits first would silently make a challenger the claim, and its own report would then read as
-   * agreement with the claim.
+   * The claimant commits first, which is what makes it the claim: the winner seat follows
+   * the first verified commit, so the fixture never depends on address ordering. Hardhat
+   * signer addresses are not ordered by index, so the sort below only keeps digests and
+   * proof references deterministic, not the outcome.
    */
   async function competingCommits(fx: Fx, id: bigint, epoch: number, nodes: Fx["node"][]) {
     const sorted = [...nodes].sort((a, b) => (BigInt(a.address) < BigInt(b.address) ? -1 : 1));
@@ -427,6 +427,24 @@ describe("CipherTask", () => {
       await expect(
         task.connect(node).commitEpoch(id, 0, proofRef(2), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(10))
       ).to.be.revertedWithCustomError(task, "DuplicateCommit");
+    });
+
+    it("keeps the winner seat with the first verified commit (no address steal)", async () => {
+      // A late copy with a lower address must not displace the first committer: otherwise any
+      // proof seen in the mempool can be replayed from a ground address to take the epoch.
+      const fx = await deployFixture();
+      const { task, buyer, node, node2 } = fx;
+      const [lower, higher] =
+        BigInt(node.address) < BigInt(node2.address) ? [node, node2] : [node2, node];
+      const id = await sealed(fx, { nodes: [lower, higher] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await task
+        .connect(higher)
+        .commitEpoch(id, 0, proofRef(1), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(9));
+      await task
+        .connect(lower)
+        .commitEpoch(id, 0, proofRef(2), bytes32Of(4), bytes32Of(5), bytes32Of(6), bytes32Of(10));
+      expect(await task.epochWinner(id, 0)).to.equal(higher.address);
     });
   });
 
