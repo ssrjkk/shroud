@@ -110,6 +110,25 @@ describe("shardstore", () => {
     assert.equal(bad.status, 416);
   });
 
+  it("advertises range support and a content-derived ETag on 200 and 206", async () => {
+    // A client can only resume/revalidate when the server says it speaks ranges and
+    // names a validator. The ETag is the keccak cid itself: content-addressed objects
+    // never change under one address, so it is trivially strong.
+    const body = Buffer.from("etag-fixture");
+    const { cid } = await (await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body })).json();
+    const full = await fetch(`${BASE}/objects/${cid}`);
+    assert.equal(full.status, 200);
+    assert.equal(full.headers.get("accept-ranges"), "bytes");
+    assert.equal(full.headers.get("etag"), `"${cid}"`);
+    await full.arrayBuffer();
+    const part = await fetch(`${BASE}/objects/${cid}`, { headers: { Range: "bytes=0-3" } });
+    assert.equal(part.status, 206);
+    assert.equal(part.headers.get("accept-ranges"), "bytes");
+    assert.equal(part.headers.get("etag"), `"${cid}"`);
+    assert.equal(part.headers.get("content-range"), `bytes 0-3/${body.length}`);
+    await part.arrayBuffer();
+  });
+
   it("serves suffix ranges per RFC 9110", async () => {
     const body = Buffer.from("0123456789");
     const put = await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body });

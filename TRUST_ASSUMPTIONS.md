@@ -15,5 +15,6 @@ documented. If any row is unacceptable for your use case, do not escrow value.
 | T-08 | Reviewers/auditors beyond the author exist | Bugs survive (bus factor 1) | No external audit; this file + `docs/04` + `docs/05` are the whole record |
 | T-09 | The toolchain (solc, rustc, npm, Docker, GitHub Actions) is intact | Supply-chain compromise | Lockfiles committed; CI pinned (`ubuntu-24.04`, `--locked`); no provenance/SBOM yet |
 | T-10 | One BLS identity per node (no key reuse across nodes) | A single operator poses as a quorum | Enforced on-chain (key uniqueness + proof-of-possession) |
+| T-11 | The relayer serves the correct key and does not censor inputs | Wrong-key ciphertexts; censored contributions miss the window | Key bytes hashed into `publicKeyHash` and pinned on-chain; `contractAddress` binding required (`assertInputBinding`); ordering/censorship by the relayer itself is not mitigated |
 
 Removing a row requires code + tests + docs in the same change, never docs alone.
