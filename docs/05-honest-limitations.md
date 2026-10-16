@@ -79,10 +79,10 @@ mitigated, not solved. Single devnet sequencer in this repo.
 
 ## 7. Audit status
 
-Nothing here has been externally audited. The Solidity has a Hardhat suite (119 tests: lifecycle,
+Nothing here has been externally audited. The Solidity has a Hardhat suite (lifecycle,
 dispute commit-reveal, contribution bonds, segmented commits, settlement maturity, stateful fuzz,
-gas snapshot, admin controls, byte-layout vectors) and the node has 165+ unit tests including the
-state fold, but "tested" ≠ "audited". Do not deploy with real value.
+gas snapshot, admin controls, byte-layout vectors — counts live in CI) and the node has unit tests
+including the state fold (counts live in CI), but "tested" ≠ "audited". Do not deploy with real value.
 
 ## 7b. Dependency advisories are dev-tooling transitives blocked on upstream majors
 
@@ -171,8 +171,8 @@ What remains true:
 
 - `CipherTask.sol`: complete state machine, escrow, dividend, staged withdrawal, fraud window,
   opt-in contribution bonds, commit-reveal disputes, segmented commits. Covered by the Hardhat
-  suite (119 tests across the contracts, including the `test-vectors/`
-  byte-layout vectors and the `Hardening` spec for the mechanisms in this paragraph).
+  suite (counts live in CI), including the `test-vectors/`
+  byte-layout vectors and the `Hardening` spec for the mechanisms in this paragraph.
 - `PaymentVault.sol`: EIP-712 signed streaming channel with monotonic slices and reclaims, plus an
   O(1) `totalLocked == subBalances + channelLocks` invariant asserted on every balance movement.
   The reentrancy guard has its own test driven by a hostile token that calls back mid-transfer.
@@ -197,7 +197,7 @@ What remains true:
   optionally persistent), with bearer-token writes (`AUTH_TOKEN`, reads stay open by design),
   optional TLS termination (`TLS_CERT`/`TLS_KEY`), LRU-evicting catalogue (`MAX_OBJECTS`, disk
   copies go with the entry), boot index rebuild from `DATA_DIR`, and a `DELETE` endpoint — covered
-  by `server.test.mjs` (10 tests) in its own CI job. It addresses objects by keccak-256
+  by `server.test.mjs` in its own CI job. It addresses objects by keccak-256
   (`infra/shardstore/keccak.mjs`, differentially tested against `web/assets/crypto.js`),
   the same digest the chain pins — `PUT` returns a `digest` a third-party client can commit
   on-chain directly. `HttpShardStore.getVerified` still re-hashes locally instead of trusting
