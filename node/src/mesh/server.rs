@@ -111,8 +111,8 @@ pub struct AnnouncedShard {
 /// is unit-testable without sleeping.
 ///
 /// Memory is bounded like the shard index: at most `max_peers` buckets, idle-full buckets
-/// swept, and an arbitrary victim evicted when a new peer arrives at a full table (fail-open
-/// for the newcomer, whose bucket starts full — the safe direction for availability).
+/// swept, and the stalest bucket evicted when a new peer arrives at a full table — the
+/// newcomer is throttled from a full burst like any new peer, never admitted unthrottled.
 #[derive(Debug)]
 pub struct InboundThrottle {
     rps: f64,
@@ -141,6 +141,14 @@ impl InboundThrottle {
         }
     }
 
+    /// Cap the peer table below the default (see `mesh.max_throttle_peers`). The bound
+    /// is memory, not policy: past it the stalest bucket is evicted, never the accounting.
+    pub fn with_max_peers(mut self, max_peers: usize) -> Self {
+        assert!(max_peers >= 1, "throttle peer cap must be >= 1");
+        self.max_peers = max_peers;
+        self
+    }
+
     /// Take one request token for `ip`. `Err(retry_after)` when over quota.
     ///
     /// Synchronous by design: under the service lock, check-and-record is atomic and no
@@ -150,9 +158,18 @@ impl InboundThrottle {
             if self.buckets.len() >= self.max_peers {
                 self.sweep(now);
                 if self.buckets.len() >= self.max_peers {
-                    // Still full of active peers: admit the newcomer rather than refuse it.
-                    // Throttling must degrade gracefully, not lock out a rotated peer IP.
-                    return Ok(());
+                    // Still full of active peers: evict the stalest bucket to make room
+                    // rather than admitting the newcomer unthrottled. Memory stays bounded
+                    // and every peer — including an IP-rotating flooder cycling past
+                    // `max_peers` — is throttled from a full burst like any new peer.
+                    if let Some(victim) = self
+                        .buckets
+                        .iter()
+                        .min_by_key(|(_, bucket)| bucket.updated)
+                        .map(|(ip, _)| *ip)
+                    {
+                        self.buckets.remove(&victim);
+                    }
                 }
             }
             self.buckets.insert(
@@ -300,10 +317,10 @@ impl MeshService {
                 request_timeout: cfg.mesh.request_timeout,
                 state,
                 index: Arc::new(Mutex::new(ShardIndex::new(cfg.mesh.index_capacity))),
-                inbound: Arc::new(Mutex::new(InboundThrottle::new(
-                    cfg.mesh.inbound_rps,
-                    cfg.mesh.inbound_burst,
-                ))),
+                inbound: Arc::new(Mutex::new(
+                    InboundThrottle::new(cfg.mesh.inbound_rps, cfg.mesh.inbound_burst)
+                        .with_max_peers(cfg.mesh.max_throttle_peers),
+                )),
             }),
         }
     }
@@ -1029,6 +1046,49 @@ mod tests {
         // No per-peer leak from a slow trickle of distinct addresses.
         assert_eq!(t.sweep(t0 + Duration::from_secs(3600)), 1);
         assert_eq!(t.peer_count(), 0);
+    }
+
+    #[test]
+    fn a_full_table_evicts_a_victim_instead_of_admitting_unthrottled() {
+        // Fill every bucket with an active peer, then rotate in a newcomer: it must get
+        // a real (burst-limited) bucket — never an unthrottled free pass — while the
+        // table stays bounded. Otherwise cycling IPs past `max_peers` disables the
+        // throttle exactly when it is needed.
+        let mut t = InboundThrottle::new(10, 3);
+        let t0 = Instant::now();
+        for n in 0..10_000u32 {
+            let ip: IpAddr = format!("10.0.{}.{}", n / 256, n % 256).parse().unwrap();
+            assert!(t.take(ip, t0).is_ok());
+        }
+        assert_eq!(t.peer_count(), 10_000);
+        let newcomer: IpAddr = "192.0.2.1".parse().unwrap();
+        assert!(t.take(newcomer, t0).is_ok());
+        assert!(t.take(newcomer, t0).is_ok());
+        assert!(t.take(newcomer, t0).is_ok());
+        t.take(newcomer, t0)
+            .expect_err("newcomer is throttled after its burst");
+        assert!(t.peer_count() <= 10_000);
+    }
+
+    #[test]
+    fn the_configured_peer_cap_bounds_the_table() {
+        // Same eviction contract as the full-size table, at a scale a unit test can
+        // assert precisely: the fourth peer displaces one of the first three, the table
+        // never exceeds its cap, and the newcomer is burst-limited from the start.
+        let mut t = InboundThrottle::new(10, 3).with_max_peers(3);
+        let t0 = Instant::now();
+        for n in 1..=3u8 {
+            let ip: IpAddr = format!("10.9.0.{n}").parse().unwrap();
+            assert!(t.take(ip, t0).is_ok());
+        }
+        assert_eq!(t.peer_count(), 3);
+        let newcomer: IpAddr = "192.0.2.9".parse().unwrap();
+        assert!(t.take(newcomer, t0).is_ok());
+        assert_eq!(t.peer_count(), 3);
+        assert!(t.take(newcomer, t0).is_ok());
+        assert!(t.take(newcomer, t0).is_ok());
+        t.take(newcomer, t0)
+            .expect_err("newcomer is throttled after its burst");
     }
 
     #[test]

@@ -247,6 +247,9 @@ pub struct MeshConfig {
     /// Max concurrent streams per h2 connection. Each gossip stream spawns a task plus a
     /// channel, so uncapped streams are task/memory exhaustion by handshake.
     pub max_streams_per_connection: usize,
+    /// Max peer-IP buckets in the inbound throttle. Memory-bounded by construction;
+    /// past it the stalest bucket is evicted, never the accounting.
+    pub max_throttle_peers: usize,
     pub mtls_cert: Option<PathBuf>,
     pub mtls_key: Option<PathBuf>,
     pub ca_cert: Option<PathBuf>,
@@ -356,6 +359,7 @@ impl Default for Config {
                 inbound_rps: 100,
                 inbound_burst: 200,
                 max_streams_per_connection: 100,
+                max_throttle_peers: 10_000,
                 mtls_cert: None,
                 mtls_key: None,
                 ca_cert: None,
@@ -550,6 +554,13 @@ impl Config {
             return Err(ConfigError::Invalid {
                 field: "mesh.max_streams_per_connection",
                 reason: "must be >= 1; at zero no peer can open a stream".into(),
+            }
+            .into());
+        }
+        if self.mesh.max_throttle_peers == 0 {
+            return Err(ConfigError::Invalid {
+                field: "mesh.max_throttle_peers",
+                reason: "must be >= 1; at zero every peer is unaccounted".into(),
             }
             .into());
         }
@@ -881,6 +892,18 @@ mod tests {
                 }))
             ),
             "zero stream cap must be rejected"
+        );
+        let mut cfg = base();
+        cfg.mesh.max_throttle_peers = 0;
+        assert!(
+            matches!(
+                cfg.validate(),
+                Err(Error::Config(ConfigError::Invalid {
+                    field: "mesh.max_throttle_peers",
+                    ..
+                }))
+            ),
+            "zero throttle peer cap must be rejected"
         );
     }
 
