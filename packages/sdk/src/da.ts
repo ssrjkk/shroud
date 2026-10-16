@@ -354,9 +354,18 @@ export class HttpShardStore implements ShardStore {
         }
 
         // On a 206 the header is what proves the bytes belong at this offset. A short final chunk
-        // is normal, so the length alone cannot tell an honest tail from an ignored Range.
+        // is normal, so the length alone cannot tell an honest tail from an ignored Range — and a
+        // 206 without the header cannot tell a truncated honest chunk from a hostile prefix
+        // served at the wrong offset. RFC 9110 requires Content-Range on every 206, and the
+        // reference server always sends it, so a missing header is a hard failure, not leniency.
         const contentRange = res.headers.get("content-range");
-        if (contentRange) {
+        if (!contentRange) {
+          throw new Error(
+            `shard store answered 206 for range ${offset}..${offset + length - 1} of ${cid} ` +
+              `without a content-range header`
+          );
+        }
+        {
           const matched = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/.exec(contentRange);
           const start = matched ? Number(matched[1]) : Number.NaN;
           const end = matched ? Number(matched[2]) : Number.NaN;
@@ -366,11 +375,6 @@ export class HttpShardStore implements ShardStore {
                 `${offset}..${offset + length - 1} of ${cid}`
             );
           }
-        } else if (body.byteLength > length) {
-          throw new Error(
-            `shard store answered ${body.byteLength} bytes for a ${length} byte range on ${cid} ` +
-              `without a content-range header`
-          );
         }
         return body;
       }

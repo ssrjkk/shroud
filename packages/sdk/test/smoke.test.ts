@@ -490,6 +490,12 @@ test("HttpShardStore.getRange checks that the bytes really are the requested win
     // A 206 with no content-range at all is only usable if it did not overshoot the window.
     globalThis.fetch = (async () => new Response(new Uint8Array(12), { status: 206 })) as typeof fetch;
     await assert.rejects(() => store.getRange(cid, 0, 8), /without a content-range header/);
+
+    // A short body without content-range is not an honest tail: without the header a
+    // truncated honest chunk is indistinguishable from a hostile prefix served at the
+    // wrong offset, so 206 always requires content-range.
+    globalThis.fetch = (async () => new Response(new Uint8Array(4), { status: 206 })) as typeof fetch;
+    await assert.rejects(() => store.getRange(cid, 8, 8), /content-range/);
   } finally {
     globalThis.fetch = original;
   }
