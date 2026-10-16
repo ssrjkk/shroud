@@ -86,6 +86,16 @@ including the state fold (counts live in CI), but "tested" ≠ "audited". Do not
 
 ## 7b. Dependency advisories are dev-tooling transitives blocked on upstream majors
 
+Triaged 2026-10-16: 30 open Dependabot alerts, all in the Hardhat 2 dev toolchain
+(`undici`, `adm-zip`, `@fastify/busboy`, `tmp`, `serialize-javascript`, `uuid`,
+`diff`, `elliptic`, `cookie`; 1 older `pbkdf2` item already fixed). Production trees
+are clean — `npm audit --omit=dev` in `packages/sdk` reports zero, the bot ships only
+`ethers`, and contracts deploy bytecode, not `node_modules`. Fixing the 30 means a
+Hardhat major migration, so they stay open and documented instead of dismissed.
+Code scanning was not enabled — added as `codeql.yml` (javascript-typescript; Rust is
+covered by `clippy -D warnings`, Solidity by the Hardhat suite + fuzz). Secret
+scanning is clean (zero alerts).
+
 `npm audit` / Dependabot report advisories against transitive dependencies of the Hardhat 2
 toolchain (`undici`, `adm-zip`, `@fastify/busboy`, `tmp`, `cookie`, `elliptic`, …). They are
 real CVEs but they live in the *test runner*, not in deployed code: no advisory dependency ships

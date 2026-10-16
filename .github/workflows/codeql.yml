@@ -1,0 +1,34 @@
+name: codeql
+
+# Static analysis for the JS/TS surface (SDK, bot, ShardStore, site scripts).
+# Rust is covered by clippy -D warnings in rust.yml; Solidity is out of scope for
+# CodeQL (unsupported language) and is covered by the Hardhat suite + fuzz instead.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      ["packages/**", "bot/**", "infra/shardstore/**", "web/**", ".github/workflows/codeql.yml"]
+  pull_request:
+    paths:
+      ["packages/**", "bot/**", "infra/shardstore/**", "web/**", ".github/workflows/codeql.yml"]
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  analyze:
+    name: codeql javascript-typescript
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:javascript-typescript"
