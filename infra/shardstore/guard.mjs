@@ -15,7 +15,8 @@
  * конструкторы вместо MemoryStore. Сигнатуры не меняются.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { keccak256Hex } from "./keccak.mjs";
 
 /* ------------------------------------------------------------------ */
 /* 0. Конфиг: ни одного магического числа в движках ниже               */
@@ -355,7 +356,7 @@ export function tarpitDelayMs(level, cfg, rand = Math.random) {
  * последующий GET отдаст 404 ("evicted" — правдоподобно при LRU).
  */
 export function honeypotPut(payload) {
-  const cid = "0x" + createHash("sha3-256").update(payload).digest("hex");
+  const cid = keccak256Hex(payload);
   return { status: 201, body: { cid, digest: cid } };
 }
 

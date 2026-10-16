@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { keccak256Hex } from "./keccak.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const PORT = 18081;
@@ -13,7 +13,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const TOKEN = "test-token-abc";
 
 function cidOf(bytes) {
-  return "0x" + createHash("sha3-256").update(bytes).digest("hex");
+  return keccak256Hex(bytes);
 }
 
 async function waitHealthy(extraEnv = {}) {
@@ -65,6 +65,14 @@ describe("shardstore", () => {
     const get = await fetch(`${BASE}/objects/${cid}`);
     assert.equal(get.status, 200);
     assert.deepEqual(Buffer.from(await get.arrayBuffer()), body);
+  });
+
+  it("addresses objects by keccak-256, the same digest the chain pins", async () => {
+    // keccak256("") — известный вектор; sha3-256("") отличается.
+    const empty = await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body: Buffer.alloc(0) });
+    assert.equal(empty.status, 201);
+    const { cid } = await empty.json();
+    assert.equal(cid, "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
   });
 
   it("reads without a token: the cid is the capability", async () => {

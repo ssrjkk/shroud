@@ -197,9 +197,11 @@ What remains true:
   optionally persistent), with bearer-token writes (`AUTH_TOKEN`, reads stay open by design),
   optional TLS termination (`TLS_CERT`/`TLS_KEY`), LRU-evicting catalogue (`MAX_OBJECTS`, disk
   copies go with the entry), boot index rebuild from `DATA_DIR`, and a `DELETE` endpoint — covered
-  by `server.test.mjs` (8 tests) in its own CI job. Its addressing is Node's SHA3-256 while the
-  on-chain pin is keccak-256, which is why `HttpShardStore.getVerified` re-hashes locally instead
-  of trusting the CID. No GC beyond LRU eviction: objects can still only be deleted explicitly or
+  by `server.test.mjs` (10 tests) in its own CI job. It addresses objects by keccak-256
+  (`infra/shardstore/keccak.mjs`, differentially tested against `web/assets/crypto.js`),
+  the same digest the chain pins — `PUT` returns a `digest` a third-party client can commit
+  on-chain directly. `HttpShardStore.getVerified` still re-hashes locally instead of trusting
+  the CID. No GC beyond LRU eviction: objects can still only be deleted explicitly or
   evicted, never expired by age.
 - `node/`: chain follower, epoch executor and payment agent — reorg-safe log watcher,
   shard store with byte budget and remote backends, deterministic reference fixed-point

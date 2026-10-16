@@ -26,7 +26,7 @@
  */
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
-import { createHash, timingSafeEqual, randomBytes } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 import { mkdir, writeFile, readFile, stat, unlink, readdir, rename } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -38,6 +38,7 @@ import {
   assertIdempotencyKey, Metrics, AuditLog, CircuitBreaker, withResilience,
   requestContext, newRequestId, currentRequestId, startSweeper,
 } from "./guard.mjs";
+import { keccak256Hex } from "./keccak.mjs";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -102,8 +103,9 @@ const persistBreaker = new CircuitBreaker({
 });
 
 function keccak(buf) {
-  // Имя — под то, что SDK сравнивает. Это SHA3-256, не keccak-256; см. addressing.
-  return "0x" + createHash("sha3-256").update(buf).digest("hex");
+  // The digest the chain pins (ethers.keccak256): any store answering a different
+  // hash breaks every third-party client that commits the returned `digest` on-chain.
+  return keccak256Hex(buf);
 }
 
 function send(res, code, body, type = "application/json", extraHeaders = {}) {
