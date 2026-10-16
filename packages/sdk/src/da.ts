@@ -397,3 +397,37 @@ export class HttpShardStore implements ShardStore {
     return bytes;
   }
 }
+
+/**
+ * Fetch many verified shards with bounded parallelism, in input order.
+ *
+ * A re-executing node pulls every shard of an epoch before it can compare digests;
+ * unbounded `Promise.all` fans out to the DA all at once, sequential `await` pays a
+ * round trip per shard. `concurrency` (default 4) caps in-flight `getVerified` calls —
+ * each entry is still individually digest-checked, so a batch is only as trusted as
+ * its weakest entry. Fail-fast: the first mismatch rejects the whole batch.
+ */
+export async function getManyVerified(
+  store: ShardStore,
+  entries: Array<{ cid: string; digest: string }>,
+  opts: { concurrency?: number } = {}
+): Promise<Uint8Array[]> {
+  const concurrency = opts.concurrency ?? 4;
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new Error(`concurrency must be a positive integer, got ${opts.concurrency}`);
+  }
+  const out = new Array<Uint8Array>(entries.length);
+  let next = 0;
+  // `next++` runs synchronously between awaits, so no two workers take one entry.
+  const workers = Array.from(
+    { length: Math.min(concurrency, entries.length) },
+    async () => {
+      while (next < entries.length) {
+        const i = next++;
+        out[i] = await store.getVerified(entries[i].cid, entries[i].digest);
+      }
+    }
+  );
+  await Promise.all(workers);
+  return out;
+}
