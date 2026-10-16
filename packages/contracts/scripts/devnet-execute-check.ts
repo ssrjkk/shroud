@@ -25,7 +25,7 @@
  *     npx hardhat run scripts/devnet-execute-check.ts --network localhost
  */
 import { ethers, fhevm } from "hardhat";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { bytes32Of, externalUint64 } from "../test/helpers";
 
@@ -185,10 +185,21 @@ async function main() {
   if (!done.a.verified || !done.b.verified) throw new Error("a commit is not verified");
   for (const [who, c] of [["A", done.a], ["B", done.b]] as const) {
     if (!String(c.proof).startsWith("0x53544152")) throw new Error(`${who} proof lacks the STAR prefix`);
-    if (String(c.encWeightsCid).toLowerCase() !== putWeights.cid.toLowerCase()) {
-      throw new Error(`${who} committed weights ${c.encWeightsCid}, published ${putWeights.cid}`);
-    }
     if (String(c.metricsCid) === ethers.ZeroHash) throw new Error(`${who} committed empty metrics`);
+  }
+  // The commit carries the *computed* epoch weights, not the seed: one gradient step moves
+  // them, so the CID differs from `putWeights.cid` by design. What must hold is agreement --
+  // both nodes derived the same bytes -- and presence: the bytes are in the shared DA dir
+  // the nodes publish to, or the commit points at nothing any peer can fetch.
+  if (done.a.encWeightsCid === ethers.ZeroHash || done.b.encWeightsCid === ethers.ZeroHash) {
+    throw new Error("a node committed empty weights");
+  }
+  if (String(done.a.encWeightsCid).toLowerCase() !== String(done.b.encWeightsCid).toLowerCase()) {
+    throw new Error(`nodes disagree on weights: A=${done.a.encWeightsCid} B=${done.b.encWeightsCid}`);
+  }
+  const weightsFile = join(cacheDir, String(done.a.encWeightsCid).slice(2).toLowerCase());
+  if (!existsSync(weightsFile)) {
+    throw new Error(`committed weights ${done.a.encWeightsCid} missing from shared DA dir`);
   }
   console.log("DEVNET EXECUTE E2E OK");
 }
