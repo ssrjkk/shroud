@@ -172,6 +172,20 @@ export function commandFromVerdict(verdict, text) {
 }
 
 /**
+ * Reply to a command through the bounded send queue, never past it.
+ *
+ * `pollCommands` used raw `sendMessage`: a reply storm bypassed the queue cap, the
+ * `droppedSends` counter and the /status shed warning — the one path exempt from the
+ * accounting every other send goes through. Returns true when Telegram accepted the
+ * reply, false when the queue shed it under load (the operator sees the shed count
+ * in /status; silence under load is data loss only if it is invisible).
+ */
+export async function sendReply(bot, chatId, text, html) {
+  const out = await bot.sendQueued(chatId, text, html ? { parse_mode: "HTML" } : {});
+  return out?.dropped !== true;
+}
+
+/**
  * Command handlers over an already-resolved chain reader.
  *
  * Exported for tests: `main` wires the real reader, tests hand a stub whose calls
@@ -386,7 +400,7 @@ async function main() {
 
           const reply = await handleCommand(msg);
           if (reply) {
-            await bot.sendMessage(msg.chat.id, reply, config.html ? { parse_mode: "HTML" } : {});
+            await sendReply(bot, msg.chat.id, reply, config.html);
           }
         }
       } catch (err) {
