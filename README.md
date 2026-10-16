@@ -1,5 +1,13 @@
 # Shroud — Private, programmable ML with verifiable compute and streaming payouts
 
+> **Research prototype. Not audited. Do not use with real funds or real private data.**
+>
+> Current compute verification is **fraud-proof / re-execution commitment**, not full
+> on-chain STARK verification. Privacy depends on committee assumptions, key
+> configuration, and the selected backend.
+> Read [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) and
+> [`TRUST_ASSUMPTIONS.md`](TRUST_ASSUMPTIONS.md) before using anything.
+
 [![contracts](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml)
 [![sdk](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml)
 [![rust](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml)

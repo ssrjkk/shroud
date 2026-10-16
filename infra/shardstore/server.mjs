@@ -497,6 +497,8 @@ async function routeGet(req, res, url, ip) {
       "content-type": "application/octet-stream",
       "content-range": `bytes ${start}-${end}/${payload.length}`,
       "content-length": String(slice.length),
+      "accept-ranges": "bytes",
+      "etag": `"${cid}"`,
       "x-request-id": currentRequestId() ?? "",
     });
     return Boolean(res.end(slice));
@@ -506,6 +508,8 @@ async function routeGet(req, res, url, ip) {
   res.writeHead(200, {
     "content-type": "application/octet-stream",
     "content-length": String(payload.length),
+    "accept-ranges": "bytes",
+    "etag": `"${cid}"`,
     "x-request-id": currentRequestId() ?? "",
   });
   return Boolean(res.end(payload));
