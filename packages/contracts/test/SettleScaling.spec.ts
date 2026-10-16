@@ -30,7 +30,7 @@ describe("settlement scalability", () => {
   /** Hardhat's default signer set is 20; the rest of the slots are needed by the fixture. */
   const MAX_TEST_CONTRIBUTORS = 15;
 
-  async function build(contributors_wanted: number) {
+  async function build(contributors_wanted: number, epochs = 1) {
     const [owner, buyer, node, treasury, gate1, gate2, gate3] = await ethers.getSigners();
 
     const token: TestToken = await ethers.deployContract("TestToken");
@@ -59,7 +59,7 @@ describe("settlement scalability", () => {
 
     await task.connect(buyer).createTask(
       budget,
-      params(buyer.address, { epochs: 1, minContributors: 1, maxContributors: 5_000 })
+      params(buyer.address, { epochs, minContributors: 1, maxContributors: 5_000 })
     );
     const id = await task.taskCount();
 
@@ -92,9 +92,9 @@ describe("settlement scalability", () => {
     return { task, vault, token, id, buyer, contributors: contributors.length };
   }
 
-  /** A task that is ready to settle but on which no settlement page has run yet. */
+  /** A task with epochs still to run: abort must succeed, settle must not be ready. */
   async function deployAbortFixture() {
-    const fx = await build(4);
+    const fx = await build(4, 2);
     return { task: fx.task, buyer: fx.buyer, id: fx.id };
   }
 
@@ -164,9 +164,18 @@ describe("settlement scalability", () => {
     await expect(task.abort(id, "0x00000000")).to.be.revertedWithCustomError(task, "AlreadySettled");
   });
 
-  it("abort still works before settlement begins", async () => {
-    // The guard must not over-reach: a task nobody has started settling can still be unwound.
+  it("abort still works while epochs remain", async () => {
+    // The guard must not over-reach: a task with epochs left can still be unwound.
+    // A settle-ready task (all epochs ran) must go through `settle`, not `abort`.
     const fx = await deployAbortFixture();
     await expect(fx.task.connect(fx.buyer).abort(fx.id, "0x00000000")).to.emit(fx.task, "TaskAborted");
+  });
+
+  it("abort reverts once every epoch ran", async () => {
+    const { task, buyer, id } = await build(4, 1);
+    await expect(task.connect(buyer).abort(id, "0x00000000")).to.be.revertedWithCustomError(
+      task,
+      "SettleReady"
+    );
   });
 });

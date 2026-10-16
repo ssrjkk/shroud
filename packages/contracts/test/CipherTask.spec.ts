@@ -879,8 +879,7 @@ describe("CipherTask", () => {
       void node;
     });
 
-    it("retains a redeemable slice for a node that verified an epoch before the abort", async () => {
-      const fx = await deployFixture();
+    it("retains a redeemable slice for a node that verified an epoch before the abort", async () => {      const fx = await deployFixture();
       const { task, vault, token, buyer, node, escrow } = fx;
       const id = await sealed(fx, { epochs: 3 });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
@@ -904,6 +903,17 @@ describe("CipherTask", () => {
       expect(await token.balanceOf(buyer.address)).to.equal(escrow - slice);
       expect(await vault.taskBalance(id)).to.equal(0n);
       expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+    });
+
+    it("reverts abort when every epoch already ran (settle path only)", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, node);
+      await expect(task.connect(buyer).abort(id, reason4("rug"))).to.be.revertedWithCustomError(
+        task,
+        "SettleReady"
+      );
     });
   });
 

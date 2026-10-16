@@ -253,6 +253,9 @@ library UnwindLib {
     ) external {
         if (settlement.settled[taskId]) revert ICipherTask.AlreadySettled(taskId);
         if (settlement.started[taskId]) revert ICipherTask.SettlementBegun(taskId);
+        // Every epoch ran: contributors and the committee are owed their pools via
+        // `settle`, so `abort` must not refund the whole escrow to the buyer.
+        if (t.nextEpoch >= t.params.epochs) revert ICipherTask.SettleReady(taskId);
 
         address worker = winners[taskId][t.nextEpoch];
         uint128 keep = (t.locked > 0 && worker != address(0)) ? (t.locked * _ABORT_LOCK_BPS) / TaskParamsLib.BPS : 0;
