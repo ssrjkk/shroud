@@ -403,7 +403,8 @@ committeePool  = B * committeeShareBps / 10_000              committeeShareBps =
 
 contributor_i  = contributorPool * w_i / Σw                  (w_i = sqrt(rows_i) × liveness, Q16.16)
 epochReward_e  = nodePool / E                                 (one winner per epoch: first verified
-                                                             commit, ties to the lower address)
+                                                             commit keeps the seat; a late copy from a
+                                                             lower address cannot displace it)
 reporterBounty = epochReward_e * reexecutionBps / 10_000     (split across quorum reporters;
                                                              winner unpaid, winner bond slashed)
 buyerRefund    = B - paidOut                                  (residue after every leg)

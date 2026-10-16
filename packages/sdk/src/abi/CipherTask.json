@@ -474,6 +474,22 @@
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "ciphertextCid",
+        "type": "bytes32"
+      }
+    ],
+    "name": "DuplicateShard",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "EpochCountInvalid",
     "type": "error"
@@ -874,6 +890,17 @@
       }
     ],
     "name": "SettleCursorMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "SettleReady",
     "type": "error"
   },
   {
@@ -1952,6 +1979,19 @@
   },
   {
     "inputs": [],
+    "name": "MAX_NODES",
+    "outputs": [
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "MAX_ROWS_PER_SHARD",
     "outputs": [
       {
@@ -2743,6 +2783,25 @@
         "internalType": "bytes4",
         "name": "",
         "type": "bytes4"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "nodeCount",
+    "outputs": [
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
       }
     ],
     "stateMutability": "view",
