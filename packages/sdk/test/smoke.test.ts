@@ -550,6 +550,47 @@ test("HttpShardStore.getVerified memoizes verified bytes and isolates callers", 
   }
 });
 
+test("getManyVerified pulls in order with bounded parallelism", async () => {
+  const { MemoryShardStore, getManyVerified } = await import("../dist/index.js");
+  const inner = new MemoryShardStore();
+  const payloads = ["shard-a", "shard-b", "shard-c", "shard-d", "shard-e"].map((s) =>
+    new TextEncoder().encode(s)
+  );
+  const entries = [];
+  for (const p of payloads) {
+    const { cid, digest } = await inner.put(p);
+    entries.push({ cid, digest });
+  }
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const tracking = {
+    put: (p) => inner.put(p),
+    get: (cid) => inner.get(cid),
+    getVerified: async (cid, digest) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 10));
+      try {
+        return await inner.getVerified(cid, digest);
+      } finally {
+        inFlight--;
+      }
+    },
+  };
+  const out = await getManyVerified(tracking, entries, { concurrency: 2 });
+  assert.deepEqual(
+    out.map((b) => new TextDecoder().decode(b)),
+    ["shard-a", "shard-b", "shard-c", "shard-d", "shard-e"]
+  );
+  assert.ok(maxInFlight <= 2, `parallelism escaped the cap: ${maxInFlight} in flight`);
+  assert.ok(maxInFlight > 1, "batch degenerated to sequential pulls");
+  await assert.rejects(() => getManyVerified(tracking, entries, { concurrency: 0 }), /concurrency/);
+  await assert.rejects(
+    () => getManyVerified(tracking, [{ cid: entries[0].cid, digest: ethers.ZeroHash }]),
+    /failed integrity check/
+  );
+});
+
 test("HttpShardStore.getVerified rejects bytes that do not match the committed digest", async () => {
   // The integrity decision must be made locally. A store that returns the wrong object has to be
   // distinguishable from an honest one, otherwise a re-executor compares digests against itself.
