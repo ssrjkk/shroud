@@ -219,15 +219,15 @@ flowchart TB
  │  2 shape 33-d feature vec, quantize to uint32 (scale 1e4)    │
  │  3 Groth16 prove: "I know a row with this shape & my address" │
  │  4 FHEWasm.encrypt(batch=8) -> 8 x ebytes64  (Bleve/PKES)    │
- │  5 PUT  da://shard/<sha256>       (content-addressed)        │
- │  6 EIP-712 bind(sha256(ciphertext) || taskId || address)      │
+ │  5 PUT  da://shard/<keccak256>    (content-addressed)        │
+ │  6 EIP-712 bind(keccak256(ciphertext) || taskId || address)   │
  └──────┬──────────────────────────────────────┬───────────────┘
         │ submitContribution                    │ ciphertext blobs
         ▼                                       ▼
  ┌───────────────────────┐        ┌──────────────────────────────┐
  │ Shroud L3 (fhEVM) │        │ DATA AVAILABILITY            │
  │  encrypted mempool    │        │  shard-0 ... shard-m         │
- │  sequencer -> RPC     │        │  ci = sha256(blob)           │
+ │  sequencer -> RPC     │        │  ci = keccak256(blob)        │
  └──────┬────────────────┘        └──────────┬───────────────────┘
         │ tx                                │ range pull
         ▼                                   │

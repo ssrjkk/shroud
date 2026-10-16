@@ -8,9 +8,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { ethers } from "ethers";
 
@@ -252,6 +253,7 @@ test("relayer quantization is exact and refuses the unrepresentable", async () =
     assert.throws(() => quantizeRows(bad as number[], 1, 10_000), /negative|finite/);
   }
   assert.throws(() => quantizeRows([1e20], 1, 10_000), /overflows uint64/);
+  assert.throws(() => quantizeRows([1e308], 1, 10_000), /overflows float64 at scale/);
   assert.throws(() => quantizeRows([1, 2, 3], 2, 10_000), /not a multiple/);
   assert.throws(() => quantizeRows([1], 0, 10_000), /positive/);
 
@@ -313,6 +315,65 @@ test("FileShardStore persists across instances and verifies like the memory stor
     await assert.rejects(() => b.get(ethers.keccak256(new Uint8Array([9]))), /not found/);
     await assert.rejects(() => b.getVerified(cid, ethers.id("a-different-commit")), /failed integrity check/);
     await assert.rejects(() => b.get("../../etc/passwd"), /unsafe shard cid/);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("FileShardStore survives concurrent puts and sweeps stale temps", async () => {
+  // Two concurrent puts of the same content-addressed bytes share one temp path per
+  // attempt: on Windows the second rename over an existing file throws even though the
+  // content is identical. Crash orphans (`*.tmp`) are swept at open, never served.
+  const { FileShardStore } = await import("../dist/file-store.js");
+  const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-race-"));
+  try {
+    const a = new FileShardStore(dir);
+    const payload = new TextEncoder().encode("race-me");
+    const [r1, r2] = await Promise.all([a.put(payload), a.put(payload)]);
+    assert.equal(r1.cid, r2.cid);
+    assert.deepEqual(await a.get(r1.cid), payload);
+    await fs.writeFile(join(dir, "deadbeef.12345.tmp"), "orphan");
+    const b = new FileShardStore(dir);
+    assert.deepEqual(await b.get(r1.cid), payload);
+    const names = await fs.readdir(dir);
+    assert.ok(!names.some((n) => n.endsWith(".tmp")), `orphan temps left: ${names}`);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("FileShardStore refuses an oversized planted file without buffering it", async () => {
+  // The directory is shared with other processes by design, so a file can appear that
+  // `put` would never have written. Serving it means buffering it first: under a 64 MiB
+  // heap a 128 MiB plant crashes the reader, while a stat-first check rejects cleanly.
+  const { FileShardStore } = await import("../dist/file-store.js");
+  const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-oom-"));
+  try {
+    const probe = new FileShardStore(dir);
+    assert.ok(probe, "store opens");
+    const name = "ab".repeat(32);
+    await fs.writeFile(join(dir, name), Buffer.alloc(128 * 1024 * 1024, 7));
+    const here = dirname(fileURLToPath(import.meta.url));
+    const modUrl = pathToFileURL(join(here, "..", "dist", "file-store.js")).href;
+    const script = [
+      `const { FileShardStore } = await import(${JSON.stringify(modUrl)});`,
+      `const s = new FileShardStore(${JSON.stringify(dir)}, { maxObjectBytes: 1024 * 1024 });`,
+      `try { await s.get("0x${name}"); console.error("unexpected success"); process.exit(2); }`,
+      `catch (e) { console.log("rejected: " + e.message); }`,
+    ].join("\n");
+    let out = "";
+    let code = 0;
+    try {
+      out = execFileSync(process.execPath, ["--max-old-space-size=64", "--input-type=module", "-e", script], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (e) {
+      code = e.status ?? 1;
+      out = String(e.stdout ?? "") + String(e.stderr ?? "");
+    }
+    assert.equal(code, 0, `reader crashed instead of rejecting (exit ${code}): ${out.slice(0, 300)}`);
+    assert.match(out, /byte cap/);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -634,6 +695,15 @@ test("NoopEncryptor returns a ciphertext and a commitment to the rows", async ()
   assert.notEqual(different.rowCommitment, pinPayload(shard.ciphertext).ctDigest);
 });
 
+test("NoopEncryptor refuses malformed inputs instead of packing them", async () => {
+  const enc = new NoopEncryptor();
+  await assert.rejects(() => enc.encryptRows([1, 2, 3], 0), /positive integer/);
+  await assert.rejects(() => enc.encryptRows([1, 2, 3], 2), /positive multiple/);
+  await assert.rejects(() => enc.encryptRows([], 3), /positive multiple/);
+  await assert.rejects(() => enc.encryptRows([NaN, 2, 3], 3), /not finite/);
+  await assert.rejects(() => enc.encryptRows([Infinity, 2, 3], 3), /not finite/);
+});
+
 test("NoopEncryptor declares that it does not encrypt", () => {
   // This flag is the only thing stopping a forgotten `encryptor` config from uploading a
   // contributor's plaintext rows under a CID that looks like a real ciphertext.
@@ -902,6 +972,68 @@ test("without a configured key hash the pin check is skipped, not silently faile
   assert.equal(sdk.networkParams, undefined);
 });
 
+test("ShroudSdk normalizes a numeric chainId instead of crying wolf", async () => {
+  // `11155111 !== 11155111n`: without normalization a JavaScript caller on the right
+  // chain fails the pin with a wrong-chain error. Floats and garbage fail at construction.
+  const base = {
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    signer: new ethers.Wallet(ethers.id("test").slice(2, 66)),
+    provider: { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider,
+  };
+  const sdk = new ShroudSdk({ ...base, chainId: 31337 as unknown as bigint });
+  assert.equal((sdk as unknown as { configuredChainId: bigint }).configuredChainId, 31337n);
+  assert.throws(() => new ShroudSdk({ ...base, chainId: 1.5 as unknown as bigint }), /integer chain id/);
+  assert.throws(() => new ShroudSdk({ ...base, chainId: "abc" as unknown as bigint }), /integer chain id/);
+});
+
+test("withProvider forgets the pinned chain id", async () => {
+  // The resolved chain id is pinned per client: swapping the provider without forgetting
+  // it would keep signing against the old network after the swap.
+  const key = ethers.id("test").slice(2, 66);
+  const mkProvider = (chainId: bigint) =>
+    ({
+      getNetwork: async () => ({ chainId }),
+      call: async () => {
+        throw new Error("SENTINEL: reached the chain");
+      },
+      resolveName: async (name: string) => name,
+    }) as unknown as ethers.Provider;
+  const providerA = mkProvider(31337n);
+  const sdk = new ShroudSdk({
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    signer: new ethers.Wallet(key, providerA),
+    provider: providerA,
+    chainId: 31337n,
+  });
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3], 1n, { features: 3, allowUnencrypted: true }),
+    /SENTINEL/
+  );
+  sdk.withProvider(mkProvider(31338n));
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3], 1n, { features: 3, allowUnencrypted: true }),
+    /wrong chain/
+  );
+});
+
+test("ShroudSdk rejects a fractional task id up front", async () => {
+  // `1.5 > 0n` is true, so without the gate a fractional id sails past the existence
+  // check and dies obscurely inside an ABI encoder. Fail with the value in hand.
+  const sdk = new ShroudSdk({
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    signer: new ethers.Wallet(ethers.id("test").slice(2, 66)),
+    provider: { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider,
+    chainId: 31337n,
+  });
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2], 1.5 as unknown as bigint, { features: 2, allowUnencrypted: true }),
+    /task id must be a positive integer/
+  );
+});
+
 test("a confidential encryptor without a pin is fail-closed unless explicitly allowed", () => {
   // F-08: an encryptor producing real ciphertext under a known key, with no on-chain pin to
   // compare it to, is exactly what a key-substitution attack needs. The old default skipped
@@ -921,6 +1053,40 @@ test("a confidential encryptor without a pin is fail-closed unless explicitly al
   assert.throws(() => new ShroudSdk(base), /allowUnpinnedKey/);
   const allowed = new ShroudSdk({ ...base, allowUnpinnedKey: true });
   assert.equal(allowed.networkParams, undefined);
+});
+
+test("DecryptionGateClient refuses a missing or malformed gate address", async () => {
+  // A client bound to the zero address (or garbage) would sign and send reveal
+  // transactions that revert on chain — or worse, against an unintended contract.
+  // Fail at construction, before any key material or RPC is involved.
+  const { DecryptionGateClient: Gate } = await import("../dist/gate.js");
+  const stub = { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider;
+  assert.throws(() => new Gate(ethers.ZeroAddress, stub), /gate address/);
+  assert.throws(() => new Gate("not-an-address", stub), /gate address/);
+  const ok = new Gate("0x0000000000000000000000000000000000000001", stub);
+  assert.ok(ok.contract, "valid address constructs");
+});
+
+test("registerNodeWithPop validates its inputs before touching the signer", async () => {
+  // A fractional task id, a malformed BLS key or a non-positive chain would otherwise die
+  // obscurely — inside the ABI encoder, the contract revert, or a signature over the
+  // wrong domain. Fail with the value in hand; the stub signer below is never reached.
+  const { CipherTaskClient } = await import("../dist/cipher.js");
+  const stubSigner = {} as unknown as ethers.Signer;
+  const client = new CipherTaskClient(
+    "0x0000000000000000000000000000000000000001",
+    { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider
+  );
+  const bls = ("0x" + "ab".repeat(32)) as `0x${string}`;
+  await assert.rejects(
+    () => client.registerNodeWithPop(1.5 as unknown as bigint, bls, stubSigner, 31337n),
+    /task id must be a positive integer/
+  );
+  await assert.rejects(
+    () => client.registerNodeWithPop(1n, "0x1234" as `0x${string}`, stubSigner, 31337n),
+    /bytes32/
+  );
+  await assert.rejects(() => client.registerNodeWithPop(1n, bls, stubSigner, 0n), /positive integer/);
 });
 
 test("disputeCommitment binds digest, salt and reporter exactly like the contract", async () => {

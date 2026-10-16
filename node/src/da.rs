@@ -243,6 +243,20 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
+    // Bound before buffering: stat the object first so a hostile backend cannot make
+    // the node eat an unbounded body just to reject it afterwards. The post-read check
+    // below stays as the second net for objects that grow between the two calls.
+    let meta = store
+        .head(&location)
+        .await
+        .map_err(|e| Error::Other(anyhow::anyhow!("da stat of {cid:#x} from {url}: {e}")))?;
+    if meta.size as u64 > max_bytes {
+        return Err(Error::ShardStore(ShardError::TooLarge {
+            cid: *cid,
+            size: meta.size as u64,
+            max: max_bytes,
+        }));
+    }
     let result = store
         .get(&location)
         .await

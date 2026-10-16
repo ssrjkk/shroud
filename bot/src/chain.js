@@ -70,7 +70,13 @@ export const shortId = (v) => {
   return n.length <= 12 ? n : `${n.slice(0, 6)}…${n.slice(-4)}`;
 };
 
-export const shortAddr = (a) => (a ? `${a.slice(0, 8)}…${a.slice(-6)}` : "—");
+export const shortAddr = (a) => {
+  // Total like shortId: a formatter that throws takes the whole reply down, and chain
+  // structs occasionally carry non-strings where an address belongs.
+  if (!a) return "—";
+  const s = String(a);
+  return `${s.slice(0, 8)}…${s.slice(-6)}`;
+};
 
 /** 1e18-scaled token amount as a plain decimal string with 4dp. */
 export function fmtEth(wei, decimals = 4) {
@@ -110,11 +116,14 @@ export class ChainReader {
 
     // Bounded RPC: a dead node must fail reads in milliseconds, not hang the poll loops
     // forever. FetchRequest carries the timeout; JsonRpcProvider honors it per request.
+    // Batching is on (up to 12 calls per round trip): readers fan independent reads out
+    // with Promise.all, and batching folds the overlap into one HTTP request. A provider
+    // that cannot do batches answers each call alone — slower, never wrong.
     const request = new FetchRequest(config.rpcUrl);
     request.timeout = config.rpcTimeoutMs ?? 15_000;
     const provider = new JsonRpcProvider(request, network, {
       staticNetwork: Boolean(network),
-      batchMaxCount: 1,
+      batchMaxCount: 12,
     });
 
     // `getNetwork()` alone is not a liveness check: with `staticNetwork` set,
@@ -138,6 +147,34 @@ export class ChainReader {
 
   get provider() {
     return this.#provider;
+  }
+
+  #lastReadError = null;
+
+  /**
+   * Latest read failure (`where: message`), or null when no recent read failed.
+   *
+   * Reads fail soft (null/[]) so one bad RPC never kills a reply — but then an
+   * operator cannot tell "no commits" from "RPC dead". /status surfaces this, so
+   * the two stay distinguishable. Entries expire after `maxAgeMs` (default 5 min):
+   * readers poll continuously, and a stale blip must not cry outage forever.
+   */
+  lastReadError(maxAgeMs = 5 * 60_000) {
+    const e = this.#lastReadError;
+    if (!e) return null;
+    if (Date.now() - e.at > maxAgeMs) {
+      this.#lastReadError = null;
+      return null;
+    }
+    return `${e.where}: ${e.message}`;
+  }
+
+  #noteReadError(where, err) {
+    this.#lastReadError = {
+      where,
+      message: err?.message ?? String(err),
+      at: Date.now(),
+    };
   }
 
   get interfaces() {
@@ -265,7 +302,8 @@ export class ChainReader {
             }
           : null,
       };
-    } catch {
+    } catch (e) {
+      this.#noteReadError("task", e);
       return null;
     }
   }
@@ -275,7 +313,8 @@ export class ChainReader {
     const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       return Number(await c.statusOf(taskId));
-    } catch {
+    } catch (e) {
+      this.#noteReadError("statusOf", e);
       return null;
     }
   }
@@ -295,7 +334,8 @@ export class ChainReader {
     const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       return [...(await c.contributorsOf(taskId))];
-    } catch {
+    } catch (e) {
+      this.#noteReadError("contributors", e);
       return [];
     }
   }
@@ -305,26 +345,30 @@ export class ChainReader {
     const nodes = await this.contributors(taskId);
     if (!nodes.length) return [];
     const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
-    const out = [];
-    for (const node of nodes) {
-      try {
-        const r = await c.commits(taskId, epoch, node);
-        // A node that did not commit reads back as an all-zero struct; its
-        // digest is zero, which is filtered out rather than shown as a commit.
-        if (!r || r.traceDigest === "0x" + "0".repeat(64)) continue;
-        out.push({
-          node,
-          traceDigest: r.traceDigest,
-          verified: Boolean(r.verified),
-          // The 32-byte proof reference as committed (STAR-prefixed on mock-verifier
-          // chains); rendered by /task so operators can eyeball it, never interpreted.
-          proof: r.proof,
-        });
-      } catch {
-        // Read failure for one node must not hide the others.
-      }
-    }
-    return out;
+    // All reads in flight at once: the sequential loop paid a full RPC round trip per
+    // node. Order is the contributor-list order either way (Promise.all preserves it).
+    const settled = await Promise.all(
+      nodes.map(async (node) => {
+        try {
+          const r = await c.commits(taskId, epoch, node);
+          // A node that did not commit reads back as an all-zero struct; its
+          // digest is zero, which is filtered out rather than shown as a commit.
+          if (!r || r.traceDigest === "0x" + "0".repeat(64)) return null;
+          return {
+            node,
+            traceDigest: r.traceDigest,
+            verified: Boolean(r.verified),
+            // The 32-byte proof reference as committed (STAR-prefixed on mock-verifier
+            // chains); rendered by /task so operators can eyeball it, never interpreted.
+            proof: r.proof,
+          };
+        } catch {
+          // Read failure for one node must not hide the others.
+          return null;
+        }
+      })
+    );
+    return settled.filter((x) => x !== null);
   }
 
   async epochWinner(taskId, epoch) {
@@ -332,7 +376,8 @@ export class ChainReader {
     const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
     try {
       return await c.epochWinner(taskId, epoch);
-    } catch {
+    } catch (e) {
+      this.#noteReadError("epochWinner", e);
       return null;
     }
   }
@@ -351,7 +396,8 @@ export class ChainReader {
     try {
       const [need, have] = await c.disputeQuorum(taskId);
       return { need: Number(need), have: Number(have) };
-    } catch {
+    } catch (e) {
+      this.#noteReadError("disputeQuorum", e);
       return null;
     }
   }
@@ -447,7 +493,8 @@ export class ChainReader {
         activatedAt: Number(n.activatedAt),
         active: Boolean(n.active),
       };
-    } catch {
+    } catch (e) {
+      this.#noteReadError("networkParams", e);
       return null;
     }
   }

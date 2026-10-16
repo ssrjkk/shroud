@@ -52,6 +52,16 @@
   }
   function zeros(f) { var a = []; for (var i = 0; i < f; i++) a.push(0); return a; }
 
+  function toNum(cell, ln, i) {
+    // Strict decimal only: Number() would silently accept "0x10" (16), "0b101" (5)
+    // or "1e3" as a user meaning something else, and train on numbers the user never
+    // typed. Scientific notation stays allowed — it is decimal, just compact.
+    if (!/^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(cell)) {
+      throw new Error(t("lab.e.rowline") + (i + 1) + t("lab.e.notnum") + ln + "»");
+    }
+    return Number(cell);
+  }
+
   function splitRow(ln) {
     // Excel-стиль: колонки через ";", десятичная запятая внутри чисел.
     // Без ";" — старый формат: запятая/пробел/табуляция, точка в дробях.
@@ -72,7 +82,7 @@
       var ln = lines[i].trim();
       if (!ln || ln[0] === "#") continue;
       var parts = splitRow(ln);
-      var nums = parts.map(Number);
+      var nums = parts.map(function (p) { return toNum(p, ln, i); });
       if (nums.some(function (x) { return !isFinite(x); })) {
         throw new Error(t("lab.e.rowline") + (i + 1) + t("lab.e.notnum") + ln + "»");
       }

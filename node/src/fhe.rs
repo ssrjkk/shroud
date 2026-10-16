@@ -1399,10 +1399,8 @@ mod tests {
             proof_ref: String,
         }
 
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../web/tests/vectors.json");
-        let raw = std::fs::read_to_string(&path).expect("web/tests/vectors.json must exist");
-        let vectors: VectorFile = serde_json::from_str(&raw).expect("vectors.json parses");
+        let raw = include_str!("../../web/tests/vectors.json");
+        let vectors: VectorFile = serde_json::from_str(raw).expect("vectors.json parses");
         assert!(!vectors.pipelines.is_empty(), "no golden pipelines pinned");
 
         for p in &vectors.pipelines {
@@ -1483,5 +1481,102 @@ mod tests {
                 p.name
             );
         }
+    }
+
+    /// Regenerate `web/tests/vectors.json` from this engine (`DUMP_VECTORS=1`).
+    ///
+    /// The goldens are computed, not hand-written: this replays the exact construction
+    /// in `site_vectors_pin_the_digest_layout` (same shard bytes, same `EpochInputs`
+    /// shape, `ct_root` pinned to the freshly computed CID exactly like the pin test)
+    /// and writes the `expect` blocks back. Key order and indentation are normalized
+    /// by the serializer, so review value changes and ignore layout on first use.
+    /// Without `DUMP_VECTORS=1` this test does nothing.
+    #[test]
+    fn dump_site_vectors_when_requested() {
+        if std::env::var("DUMP_VECTORS").as_deref() != Ok("1") {
+            return;
+        }
+        use std::str::FromStr;
+
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../web/tests/vectors.json");
+        let raw = std::fs::read_to_string(&path).expect("web/tests/vectors.json must exist");
+        let mut doc: serde_json::Value = serde_json::from_str(&raw).expect("vectors.json parses");
+        let pipelines = doc
+            .get_mut("pipelines")
+            .and_then(|p| p.as_array_mut())
+            .expect("pipelines array");
+        for p in pipelines.iter_mut() {
+            let name = p
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let features = p
+                .get("features")
+                .and_then(|f| f.as_u64())
+                .expect("features") as u32;
+            let rows: Vec<Vec<f64>> =
+                serde_json::from_value(p.get("rows").cloned().expect("rows")).expect("rows decode");
+            let scale = p.get("scale").and_then(|s| s.as_u64()).expect("scale") as u32;
+            let lr_q16 = p.get("lr_q16").and_then(|l| l.as_u64()).expect("lr_q16") as u32;
+            let l2_q16 = p.get("l2_q16").and_then(|l| l.as_u64()).expect("l2_q16") as u32;
+            let minibatch = p
+                .get("minibatch")
+                .and_then(|m| m.as_u64())
+                .expect("minibatch") as usize;
+            let seed = p.get("seed").and_then(|s| s.as_u64()).expect("seed");
+            let flat: Vec<f64> = rows.iter().flatten().copied().collect();
+            let bytes = noop_bytes(features, &flat);
+            let cid = keccak256(&bytes);
+            let mut preimage = b"shroud/noop-row/v1\0".to_vec();
+            for v in &flat {
+                preimage.extend_from_slice(&v.to_le_bytes());
+            }
+            let commit = keccak256(&preimage);
+            let inputs = EpochInputs {
+                task_id: U256::from_be_slice(keccak256(b"demo-task-1").as_slice()),
+                epoch: 0,
+                chain_id: 31_337,
+                cipher_task: Address::from_str("0x5FbDB2315678afecb367f032d93F642f64180aa3")
+                    .expect("cipher task parses"),
+                ct_root: cid,
+                prev_weights_digest: B256::ZERO,
+                features,
+                scale,
+                lr_q16,
+                l2_q16,
+                minibatch,
+                seed,
+                prev_weights: Some(Weights::zeros(features).expect("genesis zeros")),
+                prev_weights_bytes: Vec::new(),
+                shards: vec![ShardInput {
+                    leaf_index: 0,
+                    cid,
+                    ct_digest: commit,
+                    bytes: bytes.clone(),
+                }],
+            };
+            let engine = ReferenceCpuEngine::new(scale, lr_q16, l2_q16, minibatch);
+            let out = engine
+                .execute_epoch(&inputs)
+                .expect("golden epoch executes");
+            let lanes: Vec<i32> = out.weights.lanes.iter().map(|w| *w as i32).collect();
+            let loss = out.loss_mean_q.expect("epoch reports loss").to_string();
+            let expect = p.get_mut("expect").expect("expect block");
+            expect["bytes"] = serde_json::json!(bytes.len());
+            expect["commit"] = serde_json::json!(format!("{commit:#x}"));
+            expect["cid"] = serde_json::json!(format!("{cid:#x}"));
+            expect["lanes"] = serde_json::json!(lanes);
+            expect["lossMeanQ"] = serde_json::json!(loss);
+            expect["nRows"] = serde_json::json!(out.rows);
+            expect["weightsDigest"] = serde_json::json!(format!("{:#x}", out.weights_digest));
+            expect["traceDigest"] = serde_json::json!(format!("{:#x}", out.trace_digest));
+            expect["proofRef"] =
+                serde_json::json!(format!("{:#x}", proof_reference(out.trace_digest)));
+            eprintln!("dumped golden pipeline {name}");
+        }
+        let formatted = serde_json::to_string_pretty(&doc).expect("serialize vectors") + "\n";
+        std::fs::write(&path, formatted).expect("write web/tests/vectors.json");
     }
 }

@@ -34,6 +34,23 @@ export function taskIdFromReceipt(
   return undefined;
 }
 
+/**
+ * Normalize an integer identifier (task id, chain id): accept bigint and integral
+ * numbers/decimal strings, reject everything else up front. The ABI encoder accepts
+ * several shapes but fails obscurely on fractional ones (`1.5 > 0n` is true, so a bare
+ * range check would wave it through to die inside `encode`).
+ */
+function normalizeUint(v: unknown, name: string): bigint {
+  if (typeof v === "bigint") {
+    if (v > 0n) return v;
+  } else if (typeof v === "number") {
+    if (Number.isInteger(v) && v > 0) return BigInt(v);
+  } else if (typeof v === "string" && /^[1-9]\d*$/.test(v)) {
+    return BigInt(v);
+  }
+  throw new Error(`${name} must be a positive integer, got ${String(v)}`);
+}
+
 export class CipherTaskClient {
   readonly contract: Contract;
 
@@ -185,17 +202,24 @@ export class CipherTaskClient {
    * caller holds its own key.
    */
   async registerNodeWithPop(taskId: bigint, blsPubKey: Hex, signer: Signer, chainId: bigint): Promise<string> {
+    // Fail fast on shapes the contract would reject with an opaque revert after a
+    // signature round trip — or, for a fractional task id, inside the ABI encoder.
+    const tid = normalizeUint(taskId, "task id");
+    if (!ethers.isHexString(blsPubKey, 32)) {
+      throw new Error(`blsPubKey must be a bytes32 hex string, got ${JSON.stringify(blsPubKey)}`);
+    }
+    const chain = normalizeUint(chainId, "chainId");
     const node = await signer.getAddress();
     const target = this.contract.target as string;
     const inner = ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
         ["uint256", "bytes32", "address", "uint256", "address"],
-        [taskId, blsPubKey, node, chainId, target]
+        [tid, blsPubKey, node, chain, target]
       )
     );
     const sig = await signer.signMessage(ethers.getBytes(inner));
     const contract = this.contract.connect(signer) as Contract;
-    const tx = await contract.registerNodeWithPop(taskId, blsPubKey, sig);
+    const tx = await contract.registerNodeWithPop(tid, blsPubKey, sig);
     const receipt = await tx.wait();
     if (!receipt) throw new Error("no receipt for registerNodeWithPop");
     return tx.hash;

@@ -160,12 +160,16 @@ library SettlementLib {
             emit Withdrawn(taskId, dustRecipient, dust);
         }
 
+        // Report what was actually paid, not the nominal pool: indexers reading
+        // `EscrowSettled` must see the capped leg, not a promise the balance
+        // could not keep.
+        uint128 committeePaid = 0;
         if (committeePool > 0) {
             uint256 left = vault.taskBalance(taskId);
-            uint128 cpool = committeePool > left ? uint128(left) : committeePool;
-            if (cpool > 0) {
-                vault.creditFromTask(taskId, treasury, cpool);
-                emit Withdrawn(taskId, treasury, cpool);
+            committeePaid = committeePool > left ? uint128(left) : committeePool;
+            if (committeePaid > 0) {
+                vault.creditFromTask(taskId, treasury, committeePaid);
+                emit Withdrawn(taskId, treasury, committeePaid);
             }
         }
 
@@ -177,8 +181,8 @@ library SettlementLib {
             emit Withdrawn(taskId, t.params.buyer, uint128(finalBalance));
         }
 
-        emit EscrowSettled(taskId, userPool, committeePool, uint128(finalBalance));
-        return Outcome(true, userPool, committeePool, uint128(finalBalance));
+        emit EscrowSettled(taskId, userPool, committeePaid, uint128(finalBalance));
+        return Outcome(true, userPool, committeePaid, uint128(finalBalance));
     }
 
     /// @notice Pay the nodes that re-executed and disagreed with the claimed digest.

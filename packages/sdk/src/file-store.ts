@@ -16,7 +16,8 @@
  * directory is the authority, which keeps multi-process use (SDK uploads next to a node
  * reading the same dir) coherent without any cache-invalidation protocol.
  */
-import { mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync, existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { join, sep } from "node:path";
 import { ethers } from "ethers";
 import type { ShardStore } from "./types.js";
@@ -38,6 +39,19 @@ export class FileShardStore implements ShardStore {
     this.dir = dir;
     this.maxObjectBytes = opts.maxObjectBytes ?? FileShardStore.DEFAULT_MAX_OBJECT_BYTES;
     mkdirSync(dir, { recursive: true });
+    // A crash between temp-write and rename leaves `<cid>.<pid>.<rand>.tmp` behind.
+    // Temp files are never complete objects, so sweeping them at open is safe and
+    // keeps a long-lived directory from filling with orphans.
+    for (const name of readdirSync(dir)) {
+      if (name.endsWith(".tmp")) {
+        try {
+          unlinkSync(join(dir, name));
+        } catch {
+          // Raced with a live writer: its rename either already happened (harmless)
+          // or will recreate the temp it needs.
+        }
+      }
+    }
   }
 
   private pathFor(cid: string): string {
@@ -62,8 +76,10 @@ export class FileShardStore implements ShardStore {
     const path = this.pathFor(cid);
     if (!existsSync(path)) {
       // Temp + rename: a concurrent reader either sees the old state (absent) or the complete
-      // new file, never a half-written one.
-      const tmp = `${path}.${process.pid}.tmp`;
+      // new file, never a half-written one. The temp name is unique per attempt (pid + 128-bit
+      // nonce): two concurrent puts of the same content-addressed bytes must not share one
+      // temp path — on Windows the second rename over an existing file throws.
+      const tmp = `${path}.${process.pid}.${randomBytes(16).toString("hex")}.tmp`;
       writeFileSync(tmp, payload);
       renameSync(tmp, path);
     }
@@ -74,12 +90,24 @@ export class FileShardStore implements ShardStore {
     // Validated outside the try: a hostile cid must fail as hostile, never be relabelled
     // "not found" by the read-error handler below.
     const path = this.pathFor(cid);
+    // Bound before buffering: a file planted in the shared directory (multi-process use
+    // is documented) must not be fully loaded only to be rejected afterwards.
+    let size: number;
+    try {
+      size = statSync(path).size;
+    } catch {
+      throw new Error(`shard ${cid} not found`);
+    }
+    if (size > this.maxObjectBytes) {
+      throw new Error(`shard ${cid} is ${size} bytes, over the ${this.maxObjectBytes} byte cap`);
+    }
     let bytes: Buffer;
     try {
       bytes = readFileSync(path);
     } catch {
       throw new Error(`shard ${cid} not found`);
     }
+    // Re-check after the read: the file may have grown between stat and read.
     if (bytes.byteLength > this.maxObjectBytes) {
       throw new Error(`shard ${cid} is ${bytes.byteLength} bytes, over the ${this.maxObjectBytes} byte cap`);
     }

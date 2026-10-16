@@ -519,9 +519,9 @@ keeps its decryption ability until the whole gate is redeployed.
 ### F-11 — Verifier availability / soundness under a bad verifier (ADV5, ADV3) — **Accepted**
 `ProofVerifier.starkVerifier` is a precompile-style address. A compromised verifier accepts
 anything. Mitigation is the dispute window (which does not depend on the verifier) plus
-monitoring of `ProofVerified` vs off-chain re-execution disagreements. Production should
-deploy a multisig-owned rotating verifier with a timelock, which is in `infra/` but flagged as
-TODO in the config.
+monitoring of `ProofVerified` vs off-chain re-execution disagreements. Verifier rotation
+behind a timelock is implemented and tested (`NetworkParams` rotation specs); multisig
+ownership of the rotation is still open — a single owner key proposes, approves and cancels.
 
 ### F-12 — Deanonymisation of contributors (ADV8) — **Accepted**
 Anyone can read the chain and see "address X contributed to task T for buyer B". The row
@@ -531,7 +531,7 @@ unlinkability, front contributions through a relayer or use a shielded pool — 
 documented rather than hidden.
 
 ### F-13 — Encrypted-output tampering in DA (ADV8) — **Mitigated**
-`encWeightsCid` is a SHA-256 pin in the contract and its digest is a STARK public input. A
+`encWeightsCid` is a keccak256 pin in the contract and its digest is a STARK public input. A
 swapped object fails the digest check before it is ever loaded.
 
 ### F-14 — Malleability of the EIP-712 payment slices (ADV4) — **Mitigated**

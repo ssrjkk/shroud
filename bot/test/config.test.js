@@ -116,6 +116,13 @@ test("a missing address becomes null, meaning 'not configured'", async () => {
   // pretending the pool is empty.
 });
 
+test("an optional zero address is also 'not configured', never the zero contract", async () => {
+  // Zero is truthy, so passing it through would sail past every `if (!address)` gate
+  // into `new Contract(zero)` failures misreported as "unreadable chain".
+  const { ok } = await load({ ...BASE, CIPHER_TASK_ADDRESS: "0x" + "0".repeat(40) });
+  assert.equal(ok.cipherTask, null);
+});
+
 test("a valid address is normalised to lowercase", async () => {
   const { ok } = await load({
     ...BASE,

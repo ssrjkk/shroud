@@ -29,6 +29,7 @@ import {
   renderRotation,
   renderLimits,
   renderHelp,
+  htmlEscape,
 } from "./format.js";
 
 const CURSOR_FILE = resolve(ROOT, "state", "cursor.json");
@@ -201,16 +202,24 @@ export function createHandlers(chain, config, ops = {}) {
       return renderLimits();
     },
     async status() {
-      const chainIdNow = await chain.chainId();
+      const [chainIdNow, blockNumber] = await Promise.all([chain.chainId(), chain.blockNumber()]);
       const np = await chain.networkParams();
       const pending = np ? await chain.pendingRotation() : null;
       const out = renderStatus(
-        { chainId: chainIdNow, blockNumber: await chain.blockNumber(), networkParams: np, pendingRotation: pending },
+        { chainId: chainIdNow, blockNumber, networkParams: np, pendingRotation: pending },
         config
       );
       // Shed alerts are invisible by design (the queue drops newest-first overflow) —
       // surfacing the counter here is the only way an operator learns alerts were lost.
       const dropped = typeof ops.droppedSends === "function" ? ops.droppedSends() : 0;
+      // Same for read failures: readers fail soft (null/[]), so without this line an
+      // operator cannot tell "empty pool" from "RPC dead".
+      const readError = typeof chain.lastReadError === "function" ? chain.lastReadError() : null;
+      if (readError) {
+        // Error text comes from the RPC layer (proxies answer with HTML bodies);
+        // it is content, never markup.
+        return out + `\n\n${"⚠️"} <b>chain reads failing:</b> ${htmlEscape(readError)}`;
+      }
       if (dropped > 0) {
         return out + `\n\n${"⚠️"} <b>${dropped} alert(s) shed by the send queue</b> — ` +
           `the bot dropped outbound messages faster than Telegram drained them. ` +
@@ -220,10 +229,10 @@ export function createHandlers(chain, config, ops = {}) {
     },
     async pool() {
       const count = await chain.taskCount();
-      const items = [];
-      for (const id of poolIds(count, 12)) {
-        items.push(await chain.task(id));
-      }
+      // One RPC per task, all in flight at once: the sequential loop made /pool the
+      // slowest command (12 round trips serialized). Promise.all preserves input order,
+      // so newest-first output is unchanged.
+      const items = await Promise.all(poolIds(count, 12).map((id) => chain.task(id)));
       return renderPool(items);
     },
     async task(args) {
@@ -233,9 +242,14 @@ export function createHandlers(chain, config, ops = {}) {
       if (!/^\d{1,20}$/.test(args[0])) return "task ids are decimal integers. Try /pool.";
       const id = BigInt(args[0]);
       const t = await chain.task(id);
-      const commits = t ? await chain.commitsForEpoch(id, t.nextEpoch) : [];
-      const winner = t ? await chain.epochWinner(id, t.nextEpoch) : null;
-      const quorum = t ? await chain.disputeQuorum(id) : null;
+      // Independent reads once the task (and its running epoch) is known.
+      const [commits, winner, quorum] = t
+        ? await Promise.all([
+            chain.commitsForEpoch(id, t.nextEpoch),
+            chain.epochWinner(id, t.nextEpoch),
+            chain.disputeQuorum(id),
+          ])
+        : [[], null, null];
       return renderTask({ task: t, commits, winner, quorum }, id);
     },
   };

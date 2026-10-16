@@ -101,7 +101,15 @@ export function quantizeRows(data: Float64Array | number[], features: number, sc
     const v = data[i];
     if (!Number.isFinite(v)) throw new Error(`row value at index ${i} is not finite`);
     if (v < 0) throw new Error(`row value at index ${i} is negative (${v}): TFHE encrypts unsigned integers`);
-    const q = BigInt(Math.round(v * scale));
+    const scaled = v * scale;
+    // `v` is finite but `v * scale` may not be (1e308 at scale 10000): without this,
+    // `BigInt(Infinity)` below throws a bare RangeError with no index, value or scale.
+    // Precision past 2^53 is the caller's responsibility — f64 cannot hold more — but an
+    // infinite intermediate must never reach the encoder.
+    if (!Number.isFinite(scaled)) {
+      throw new Error(`row value at index ${i} overflows float64 at scale ${scale}`);
+    }
+    const q = BigInt(Math.round(scaled));
     if (q > 18446744073709551615n) {
       throw new Error(`row value at index ${i} overflows uint64 at scale ${scale}`);
     }

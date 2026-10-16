@@ -242,6 +242,7 @@ interface ICipherTask {
     error AlreadySettled(uint256 taskId);
     error SettlementBegun(uint256 taskId);
     error SettleReady(uint256 taskId);
+    error NoEpochOpened(uint256 taskId);
     error SettleCursorMismatch(uint256 taskId, uint256 provided);
     /// @dev The final settlement page ran while a reward channel of the task could still be
     ///      redeemed. Paying the committee/buyer legs against that incomplete balance would

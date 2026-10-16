@@ -6,7 +6,7 @@
  * "reveal combinable" one without reading storage. Every method here is a thin, named read
  * over the committed output CID, plus the two writes a buyer/committee member needs.
  */
-import { Contract, type Signer, type Provider } from "ethers";
+import { Contract, ethers, type Signer, type Provider } from "ethers";
 import DecryptionGateAbi from "./abi/DecryptionGate.json" with { type: "json" };
 import type { Hex } from "./types.js";
 
@@ -21,6 +21,13 @@ export class DecryptionGateClient {
   readonly contract: Contract;
 
   constructor(address: string, signerOrProvider: Signer | Provider) {
+    if (!ethers.isAddress(address) || address === ethers.ZeroAddress) {
+      throw new Error(
+        `DecryptionGateClient needs a gate address (got ${JSON.stringify(address)}): ` +
+          `reveal transactions against the zero address always revert, against a typo'd ` +
+          `one they bind the wrong contract`
+      );
+    }
     this.contract = new Contract(address, DecryptionGateAbi, signerOrProvider);
   }
 

@@ -39,9 +39,9 @@ quorum of re-executors can dispute, and contributors, nodes and the committee ar
 through streaming payment channels.
 
 ```
-plaintext ──► FHEWasm ──► ciphertext ──► DA ──► node (FHE execute) ──► STARK proof
-                                                                        │
-buyer ──► CipherTask (escrow + FSM + payment channels) ◄──────────────┘
+plaintext ──► FHEWasm ──► ciphertext ──► DA ──► node (FHE execute) ──► STARK proof ref*
+                                                                        │   (* fraud-proof commitment today,
+buyer ──► CipherTask (escrow + FSM + payment channels) ◄────────────────┘    mock-verified; see Status below)
 ```
 
 > **Status: research-grade implementation, not audited, do not use with real value.**

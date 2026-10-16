@@ -114,15 +114,17 @@ console.log(`2. pipeline goldens: ${V.pipelines.length} presets ok`);
     if (!isHex64(C.weightsDigest(r1.lanes))) fail(`digest shape it${it}`);
     void bytes;
   }
-  // guards must fire on exploding hyperparameters (node parity: Diverged / LaneOverflow)
+  // guards must fire on exploding hyperparameters, in node order: checked i128
+  // accumulators throw Overflow during the epoch, Diverged only checks the final loss.
+  // This input geometrically explodes, so both implementations must report overflow here.
   let threw = 0;
   try {
     const big = [];
     for (let i = 0; i < 40; i++) big.push(9.99);
     const fl = big.map((v) => Math.round(v * 1));
     C.referenceStep({ features: 2, scale: 1, lrQ16: 65535, l2Q16: 0, minibatch: 1, prevLanes: [0, 0], shards: [fl] });
-  } catch (e) { if (/diverged|lane out of i32/.test(e.message)) threw++; }
-  if (!threw) fail("divergence/overflow guard did not fire");
+  } catch (e) { if (/^overflow: loss$/.test(e.message)) threw++; }
+  if (!threw) fail("overflow guard did not fire first on exploding hyperparameters");
   // Weights rejections: out-of-range lanes, bad magic, trailing bytes, feature mismatch.
   let rej = 0;
   try { C.encodeWeights(2, [2147483648, 0]); } catch (e) { if (/outside the i32/.test(e.message)) rej++; }

@@ -94,9 +94,9 @@ pre.code .c{color:#8fa5c4}pre.code .k{color:var(--acc)}
 .hero-in>*,.lab>*,.cols2>*,.cols3>*,.guide>*,.masthead-in>*{min-width:0}
 img,svg,pre,table{max-width:100%}
 h1.display{overflow-wrap:break-word}
-h1.display{font-family:var(--disp);font-weight:800;font-size:clamp(30px,8.5vw,64px);line-height:1.0;
+h1.display{font-family:var(--disp);font-weight:800;font-size:clamp(30px,8.5vw,64px);line-height:1.12;
   letter-spacing:-.015em;margin:0 0 18px}
-h1.display .acc{background:var(--acc);color:var(--acc-ink);padding:0 .12em;box-decoration-break:clone;-webkit-box-decoration-break:clone}
+h1.display .acc{background:none;color:inherit;padding:0;text-decoration:underline;text-decoration-color:var(--acc);text-decoration-thickness:.09em;text-underline-offset:.14em}
 h1.display .line2{display:block}
 .lede{font-size:16.5px;color:var(--mut);max-width:56ch;margin:0 0 24px}
 .lede strong{color:var(--ink)}

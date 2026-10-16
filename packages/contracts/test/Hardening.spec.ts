@@ -299,6 +299,73 @@ describe("Hardening", () => {
       await matureRewardWindows();
       await expect(task.settle(id)).to.emit(task, "EscrowSettled");
     });
+
+    it("a reverted settlement page changes nothing: bonds still slash afterwards", async () => {
+      // Revert rolls the whole page back — including `started` — so a ChannelsImmature
+      // revert leaves slash/reclaim exactly as legitimate as before the attempt. The
+      // SettlementBegun guards only fire after a page actually succeeded (multi-page
+      // tasks), which needs more contributors than test chains provide.
+      const fx = await deployFixture();
+      const { task, buyer, token, vault, treasury } = fx;
+      const bondReq = 1_000_000n;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+      await task.connect(buyer).setContributionBondRequirement(id, bondReq);
+      await token.mint(fx.alice.address, bondReq);
+      await token.connect(fx.alice).approve(await task.getAddress(), bondReq);
+      await task.connect(fx.alice).submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 1_000);
+      await runEpochOnly(fx, id);
+      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "ChannelsImmature");
+      await expect(task.connect(buyer).slashContributionBond(id, fx.alice.address))
+        .to.emit(task, "ContributionBondSlashed");
+      expect((await task.contributions(id, fx.alice.address)).slashed).to.equal(true);
+      await matureRewardWindows();
+      await task.settle(id);
+      expect(await task.pendingPayout(fx.alice.address)).to.equal(0n);
+      expect(await task.pendingPayout(treasury.address)).to.be.greaterThan(0n);
+      void vault;
+    });
+
+    it("a reverted settlement page changes nothing: reclaim still works afterwards", async () => {
+      // The winner's channel is immature (not expired), so there is nothing reclaimable
+      // yet — but the call must succeed as a no-op, proving the reverted page left no
+      // half-written settlement state behind.
+      const fx = await deployFixture();
+      const { task, buyer, vault } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+      await task.connect(fx.alice).submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 1_000);
+      await runEpochOnly(fx, id);
+      await expect(task.settle(id)).to.be.revertedWithCustomError(task, "ChannelsImmature");
+      await task.connect(buyer).reclaimUnspentEpochs(id);
+      expect(await vault.taskBalance(id)).to.equal(850_000_000n);
+    });
+
+    it("reports the actually-paid committee leg in EscrowSettled, not the nominal pool", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, vault, treasury } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+      await task.connect(fx.alice).submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 1_000);
+      await runEpochOnly(fx, id);
+      await matureRewardWindows();
+      const tx = await task.settle(id);
+      const rcpt = await tx.wait();
+      expect(rcpt, "settle receipt").to.not.equal(null);
+      const evt = rcpt!.logs
+        .map((l) => {
+          try {
+            return task.interface.parseLog(l);
+          } catch {
+            return null;
+          }
+        })
+        .find((e) => e?.name === "EscrowSettled");
+      expect(evt, "EscrowSettled emitted").to.not.equal(null);
+      // Pull-based legs: the treasury's credit is the paid amount by construction.
+      expect(evt!.args[2]).to.equal(await task.pendingPayout(treasury.address));
+      void vault;
+    });
   });
 
   describe("governance hardening", () => {

@@ -3,9 +3,11 @@ name: site
 on:
   push:
     branches: [master]
-    paths: ["web/**", "node/src/fhe.rs", "node/Cargo.toml", ".github/workflows/site.yml"]
+    # `node/**` (not just the layout pins): any engine change re-checks the site math
+    # against the golden vectors both sides pin.
+    paths: ["web/**", "node/**", ".github/workflows/site.yml"]
   pull_request:
-    paths: ["web/**", "node/src/fhe.rs", "node/Cargo.toml", ".github/workflows/site.yml"]
+    paths: ["web/**", "node/**", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 # Pages deployment needs these; PRs from forks cannot deploy, so the deploy
