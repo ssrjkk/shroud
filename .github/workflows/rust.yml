@@ -140,7 +140,8 @@ jobs:
             fs.writeFileSync(process.env.RUNNER_TEMP + '/shroud.toml', toml);
             console.log(toml.replace(/operator_key = .*/, 'operator_key = \"0x…\"'));
           "
-          ./target/release/shroud-node --config $RUNNER_TEMP/shroud.toml &
+          ./target/release/shroud-node --config $RUNNER_TEMP/shroud.toml > $RUNNER_TEMP/node-a.log 2>&1 &
+          echo "node A started, log at $RUNNER_TEMP/node-a.log"
         working-directory: node
       # Second operator for the execution e2e: a fresh key (never pasted into the repo).
       # It must differ from node A's key and BLS.
@@ -192,7 +193,8 @@ jobs:
             fs.writeFileSync(process.env.RUNNER_TEMP + '/shroud-b.toml', toml);
             console.log(toml.replace(/operator_key = .*/, 'operator_key = \"0x…\"'));
           "
-          ./target/release/shroud-node --config $RUNNER_TEMP/shroud-b.toml &
+          ./target/release/shroud-node --config $RUNNER_TEMP/shroud-b.toml > $RUNNER_TEMP/node-b.log 2>&1 &
+          echo "node B started, log at $RUNNER_TEMP/node-b.log"
         working-directory: node
       - run: sleep 90
       - run: npx hardhat run scripts/assert-node-registered.ts --network localhost
@@ -204,3 +206,10 @@ jobs:
         env:
           NODE_CACHE_DIR: ${{ runner.temp }}/shroud-cache
           OPERATOR_B_KEY: ${{ env.OPERATOR_B_KEY }}
+      - name: dump node logs on failure
+        if: failure()
+        run: |
+          echo "===== node A (last 200 lines) ====="
+          tail -n 200 $RUNNER_TEMP/node-a.log || true
+          echo "===== node B (last 200 lines) ====="
+          tail -n 200 $RUNNER_TEMP/node-b.log || true
