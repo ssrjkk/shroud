@@ -24,7 +24,7 @@
  *   NODE_CACHE_DIR=$RUNNER_TEMP/shroud-cache OPERATOR_B_KEY=0x… \
  *     npx hardhat run scripts/devnet-execute-check.ts --network localhost
  */
-import { ethers } from "hardhat";
+import { ethers, fhevm } from "hardhat";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { bytes32Of, externalUint64 } from "../test/helpers";
@@ -47,6 +47,10 @@ const ROWS = 8;
 const MATRIX = Array.from({ length: ROWS }, (_, i) => [i + 1, 2 * (i + 1)]).flat();
 
 async function main() {
+  // `hardhat test` initializes the fhevm mock in-process, but `hardhat run --network
+  // localhost` does not: encrypted inputs need the CLI API pointed at the standalone
+  // node first, otherwise `createEncryptedInput` throws "plugin is not initialized".
+  await fhevm.initializeCLIApi();
   const addrs = JSON.parse(readFileSync(OUT, "utf8"));
   const [buyer, alice] = await ethers.getSigners();
   const provider = ethers.provider;
