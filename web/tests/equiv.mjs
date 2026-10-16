@@ -97,6 +97,14 @@ console.log(`2. pipeline goldens: ${V.pipelines.length} presets ok`);
     const file = C.encodeWeights(f, rows[0].map(() => 0).slice(0, f));
     const dec = C.decodeWeights(file, f);
     if (dec.lanes.some((x) => x !== 0)) fail(`zeros round-trip it${it}`);
+    // Non-zero round-trip with i32 edges at a rotating position: a checkedLane
+    // regression on negatives once passed 400 zero-only iters unseen.
+    const edge = [0, 1, -1, 2147483647, -2147483648, 123456, -987654][it % 7];
+    const lanes = [];
+    for (let j = 0; j < f; j++) lanes.push(j === it % f ? edge : Math.floor(rnd() * 2000000) - 1000000);
+    const wf = C.encodeWeights(f, lanes);
+    const back = C.decodeWeights(wf, f);
+    if (JSON.stringify(back.lanes) !== JSON.stringify(lanes)) fail(`lanes round-trip it${it}`);
     const flat = [];
     rows.forEach((r) => r.forEach((v) => flat.push(Math.round(v * 1000))));
     const o = { features: f, scale: 1000, lrQ16: 327, l2Q16: 0, minibatch: 4, prevLanes: new Array(f).fill(0), shards: [flat] };
@@ -115,6 +123,19 @@ console.log(`2. pipeline goldens: ${V.pipelines.length} presets ok`);
     C.referenceStep({ features: 2, scale: 1, lrQ16: 65535, l2Q16: 0, minibatch: 1, prevLanes: [0, 0], shards: [fl] });
   } catch (e) { if (/diverged|lane out of i32/.test(e.message)) threw++; }
   if (!threw) fail("divergence/overflow guard did not fire");
+  // Weights rejections: out-of-range lanes, bad magic, trailing bytes, feature mismatch.
+  let rej = 0;
+  try { C.encodeWeights(2, [2147483648, 0]); } catch (e) { if (/outside the i32/.test(e.message)) rej++; }
+  try { C.encodeWeights(2, [-2147483649, 0]); } catch (e) { if (/outside the i32/.test(e.message)) rej++; }
+  {
+    const good = C.encodeWeights(2, [-1, -2147483648]);
+    const badMagic = good.slice(); badMagic[0] ^= 0xff;
+    try { C.decodeWeights(badMagic, 2); } catch (e) { if (/bad weights magic/.test(e.message)) rej++; }
+    const trailed = new Uint8Array(good.length + 1); trailed.set(good);
+    try { C.decodeWeights(trailed, 2); } catch (e) { if (/trailing bytes/.test(e.message)) rej++; }
+    try { C.decodeWeights(good, 3); } catch (e) { if (/holds 2 features/.test(e.message)) rej++; }
+  }
+  if (rej !== 5) fail(`weights rejections ${rej}/5`);
   console.log("3. invariants: 400 iters + guards ok");
 }
 
