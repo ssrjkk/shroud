@@ -777,16 +777,16 @@ impl Worker {
         // the window. Waiting here spends no gas; sending the page would burn it on a
         // `ChannelsImmature` revert every poll until the window passes.
         let page = self.client.settle_page_size().await?;
-        if is_final_settle_page(cursor, page, task.contributors) {
-            if self.client.has_immature_channels(task_id).await? {
-                let (_, now) = self.client.latest_block().await?;
-                match self.client.immature_until(task_id, now).await? {
-                    Some(until) if until > now => {
-                        info!(%task_id, until, now, "final settlement page waits for reward maturity");
-                        return Ok(Outcome::Retry(Duration::from_secs(until - now)));
-                    }
-                    _ => return Ok(Outcome::Retry(self.cfg.chain.poll_interval)),
+        if is_final_settle_page(cursor, page, task.contributors)
+            && self.client.has_immature_channels(task_id).await?
+        {
+            let (_, now) = self.client.latest_block().await?;
+            match self.client.immature_until(task_id, now).await? {
+                Some(until) if until > now => {
+                    info!(%task_id, until, now, "final settlement page waits for reward maturity");
+                    return Ok(Outcome::Retry(Duration::from_secs(until - now)));
                 }
+                _ => return Ok(Outcome::Retry(self.cfg.chain.poll_interval)),
             }
         }
         if cursor.is_zero() {
