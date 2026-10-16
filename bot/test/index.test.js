@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeEvents, eventUid } from "../src/index.js";
+import { dedupeEvents, eventUid, commandFromVerdict } from "../src/index.js";
 
 test("eventUid binds a log to its transaction hash and index", () => {
   assert.equal(eventUid({ txHash: "0xabc", logIndex: 3 }), "0xabc:3");
@@ -45,4 +45,21 @@ test("dedupeEvents is order-stable across interleaved scans", () => {
   const fresh = dedupeEvents(second, seen);
   assert.equal(fresh.length, 1);
   assert.equal(fresh[0].logIndex, 2);
+});
+
+test("commandFromVerdict trusts the guard's single parse over raw text", () => {
+  // The guard accounted cost for `pool`; a hostile suffix in the raw text must not
+  // change dispatch after the verdict is in.
+  assert.deepEqual(commandFromVerdict({ action: "pass", name: "pool", args: [] }, "/pool injected args"), {
+    name: "pool",
+    args: [],
+  });
+  assert.deepEqual(
+    commandFromVerdict({ action: "pass-tarpitted", name: "task", args: ["42"] }, "/task 42"),
+    { name: "task", args: ["42"] }
+  );
+});
+
+test("commandFromVerdict falls back to the raw parse only when the guard failed open", () => {
+  assert.deepEqual(commandFromVerdict({ action: "pass" }, "/task 42"), { name: "task", args: ["42"] });
 });

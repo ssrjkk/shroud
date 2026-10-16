@@ -155,6 +155,23 @@ export function mismatchArgs(ev, prev) {
 }
 
 /**
+ * Resolve the command to dispatch: the abuse guard's single parse wins, raw text is only
+ * re-parsed when the guard failed open (its verdict then carries no name).
+ *
+ * Two parsers on the same text drifted before: the guard trims, the handler did not, so
+ * `"  /pool"` was accounted as the 15-cost `pool` but dispatched as `` (help). One parse,
+ * one accounting, one dispatch.
+ */
+export function commandFromVerdict(verdict, text) {
+  if (verdict && typeof verdict.name === "string") {
+    return { name: verdict.name, args: Array.isArray(verdict.args) ? verdict.args : [] };
+  }
+  const [rawName, ...args] = text.split(/\s+/);
+  const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
+  return { name, args };
+}
+
+/**
  * Command handlers over an already-resolved chain reader.
  *
  * Exported for tests: `main` wires the real reader, tests hand a stub whose calls
@@ -322,8 +339,7 @@ async function main() {
     }
     try {
       return await abuseGuard.runHandler(msg.chat?.id ?? "unknown", async () => {
-        const [rawName, ...args] = text.split(/\s+/);
-        const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
+        const { name, args } = commandFromVerdict(verdict, text);
         const handler = handlers[name];
         if (!handler) {
           return renderHelp();
