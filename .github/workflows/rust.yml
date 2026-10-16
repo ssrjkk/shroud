@@ -15,7 +15,7 @@ env:
 jobs:
   check:
     name: cargo check + fmt + clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: node
@@ -40,7 +40,7 @@ jobs:
 
   test:
     name: cargo test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: node
@@ -57,7 +57,7 @@ jobs:
 
   build:
     name: cargo build --release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: node
@@ -73,7 +73,7 @@ jobs:
 
   devnet-live:
     name: live node registers + bonds on devnet
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 32
     steps:
       - uses: actions/checkout@v7

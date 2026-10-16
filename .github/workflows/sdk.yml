@@ -11,7 +11,7 @@ on:
 jobs:
   test:
     name: build + test + typecheck
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: packages/sdk
@@ -34,7 +34,7 @@ jobs:
 
   relayer-live:
     name: live relayer encryption (Sepolia)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: packages/sdk
