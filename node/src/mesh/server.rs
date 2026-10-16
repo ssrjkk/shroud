@@ -864,11 +864,13 @@ pub async fn serve(
         }
     };
 
-    builder
-        .add_service(service)
+    builder = builder
         // Each gossip stream spawns a task plus a channel: uncapped streams per connection
         // are task/memory exhaustion by handshake. The cap lives in config, not code.
-        .concurrency_limit_per_connection(cfg.mesh.max_streams_per_connection)
+        .concurrency_limit_per_connection(cfg.mesh.max_streams_per_connection);
+
+    builder
+        .add_service(service)
         .serve_with_shutdown(cfg.mesh.listen, signal)
         .await
         .map_err(|e| listen_error(&cfg, &e))?;
