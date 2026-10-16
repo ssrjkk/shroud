@@ -23,7 +23,8 @@ const LIVE = process.env.SHROUD_LIVE_RELAYER === "1";
 const RPC = process.env.SHROUD_LIVE_RPC ?? "https://ethereum-sepolia-rpc.publicnode.com";
 // Binding context for the proof under test. Any non-zero address exercises the
 // fail-closed path; override with a real CipherTask when replaying against one.
-const TASK = process.env.SHROUD_LIVE_TASK ?? `0x${"cc".repeat(20)}`;
+// Checksummed (EIP-55): the relayer rejects lowercase-only addresses outright.
+const TASK = ethers.getAddress(process.env.SHROUD_LIVE_TASK ?? `0x${"cc".repeat(20)}`);
 
 test("live: encrypts two values under the Sepolia network key", { skip: !LIVE }, async () => {
   const enc = await RelayerEncryptor.create({ network: RPC, contractAddress: TASK });
