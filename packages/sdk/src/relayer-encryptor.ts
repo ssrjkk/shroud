@@ -47,10 +47,36 @@ export interface RelayerEncryptorOptions {
   chainId?: number;
   /** Fixed-point scale. Defaults to {@link DEFAULT_QUANTIZE_SCALE}. */
   scale?: number;
-  /** Contract address the input is bound to (`createEncryptedInput` first argument). */
+  /**
+   * CipherTask address the input proof is bound to. Required: a proof created against
+   * the zero address (or any other contract) verifies independently of the task, so the
+   * same handles/proof would replay on every task. Fail-closed at config time.
+   */
   contractAddress?: string;
   /** User address the input is bound to (defaults to the zero address: binding-neutral). */
   userAddress?: string;
+}
+
+/**
+ * Validate the `createEncryptedInput` binding before any network call.
+ *
+ * The contract address is required and must be a real (non-zero) address: without it the
+ * input proof is bound to nothing and replays across tasks. The user address may stay
+ * neutral (zero) for callers that bind the contributor elsewhere.
+ */
+export function assertInputBinding(
+  contractAddress?: string,
+  userAddress?: string
+): { contractAddress: string; userAddress: string } {
+  if (!contractAddress || !ethers.isAddress(contractAddress) || contractAddress === ethers.ZeroAddress) {
+    throw new Error(
+      "RelayerEncryptor needs opts.contractAddress (the CipherTask): a binding-neutral proof replays on every task"
+    );
+  }
+  if (userAddress !== undefined && !ethers.isAddress(userAddress)) {
+    throw new Error(`RelayerEncryptor got an invalid userAddress ${JSON.stringify(userAddress)}`);
+  }
+  return { contractAddress, userAddress: userAddress ?? ethers.ZeroAddress };
 }
 
 interface RelayerShard {
@@ -166,7 +192,7 @@ export class RelayerEncryptor implements Encryptor {
   private readonly opts: Required<
     Pick<RelayerEncryptorOptions, "network" | "relayerUrl" | "chainId" | "scale">
   > &
-    Pick<RelayerEncryptorOptions, "contractAddress" | "userAddress">;
+    Required<Pick<RelayerEncryptorOptions, "contractAddress" | "userAddress">>;
   private instance?: FhevmInstance;
   private instancePromise?: Promise<FhevmInstance>;
 
@@ -176,13 +202,14 @@ export class RelayerEncryptor implements Encryptor {
     publicKeyId: string
   ) {
     if (!opts.network) throw new Error("RelayerEncryptor needs opts.network (chain RPC URL)");
+    const binding = assertInputBinding(opts.contractAddress, opts.userAddress);
     this.opts = {
       network: opts.network,
       relayerUrl: opts.relayerUrl ?? SepoliaConfig.relayerUrl,
       chainId: opts.chainId ?? 11155111,
       scale: opts.scale ?? DEFAULT_QUANTIZE_SCALE,
-      contractAddress: opts.contractAddress,
-      userAddress: opts.userAddress,
+      contractAddress: binding.contractAddress,
+      userAddress: binding.userAddress,
     };
     if (!Number.isInteger(this.opts.scale) || this.opts.scale <= 0) {
       throw new Error(`scale must be positive, got ${opts.scale}`);
@@ -200,13 +227,15 @@ export class RelayerEncryptor implements Encryptor {
    * `isCurrentKey` checks below compare the key the ciphertexts actually use.
    */
   static async create(opts: RelayerEncryptorOptions): Promise<RelayerEncryptor> {
+    // Fail fast on a binding-neutral config before spending a network round-trip.
+    const binding = assertInputBinding(opts.contractAddress, opts.userAddress);
     const draft: RelayerEncryptorOptions = {
       network: opts.network,
       relayerUrl: opts.relayerUrl ?? SepoliaConfig.relayerUrl,
       chainId: opts.chainId ?? 11155111,
       scale: opts.scale ?? DEFAULT_QUANTIZE_SCALE,
-      contractAddress: opts.contractAddress,
-      userAddress: opts.userAddress,
+      contractAddress: binding.contractAddress,
+      userAddress: binding.userAddress,
     };
     const instance = await createInstance({
       ...SepoliaConfig,
@@ -230,10 +259,7 @@ export class RelayerEncryptor implements Encryptor {
   ): Promise<{ ciphertext: Uint8Array; rowCommitment: string }> {
     const quantized = quantizeRows(data, features, this.opts.scale);
     const instance = await this.ready();
-    const input = instance.createEncryptedInput(
-      this.opts.contractAddress ?? ethers.ZeroAddress,
-      this.opts.userAddress ?? ethers.ZeroAddress
-    );
+    const input = instance.createEncryptedInput(this.opts.contractAddress, this.opts.userAddress);
     for (const q of quantized) input.add64(q);
     const { handles, inputProof } = await input.encrypt();
     if (!handles.length) throw new Error("relayer returned no handles");

@@ -17,7 +17,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createHash } from "node:crypto";
+import { keccak256Hex } from "./keccak.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const PORT = 18082;
@@ -25,7 +25,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const TOKEN = "hardening-token";
 
 function cidOf(bytes) {
-  return "0x" + createHash("sha3-256").update(bytes).digest("hex");
+  return keccak256Hex(bytes);
 }
 
 function spawnServer(extraEnv) {

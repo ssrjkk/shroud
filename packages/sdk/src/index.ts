@@ -305,7 +305,9 @@ export class ShroudSdk {
     // `submitContribution` -> BondInsufficient. The bond is pulled by the orchestrator
     // itself, so without an approval the submission burns gas on a revert that was
     // knowable locally. Approved up front, for exactly the requirement — never a max
-    // approval, and only after every free check above passed.
+    // approval, and only after every free check above passed. The approval deliberately
+    // precedes encrypt/upload: a dangling exact-amount approval is consumed by the next
+    // successful submit, while an uploaded-but-unsubmitted shard would pollute the DA.
     await this.ensureContributionBond(resolvedId, me);
 
     // 1. Encrypt locally — plaintext never leaves the client.

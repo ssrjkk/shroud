@@ -277,6 +277,25 @@ test("relayer quantization is exact and refuses the unrepresentable", async () =
   assert.notEqual(c1, relayerRowCommitment([15001n, 22500n]));
 });
 
+test("RelayerEncryptor refuses binding-neutral proofs (no CipherTask, no commit)", async () => {
+  // `createEncryptedInput(0x0, 0x0)` produces a proof bound to nothing: the same
+  // handles/proof replay on any task. The contract address is therefore required —
+  // fail-closed at config time, before any network call — while the user address may
+  // stay neutral (zero) for callers that bind the contributor elsewhere.
+  const { assertInputBinding } = await import("../dist/relayer-encryptor.js");
+  const task = "0x" + "11".repeat(20);
+  const user = "0x" + "22".repeat(20);
+  assert.throws(() => assertInputBinding(undefined, user), /contractAddress/);
+  assert.throws(() => assertInputBinding(ethers.ZeroAddress, user), /contractAddress/);
+  assert.throws(() => assertInputBinding("not-an-address", user), /contractAddress/);
+  assert.throws(() => assertInputBinding(task, "not-an-address"), /userAddress/);
+  assert.deepEqual(assertInputBinding(task, undefined), {
+    contractAddress: task,
+    userAddress: ethers.ZeroAddress,
+  });
+  assert.deepEqual(assertInputBinding(task, user), { contractAddress: task, userAddress: user });
+});
+
 test("FileShardStore persists across instances and verifies like the memory store", async () => {
   const { FileShardStore } = await import("../dist/file-store.js");
   const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-"));
@@ -392,6 +411,36 @@ test("HttpShardStore caps object size on both upload and download", async () => 
   }
 });
 
+test("HttpShardStore stops pulling a lying stream instead of buffering it", async () => {
+  // A hostile store declares 100 bytes and then streams 1 MiB. The cap must stop
+  // the pull early: buffering the whole body first would let one GET eat memory
+  // proportional to the attacker's stream, not to the configured cap.
+  const original = globalThis.fetch;
+  const cid = ethers.keccak256(new Uint8Array([1]));
+  try {
+    let delivered = 0;
+    const CHUNKS = 64;
+    const CHUNK = 16 * 1024;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (delivered >= CHUNKS) {
+          controller.close();
+          return;
+        }
+        delivered++;
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+    });
+    globalThis.fetch = (async () =>
+      new Response(stream, { status: 200, headers: { "content-length": "100" } })) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid", { maxObjectBytes: 64 * 1024, maxRetries: 0 });
+    await assert.rejects(() => store.get(cid), /byte cap/);
+    assert.ok(delivered < CHUNKS, `buffered the whole ${delivered}-chunk stream despite the cap`);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("HttpShardStore retries 503s with backoff and gives up after the budget", async () => {
   // Transient overload must not fail a pull; a dead store must fail fast-ish, not hang.
   // Attempts = 1 + maxRetries; backoff is jittered, so the test only asserts counts.
@@ -460,6 +509,42 @@ test("HttpShardStore.getRange checks that the bytes really are the requested win
     // A 206 with no content-range at all is only usable if it did not overshoot the window.
     globalThis.fetch = (async () => new Response(new Uint8Array(12), { status: 206 })) as typeof fetch;
     await assert.rejects(() => store.getRange(cid, 0, 8), /without a content-range header/);
+
+    // A short body without content-range is not an honest tail: without the header a
+    // truncated honest chunk is indistinguishable from a hostile prefix served at the
+    // wrong offset, so 206 always requires content-range.
+    globalThis.fetch = (async () => new Response(new Uint8Array(4), { status: 206 })) as typeof fetch;
+    await assert.rejects(() => store.getRange(cid, 8, 8), /content-range/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("HttpShardStore.getVerified memoizes verified bytes and isolates callers", async () => {
+  // A re-executing node pulls the same shard per epoch it checks: one fetch, N epochs.
+  // The memo key binds cid AND digest, and cached bytes are copies — mutating a return
+  // must not poison later reads, and a different digest must re-fetch, never hit.
+  const original = globalThis.fetch;
+  try {
+    let calls = 0;
+    const payload = new TextEncoder().encode("cached-shard");
+    const cid = ethers.keccak256(new Uint8Array([1]));
+    const digest = ethers.keccak256(payload);
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(payload.slice(), { status: 200 });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid");
+    const first = await store.getVerified(cid, digest);
+    const second = await store.getVerified(cid, digest);
+    assert.deepEqual(Array.from(second), Array.from(payload));
+    assert.equal(calls, 1);
+    first[0] ^= 0xff; // caller mutates its copy
+    const third = await store.getVerified(cid, digest);
+    assert.deepEqual(Array.from(third), Array.from(payload));
+    assert.equal(calls, 1);
+    await assert.rejects(() => store.getVerified(cid, ethers.ZeroHash), /failed integrity check/);
+    assert.equal(calls, 2);
   } finally {
     globalThis.fetch = original;
   }
