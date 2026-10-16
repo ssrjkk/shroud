@@ -1,0 +1,45 @@
+name: links
+
+# External-link hygiene plus the default-branch guard: source links must track the
+# default branch (`/tree/HEAD/…`, `/blob/HEAD/…`), never pin `main`, so a branch
+# rename cannot strand every footer at once.
+
+on:
+  push:
+    branches: [master]
+    paths: ["web/**", "README.md", "docs/**", ".github/workflows/links.yml"]
+  pull_request:
+    paths: ["web/**", "README.md", "docs/**", ".github/workflows/links.yml"]
+  workflow_dispatch:
+
+jobs:
+  branch-links:
+    name: no pinned default-branch links
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: fail on /tree/main/ or /blob/main/
+        run: |
+          if grep -rnE '(tree|blob)/main/' web/ README.md docs/; then
+            echo "source links must use /tree/HEAD/ or /blob/HEAD/, never /main/"
+            exit 1
+          fi
+          echo "branch links OK: no pinned /main/ references"
+
+  lychee:
+    name: external links alive
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: check external links with retries
+        uses: lycheeverse/lychee-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: >-
+            --no-progress
+            --max-retries 3
+            --exclude-fragments
+            --exclude-mail
+            README.md docs/ web/
+          fail: true

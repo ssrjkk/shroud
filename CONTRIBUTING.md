@@ -50,6 +50,21 @@ The Rust node compiles with `cargo build --release` (needs protoc; see `.github/
 - [ ] Docs updated (`docs/`) if protocol behaviour changed.
 - [ ] Commit message follows conventional format (`fix(contracts):`, `feat(sdk):`, `chore:`...).
 
+## Pre-push (what CI will run)
+
+Rust cannot be verified on every machine (linking needs a full toolchain — see
+`docs/05-honest-limitations.md` §8), so at minimum run the gates that run everywhere:
+
+```sh
+cargo fmt --all -- --check            # from node/: the one Rust gate that runs in any sandbox
+grep -rnE '(tree|blob)/main/' web/ README.md docs/ && exit 1 || echo "branch links OK"
+node web/tests/equiv.mjs              # site math vs golden vectors
+```
+
+CI then runs the rest per workflow (`contracts`, `sdk`, `bot`, `shardstore`,
+`site`, `rust`, `links`): push only when the local gates above are green, one
+push per verifiable hypothesis.
+
 ## Security
 
 See [SECURITY.md](SECURITY.md). Report vulnerabilities privately — this project moves funds.
