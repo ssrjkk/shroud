@@ -7,9 +7,9 @@ name: links
 on:
   push:
     branches: [master]
-    paths: ["web/**", "README.md", "docs/**", ".github/workflows/links.yml"]
+    paths: ["web/**", "README.md", "*.md", "docs/**", ".github/workflows/links.yml"]
   pull_request:
-    paths: ["web/**", "README.md", "docs/**", ".github/workflows/links.yml"]
+    paths: ["web/**", "README.md", "*.md", "docs/**", ".github/workflows/links.yml"]
   workflow_dispatch:
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: fail on /tree/main/ or /blob/main/
         run: |
-          if grep -rnE '(tree|blob)/main/' web/ README.md docs/; then
+          if grep -rnE '(tree|blob)/main/' web/ README.md *.md docs/; then
             echo "source links must use /tree/HEAD/ or /blob/HEAD/, never /main/"
             exit 1
           fi
@@ -43,5 +43,5 @@ jobs:
             --no-progress
             --max-retries 3
             --exclude-path 'web/404.html'
-            README.md docs/ web/
+            README.md *.md docs/ web/
           fail: true

@@ -57,7 +57,7 @@ Rust cannot be verified on every machine (linking needs a full toolchain — see
 
 ```sh
 cargo fmt --all -- --check            # from node/: the one Rust gate that runs in any sandbox
-grep -rnE '(tree|blob)/main/' web/ README.md docs/ && exit 1 || echo "branch links OK"
+grep -rnE '(tree|blob)/main/' web/ README.md *.md docs/ && exit 1 || echo "branch links OK"
 node web/tests/equiv.mjs              # site math vs golden vectors
 ```
 
