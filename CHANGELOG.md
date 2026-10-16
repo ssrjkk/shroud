@@ -26,6 +26,13 @@ first tagged release.
 - Guards (#19): `--locked` cargo builds; `links.yml` (lychee + no-pinned-`/main/`
   guard); pre-push checklist in `CONTRIBUTING.md`.
 - Docs (#20): hardcoded test counts replaced with CI links.
+- Trust docs (#21): `SECURITY_MODEL.md`, `TRUST_ASSUMPTIONS.md`, `CHANGELOG.md`,
+  advisory triage (§7b), CodeQL for JS/TS.
+- Trust round 2 (#22): README research banner, honest titles, ShardStore ETags,
+  `AUDIT_SCOPE.md`.
+- Release hygiene (#23): `VERSIONING.md`, `RELEASE_PROCESS.md`, evidence-pack script.
+- SDK batch reads (#24): `getManyVerified` (bounded parallelism, order-preserving).
+- Site honesty (#25): download buttons name the actual demo files.
 
 ### Prior base (pre-split, PR #12 lineage)
 
