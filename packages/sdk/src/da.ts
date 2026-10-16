@@ -7,11 +7,12 @@
  * Note on addressing: a store's `cid` is a *transport* address and may be anything the store
  * chooses to call an object, while the value pinned on chain is `ctDigest` = keccak256(payload),
  * computed client-side in `pinPayload`. The development stores below mirror the production
- * split on purpose: `cid` = sha256(payload) (the transport address, like the reference
- * service's sha3-256), `digest` = keccak256(payload) (the on-chain pin). They are different
- * identifiers for the same bytes — and a store's `cid` must never be treated as the pin.
- * An earlier revision used keccak256 for both, which hid exactly the confusion production
- * punishes: code that compared `cid` against `ctDigest` passed in dev and failed live.
+ * split on purpose: `cid` = sha256(payload) (the transport address), `digest` =
+ * keccak256(payload) (the on-chain pin, which is also what the reference service returns).
+ * They are different identifiers for the same bytes — and a store's `cid` must never be
+ * treated as the pin. An earlier revision used keccak256 for both, which hid exactly the
+ * confusion production punishes: code that compared `cid` against `ctDigest` passed in dev
+ * and failed live.
  *
  * Consequently `getVerified` recomputes keccak256 over the fetched bytes and compares against the
  * expected `ctDigest`. Trusting the store's own addressing instead would mean a DA that returns
@@ -54,9 +55,9 @@ export class MemoryShardStore implements ShardStore {
   private readonly objects = new Map<string, Uint8Array>();
 
   async put(payload: Uint8Array): Promise<{ cid: string; digest: string }> {
-    // Content-addressed, with the production split: the transport address is sha256
-    // (like the reference service's sha3-256), the on-chain pin is keccak256. Using
-    // keccak256 for both here once hid cid/digest confusion that only failed live.
+    // Content-addressed, with the production split: the transport address is sha256, the
+    // on-chain pin is keccak256. Using keccak256 for both here once hid cid/digest confusion
+    // that only failed live.
     // Copied on the way in and on the way out (see FileShardStore): the caller keeps a live
     // reference otherwise, and mutating it afterwards would corrupt every later read —
     // including another party's `getVerified` in the same process.
@@ -240,7 +241,7 @@ export class HttpShardStore implements ShardStore {
   async get(cid: string): Promise<Uint8Array> {
     assertSafeCid(cid);
 
-    const bytes = await this.request(
+    return this.request(
       `/objects/${cid}`,
       { method: "GET", headers: this.headers() },
       async (res) => {
@@ -252,13 +253,53 @@ export class HttpShardStore implements ShardStore {
         if (Number.isFinite(declared) && declared > this.maxObjectBytes) {
           throw new Error(`shard ${cid} declares ${declared} bytes, over the ${this.maxObjectBytes} byte cap`);
         }
-        return new Uint8Array(await res.arrayBuffer());
+        // The declared length is the store's own claim and may be absent or a lie: enforce the
+        // cap while pulling, chunk by chunk, and cancel the stream the moment it fires instead
+        // of buffering the attacker's whole body first and checking afterwards.
+        return this.readCapped(res, this.maxObjectBytes, `shard ${cid}`);
       }
     );
-    if (bytes.byteLength > this.maxObjectBytes) {
-      throw new Error(`shard ${cid} is ${bytes.byteLength} bytes, over the ${this.maxObjectBytes} byte cap`);
+  }
+
+  /**
+   * Pull a response body without ever holding more than `cap` bytes.
+   *
+   * Reads the stream chunk by chunk and cancels it as soon as the running total passes the
+   * cap, so a store that declares 100 bytes and then streams gigabytes costs us `cap` bytes
+   * of memory, not gigabytes. Without the cancel the producer would keep flowing into the
+   * socket buffer after the cap already fired.
+   */
+  private async readCapped(res: Response, cap: number, what: string): Promise<Uint8Array> {
+    const body = res.body;
+    if (!body) return new Uint8Array(await res.arrayBuffer());
+    const reader = body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+        size += value.byteLength;
+        if (size > cap) {
+          throw new Error(`${what} is over the ${cap} byte cap (stopped pulling after ${size} streamed bytes)`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // Already closed or errored: nothing left to stop.
+      }
+      reader.releaseLock();
     }
-    return bytes;
+    const out = new Uint8Array(size);
+    let off = 0;
+    for (const c of chunks) {
+      out.set(c, off);
+      off += c.byteLength;
+    }
+    return out;
   }
 
   /**
@@ -290,7 +331,13 @@ export class HttpShardStore implements ShardStore {
         if (res.status !== 200 && res.status !== 206) {
           throw new Error(`shard store range GET failed for ${cid}: ${res.status}`);
         }
-        const body = new Uint8Array(await res.arrayBuffer());
+        // Bounded like every other read: a range pull that ignored the cap would let one
+        // malicious chunk eat memory proportional to the stream, not to the window.
+        const body = await this.readCapped(
+          res,
+          this.maxObjectBytes,
+          `range ${offset}..${offset + length - 1} of ${cid}`
+        );
 
         // A `200` means the server ignored `Range` and sent the whole object, which is only the
         // answer to this request when the window *is* the object from its start. Accepting anything

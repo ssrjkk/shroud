@@ -392,6 +392,36 @@ test("HttpShardStore caps object size on both upload and download", async () => 
   }
 });
 
+test("HttpShardStore stops pulling a lying stream instead of buffering it", async () => {
+  // A hostile store declares 100 bytes and then streams 1 MiB. The cap must stop
+  // the pull early: buffering the whole body first would let one GET eat memory
+  // proportional to the attacker's stream, not to the configured cap.
+  const original = globalThis.fetch;
+  const cid = ethers.keccak256(new Uint8Array([1]));
+  try {
+    let delivered = 0;
+    const CHUNKS = 64;
+    const CHUNK = 16 * 1024;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (delivered >= CHUNKS) {
+          controller.close();
+          return;
+        }
+        delivered++;
+        controller.enqueue(new Uint8Array(CHUNK));
+      },
+    });
+    globalThis.fetch = (async () =>
+      new Response(stream, { status: 200, headers: { "content-length": "100" } })) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid", { maxObjectBytes: 64 * 1024, maxRetries: 0 });
+    await assert.rejects(() => store.get(cid), /byte cap/);
+    assert.ok(delivered < CHUNKS, `buffered the whole ${delivered}-chunk stream despite the cap`);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("HttpShardStore retries 503s with backoff and gives up after the budget", async () => {
   // Transient overload must not fail a pull; a dead store must fail fast-ish, not hang.
   // Attempts = 1 + maxRetries; backoff is jittered, so the test only asserts counts.
