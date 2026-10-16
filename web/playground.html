@@ -74,7 +74,7 @@
 
     <fieldset class="bench only-pro"><legend data-i18n="lab.b2">Стенд 02 — сборка шарда</legend><div class="bench-in">
       <p class="hint" data-i18n="lab.b2h">Собирает shroud/noop/v1 shard локально: хэш-байты, row-commitment, CID = keccak(байтов). Plaintext никуда не уходит.</p>
-      <div class="btnrow"><button class="btn btn-dark btn-sm" id="encBtn" data-i18n="lab.enc">Собрать шард</button><button class="btn btn-sm" id="dlShard" data-i18n="lab.dlsh">Скачать shard.hex</button></div>
+      <div class="btnrow"><button class="btn btn-dark btn-sm" id="encBtn" data-i18n="lab.enc">Собрать шард</button><button class="btn btn-sm" id="dlShard" data-i18n="lab.dlsh">Скачать shard-demo.hex</button></div>
       <div aria-live="polite" id="msg2"></div>
       <div class="field" style="margin-top:12px"><label data-i18n="lab.out">Выход</label><div class="datapreview" id="encOut" data-i18n="lab.enc0">ждёт шага 01 → 02</div></div>
     </div></fieldset>
@@ -98,7 +98,7 @@
       <div class="field-row r3"><div class="field"><label data-i18n="lab.lr">learning rate</label><input type="text" id="lr" value="0.05" /></div>
       <div class="field"><label data-i18n="lab.l2">L2</label><input type="text" id="l2" value="0" /></div>
       <div class="field"><label data-i18n="lab.mb">minibatch</label><input type="number" id="minibatch" value="8" min="1" /></div></div>
-      <div class="btnrow"><button class="btn btn-red btn-sm" id="execBtn" data-i18n="lab.exec">Выполнить эпоху</button><button class="btn btn-sm" id="dlWeights" data-i18n="lab.dlw">Скачать веса</button><button class="btn btn-sm" id="resetEpochs" data-i18n="lab.reset">Сброс</button></div>
+      <div class="btnrow"><button class="btn btn-red btn-sm" id="execBtn" data-i18n="lab.exec">Выполнить эпоху</button><button class="btn btn-sm" id="dlWeights" data-i18n="lab.dlw">Скачать weights-demo.hex</button><button class="btn btn-sm" id="resetEpochs" data-i18n="lab.reset">Сброс</button></div>
       <div aria-live="polite" id="msg4"></div>
       <div class="field" style="margin-top:12px"><label data-i18n="lab.out">Выход</label><div class="datapreview" id="execOut" data-i18n="lab.exec0">ждёт эпохи</div></div>
     </div></fieldset>
@@ -113,7 +113,7 @@
 
     <fieldset class="bench only-pro"><legend data-i18n="lab.b6">Стенд 06 — settlement</legend><div class="bench-in">
       <p class="hint" data-i18n="lab.b6h">Выплаты по пулам + постраничный settleFrom. Каналы — EIP-712 слайсы через PaymentVault.</p>
-      <div class="btnrow"><button class="btn btn-dark btn-sm" id="settleBtn" data-i18n="lab.settle">Рассчитать выплаты</button><button class="btn btn-sm" id="reportBtn" data-i18n="lab.rep">Скачать отчёт JSON</button></div>
+      <div class="btnrow"><button class="btn btn-dark btn-sm" id="settleBtn" data-i18n="lab.settle">Рассчитать выплаты</button><button class="btn btn-sm" id="reportBtn" data-i18n="lab.rep">Скачать shroud-report.json</button></div>
       <div aria-live="polite" id="msg6"></div>
       <div class="field" style="margin-top:12px"><label data-i18n="lab.out">Выход</label><div class="datapreview" id="settleOut" data-i18n="lab.settle0">ждёт расчёта</div></div>
     </div></fieldset>
