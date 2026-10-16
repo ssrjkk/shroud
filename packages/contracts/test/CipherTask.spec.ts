@@ -177,6 +177,17 @@ describe("CipherTask", () => {
       const { task } = await deployFixture();
       expect(await task.MAX_ROWS_PER_SHARD()).to.equal(100_000n);
       expect(await task.SETTLE_PAGE_SIZE()).to.equal(200n);
+      expect(await task.MAX_NODES()).to.equal(200n);
+    });
+
+    it("counts registered nodes per task", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node, node2 } = fx;
+      const id = await sealed(fx, { nodes: [node] });
+      expect(await task.nodeCount(id)).to.equal(1n);
+      await task.connect(node2).registerNode(id, bytes32Of(1001));
+      expect(await task.nodeCount(id)).to.equal(2n);
+      expect(await task.nodeRegistered(id, node2.address)).to.equal(true);
     });
   });
 

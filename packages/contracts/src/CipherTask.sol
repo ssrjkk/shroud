@@ -64,6 +64,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      each page is independently callable.
     uint256 public constant SETTLE_PAGE_SIZE = 200;
     uint32 public constant MAX_SHARDS = 65_535;
+    /// @dev Distinct nodes that may register on one task. `finalizeEpoch` opens one reward
+    ///      channel per reporter in a single transaction and `sweepTaskChannels` iterates every
+    ///      channel of the task, so unbounded registration lets anyone grief finalization into
+    ///      the block gas limit with no recourse but `abort`. Contributors are capped at 5000
+    ///      with paged settlement; reporter payout cannot page, so the node cap is tighter.
+    uint32 public constant MAX_NODES = 200;
 
     /// @dev Fraction of the open epoch's lock retained on abort, so a node that already
     ///      produced work stays solvent.
@@ -127,6 +133,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => mapping(bytes32 => bool)) private _shardSeen;
     mapping(uint256 => mapping(uint32 => mapping(address => EpochCommit))) private _commits;
     mapping(uint256 => mapping(address => bool)) private _nodeRegistered;
+    mapping(uint256 => uint32) private _nodeCount;
     mapping(uint256 => address[]) private _contributorList;
     mapping(uint256 => mapping(uint32 => address)) private _epochWinner;
     mapping(uint256 => mapping(uint32 => uint256)) private _epochChannel;
@@ -441,7 +448,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function _registerNode(uint256 taskId, address node, bytes32 blsPubKey) private {
         if (_tasks[taskId].status == TaskStatus.None) revert UnknownTask(taskId);
         if (_nodeRegistered[taskId][node]) revert NodeAlreadyRegistered(taskId, node);
+        if (_nodeCount[taskId] >= MAX_NODES) revert CapReached(taskId, MAX_NODES);
         _nodeRegistered[taskId][node] = true;
+        unchecked {
+            _nodeCount[taskId] += 1;
+        }
         vault.takeBond(taskId, node, blsPubKey);
         emit NodeRegistered(taskId, node, blsPubKey);
     }
@@ -1067,6 +1078,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     function nodeRegistered(uint256 taskId, address node) external view returns (bool) {
         return _nodeRegistered[taskId][node];
+    }
+
+    function nodeCount(uint256 taskId) external view returns (uint32) {
+        return _nodeCount[taskId];
     }
 
     function epochWinner(uint256 taskId, uint32 epoch) external view returns (address) {
