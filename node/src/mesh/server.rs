@@ -141,6 +141,14 @@ impl InboundThrottle {
         }
     }
 
+    /// Cap the peer table below the default (see `mesh.max_throttle_peers`). The bound
+    /// is memory, not policy: past it the stalest bucket is evicted, never the accounting.
+    pub fn with_max_peers(mut self, max_peers: usize) -> Self {
+        assert!(max_peers >= 1, "throttle peer cap must be >= 1");
+        self.max_peers = max_peers;
+        self
+    }
+
     /// Take one request token for `ip`. `Err(retry_after)` when over quota.
     ///
     /// Synchronous by design: under the service lock, check-and-record is atomic and no
@@ -309,10 +317,10 @@ impl MeshService {
                 request_timeout: cfg.mesh.request_timeout,
                 state,
                 index: Arc::new(Mutex::new(ShardIndex::new(cfg.mesh.index_capacity))),
-                inbound: Arc::new(Mutex::new(InboundThrottle::new(
-                    cfg.mesh.inbound_rps,
-                    cfg.mesh.inbound_burst,
-                ))),
+                inbound: Arc::new(Mutex::new(
+                    InboundThrottle::new(cfg.mesh.inbound_rps, cfg.mesh.inbound_burst)
+                        .with_max_peers(cfg.mesh.max_throttle_peers),
+                )),
             }),
         }
     }
@@ -1060,6 +1068,27 @@ mod tests {
         t.take(newcomer, t0)
             .expect_err("newcomer is throttled after its burst");
         assert!(t.peer_count() <= 10_000);
+    }
+
+    #[test]
+    fn the_configured_peer_cap_bounds_the_table() {
+        // Same eviction contract as the full-size table, at a scale a unit test can
+        // assert precisely: the fourth peer displaces one of the first three, the table
+        // never exceeds its cap, and the newcomer is burst-limited from the start.
+        let mut t = InboundThrottle::new(10, 3).with_max_peers(3);
+        let t0 = Instant::now();
+        for n in 1..=3u8 {
+            let ip: IpAddr = format!("10.9.0.{n}").parse().unwrap();
+            assert!(t.take(ip, t0).is_ok());
+        }
+        assert_eq!(t.peer_count(), 3);
+        let newcomer: IpAddr = "192.0.2.9".parse().unwrap();
+        assert!(t.take(newcomer, t0).is_ok());
+        assert_eq!(t.peer_count(), 3);
+        assert!(t.take(newcomer, t0).is_ok());
+        assert!(t.take(newcomer, t0).is_ok());
+        t.take(newcomer, t0)
+            .expect_err("newcomer is throttled after its burst");
     }
 
     #[test]

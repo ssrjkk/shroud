@@ -149,6 +149,7 @@ digest_only = false       # true = dispute-only watchdog: never join the commit 
 inbound_rps = 100           # sustained inbound requests/sec per peer IP
 inbound_burst = 200         # burst headroom per peer IP
 max_streams_per_connection = 100  # each gossip stream costs a task + channel
+max_throttle_peers = 10000  # peer-IP buckets in the inbound throttle; past it the stalest bucket is evicted
 # mTLS (all three or none; without it the mesh serves plaintext — logged as WARN):
 # mtls_cert = "/keys/mesh.crt"
 # mtls_key = "/keys/mesh.key"
