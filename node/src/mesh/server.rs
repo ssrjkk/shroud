@@ -691,6 +691,15 @@ fn record_announce(shared: &Shared, peer: &str, a: ShardAnnounce) -> Option<Stri
             ))
         }
     };
+    // This node could never serve the announced object: anything past
+    // `max_object_bytes` fails our own fetch caps, so indexing it only poisons
+    // `peer_holding` hints and invites range pulls we will refuse.
+    if u64::from(a.bytes) > shared.max_object_bytes {
+        return Some(format!(
+            "bytes {} exceeds this node's max_object_bytes {}",
+            a.bytes, shared.max_object_bytes
+        ));
+    }
 
     let entry = AnnouncedShard {
         task_id,
@@ -1098,6 +1107,32 @@ mod tests {
         a.ciphertext_cid = vec![0u8; 31];
         assert!(record_announce(&shared, PEER, a).is_some());
         assert!(shared.index.lock().unwrap_or_else(poisoned).is_empty());
+    }
+
+    #[test]
+    fn an_announcement_bigger_than_our_cap_is_refused() {
+        // We could never serve it (our own fetch caps would refuse), so indexing it
+        // would only poison `peer_holding` hints with an unanswerable peer.
+        let shared = Shared {
+            chain_id: 31_338,
+            cache_dir: PathBuf::from("."),
+            max_object_bytes: 1024,
+            range_bytes: 4 << 20,
+            request_timeout: Duration::from_secs(1),
+            state: Arc::new(NodeState::new()),
+            index: Arc::new(Mutex::new(ShardIndex::new(16))),
+            inbound: Arc::new(Mutex::new(InboundThrottle::new(100, 200))),
+        };
+        let mut a = announce();
+        a.bytes = 2048;
+        let err = record_announce(&shared, PEER, a).expect("must refuse");
+        assert!(err.contains("max_object_bytes"), "{err}");
+        assert!(shared.index.lock().unwrap_or_else(poisoned).is_empty());
+        // At exactly the cap it is serviceable: boundary is inclusive.
+        let mut b = announce();
+        b.bytes = 1024;
+        assert!(record_announce(&shared, PEER, b).is_none());
+        assert_eq!(shared.index.lock().unwrap_or_else(poisoned).len(), 1);
     }
 
     #[test]

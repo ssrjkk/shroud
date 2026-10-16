@@ -86,6 +86,22 @@ export interface UploadOptions {
  */
 export const MAX_ROWS_PER_SHARD = 100_000;
 
+/**
+ * Normalize a configured chain id. The field is typed `bigint`, but JavaScript callers
+ * pass numbers: `11155111 !== 11155111n`, so a strict comparison later would cry wolf
+ * on the correct chain. Floats and garbage fail fast here instead of deep in a signing path.
+ */
+function normalizeChainId(v: unknown): bigint | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number") {
+    if (!Number.isInteger(v)) throw new Error(`cfg.chainId must be an integer chain id, got ${v}`);
+    return BigInt(v);
+  }
+  if (typeof v === "string" && /^\d+$/.test(v)) return BigInt(v);
+  throw new Error(`cfg.chainId must be an integer chain id, got ${JSON.stringify(v)}`);
+}
+
 /** Minimal ERC-20 surface the SDK needs for bond approvals. Never add transfer here:
  *  the SDK moves no funds of its own; approvals are the only token writes it performs. */
 const ERC20_MIN_ABI = [
@@ -115,7 +131,7 @@ export class ShroudSdk {
     this.paymentVault = new PaymentVaultClient(cfg.paymentVault, cfg.signer);
     this.encryptor = cfg.encryptor ?? new NoopEncryptor();
     this.shardStore = cfg.shardStore ?? new MemoryShardStore();
-    this.configuredChainId = cfg.chainId;
+    this.configuredChainId = normalizeChainId(cfg.chainId);
     // The key the client is *told* it uses and the key the encryptor *actually* uses have to agree
     // before either is compared with the chain, otherwise the pin check verifies a string that is
     // not the one the ciphertext depends on.
@@ -160,7 +176,10 @@ export class ShroudSdk {
    */
   private async ensureChainId(): Promise<bigint> {
     if (this.resolvedChainId !== undefined) return this.resolvedChainId;
-    const net = await (this.signer.provider ?? this.providerFallback)?.getNetwork();
+    // An explicitly attached provider wins over whatever the signer happens to carry:
+    // otherwise `withProvider` could never actually switch networks, and a signer with
+    // a stale default would silently override deliberate configuration.
+    const net = await (this.providerFallback ?? this.signer.provider)?.getNetwork();
     const actual = net?.chainId;
     if (actual === undefined) {
       throw new Error("could not determine the chain id from the provider; pass cfg.chainId explicitly");
@@ -178,7 +197,13 @@ export class ShroudSdk {
 
   /** Attach a provider explicitly when the signer exposes none. */
   withProvider(provider: Provider): this {
+    // The resolved chain id is pinned per client: swapping the provider without
+    // forgetting it would keep signing against the old network after this call.
+    // The fallback also takes precedence over the signer's own provider (see
+    // `ensureChainId`), so this call actually switches networks instead of
+    // decorating a signer that keeps answering for the old one.
     this.providerFallback = provider;
+    this.resolvedChainId = undefined;
     return this;
   }
 
@@ -402,6 +427,12 @@ export class ShroudSdk {
   }
 
   private async resolveTask(taskId: bigint, opts: UploadOptions): Promise<bigint> {
+    // Runtime gate for JavaScript callers: the type says bigint, but `1.5 > 0n` is true,
+    // so without this a fractional id sails past the existence check and dies obscurely
+    // inside an ABI encoder. Fail here with the actual value in hand.
+    if (typeof taskId !== "bigint" || taskId <= 0n) {
+      throw new Error(`task id must be a positive integer, got ${String(taskId)}`);
+    }
     const count = await this.cipherTask.taskCount();
     const exists = taskId > 0n && taskId <= count;
     if (exists) return taskId;

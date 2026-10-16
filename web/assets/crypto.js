@@ -362,8 +362,29 @@
 
   /* ------------------------------------------------------------------ */
   /* reference fixed-point SGD — mirrors ReferenceCpuEngine::execute_epoch
-     (i128 checked math becomes BigInt; division truncates toward zero in both). */
+     (i128 checked math becomes checked BigInt; lane updates clamp to i64;
+     division truncates toward zero in both). */
   /* ------------------------------------------------------------------ */
+
+  var I128_MIN = -(1n << 127n);
+  var I128_MAX = (1n << 127n) - 1n;
+  var I64_MIN = -(1n << 63n);
+  var I64_MAX = (1n << 63n) - 1n;
+
+  // Overflow is an error, never a wrap — like the node's checked i128 arithmetic.
+  // The taxonomy mirrors the node (`Overflow` vs `Diverged` vs lane range): an input
+  // that overflows i128 must throw here exactly where the node throws there.
+  function checkedI128(v, ctx) {
+    if (v < I128_MIN || v > I128_MAX) throw new Error("overflow: " + ctx);
+    return v;
+  }
+
+  // Lane updates saturate at i64 — like the node's apply_update — instead of throwing.
+  function clampI64(v) {
+    if (v < I64_MIN) return I64_MIN;
+    if (v > I64_MAX) return I64_MAX;
+    return v;
+  }
 
   function referenceStep(o) {
     // o: {features, scale, lrQ16, l2Q16, minibatch, prevLanes, shards:[{values:[u64]}]}
@@ -382,8 +403,10 @@
     function apply(m) {
       var denom = 65536n * S * BigInt(m);
       for (var j = 0; j < f; j++) {
+        // Like the node (plain `*`, then clamp): the product is unchecked, the lane
+        // saturates instead of wrapping. Only accumulators are checked (see above).
         var delta = (BigInt(o.lrQ16) * grad[j]) / denom; // truncates toward zero, like i128 /
-        w[j] = w[j] - delta;
+        w[j] = clampI64(w[j] - delta);
         grad[j] = 0n;
       }
     }
@@ -392,12 +415,19 @@
       if (v.length % f !== 0) throw new Error("shard length");
       for (var r = 0; r < v.length / f; r++) {
         var dot = 0n;
-        for (var j = 0; j < f - 1; j++) dot += w[j] * BigInt(v[r * f + j]);
+        for (var j = 0; j < f - 1; j++) {
+          var prod = checkedI128(w[j] * BigInt(v[r * f + j]), "dot product");
+          dot = checkedI128(dot + prod, "dot product");
+        }
         var pred = dot / S + w[f - 1];
         var err = pred - BigInt(v[r * f + f - 1]);
-        loss += err * err;
-        for (var k = 0; k < f - 1; k++) grad[k] += err * BigInt(v[r * f + k]);
-        grad[f - 1] += err * S; // bias rides the constant-1.0 input quantised as S
+        var sq = checkedI128(err * err, "loss");
+        loss = checkedI128(loss + sq, "loss");
+        for (var k = 0; k < f - 1; k++) {
+          var g = checkedI128(err * BigInt(v[r * f + k]), "gradient");
+          grad[k] = checkedI128(grad[k] + g, "gradient");
+        }
+        grad[f - 1] = checkedI128(grad[f - 1] + checkedI128(err * S, "gradient"), "gradient"); // bias rides the constant-1.0 input quantised as S
         inBatch++;
         nRows++;
         if (inBatch >= o.minibatch) {
@@ -411,7 +441,7 @@
     if (o.l2Q16 !== 0) {
       for (var q = 0; q < f; q++) {
         var shrink = (BigInt(o.l2Q16) * w[q]) / 65536n;
-        w[q] = w[q] - shrink;
+        w[q] = clampI64(w[q] - shrink);
       }
     }
     var mean = loss / BigInt(nRows);

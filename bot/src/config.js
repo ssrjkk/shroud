@@ -84,13 +84,17 @@ function address(name, { required: mustBeSet = false } = {}) {
     throw new ConfigError(`${name} is not a 20-byte hex address: ${JSON.stringify(raw)}`);
   }
   const normalized = `0x${raw.slice(2).toLowerCase()}`;
-  if (normalized === ZERO_ADDRESS && mustBeSet) {
-    throw new ConfigError(
-      `${name} is the zero address. That is never a real deployment — deploy the contracts and set the real address.`
-    );
+  if (normalized === ZERO_ADDRESS) {
+    if (mustBeSet) {
+      throw new ConfigError(
+        `${name} is the zero address. That is never a real deployment — deploy the contracts and set the real address.`
+      );
+    }
+    // Optional zero means "not configured", not "the zero contract": every consumer
+    // gates on falsiness (`if (!config.cipherTask) …`), and a truthy zero would sail
+    // past those gates into `new Contract(zero)` failures misreported as "unreadable".
+    return null;
   }
-  // A zero address is *allowed* when optional: it becomes "not configured",
-  // which the command layer reports honestly instead of reading as "empty".
   return normalized;
 }
 

@@ -22,7 +22,19 @@ export class NoopEncryptor implements Encryptor {
   readonly providesConfidentiality = false;
 
   async encryptRows(data: Float64Array | number[], features: number): Promise<EncryptedShard> {
+    // Validate like the confidential path does: a malformed header (Infinity row count,
+    // fractional rows, NaN payload) would otherwise upload successfully and fail only at
+    // the node's decoder — or worse, decode differently there than here.
+    if (!Number.isInteger(features) || features <= 0) {
+      throw new Error(`features must be a positive integer, got ${features}`);
+    }
     const arr = data instanceof Float64Array ? data : new Float64Array(data);
+    if (arr.length === 0 || arr.length % features !== 0) {
+      throw new Error(`data length ${arr.length} is not a positive multiple of features ${features}`);
+    }
+    for (let i = 0; i < arr.length; i++) {
+      if (!Number.isFinite(arr[i])) throw new Error(`row value at index ${i} is not finite`);
+    }
     const n = arr.length / features;
     const head = new TextEncoder().encode(`shroud/noop/v1\0${features}\0${n}\0`);
     const buf = new Uint8Array(head.length + arr.length * 8);

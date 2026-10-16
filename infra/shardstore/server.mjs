@@ -470,6 +470,23 @@ async function routeGet(req, res, url, ip) {
     return send(res, 404, { error: "not found" });
   }
 
+  // Conditional read: a client holding the ETag revalidates without a second download.
+  // The ETag is always the keccak cid, and CIDs are content addresses, so a match means
+  // byte-identical content — no weak-comparison pitfalls. `*` matches any representation.
+  const inm = req.headers["if-none-match"];
+  if (typeof inm === "string") {
+    const tags = inm.split(",").map((s) => s.trim());
+    if (tags.includes("*") || tags.includes(`"${cid}"`)) {
+      metrics.incr("route:get:304");
+      res.writeHead(304, {
+        etag: `"${cid}"`,
+        "accept-ranges": "bytes",
+        "x-request-id": currentRequestId() ?? "",
+      });
+      return Boolean(res.end());
+    }
+  }
+
   let range = null;
   try {
     range = parseRangeHeader(req.headers.range, MAX_OBJECT_BYTES);

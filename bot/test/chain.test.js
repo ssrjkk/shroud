@@ -64,11 +64,12 @@ function encodeStruct(iface, fn, byName) {
 }
 
 function startStub() {
-  const routes = { calls: new Map(), logs: [] };
+  const routes = { calls: new Map(), logs: [], hits: 0 };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", (c) => (body += c));
     req.on("end", () => {
+      routes.hits++;
       const answer = (payload) => {
         if (payload.method === "eth_chainId") return "0x7a69";
         if (payload.method === "eth_call") {
@@ -163,6 +164,17 @@ test("an unreadable task is null, not zeros", async (t) => {
   assert.equal(await reader.task(999), null);
 });
 
+test("a failed read is remembered for /status instead of vanishing", async (t) => {
+  // Readers fail soft (null/[]) so one bad RPC never kills a reply — but then an
+  // operator cannot tell "empty pool" from "RPC dead". The failure is recorded with
+  // its source and expires, so /status can show it while it matters.
+  const { reader } = await setup(t);
+  assert.equal(reader.lastReadError(), null);
+  assert.equal(await reader.task(999), null);
+  assert.match(reader.lastReadError() ?? "", /^task: /);
+  assert.equal(reader.lastReadError(-1), null, "expired entries read as healthy");
+});
+
 test("commitsForEpoch filters zero digests and passes the proof through", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
   const ct = ifaces.cipherTask;
@@ -195,6 +207,43 @@ test("commitsForEpoch filters zero digests and passes the proof through", async 
   assert.equal(commits[0].traceDigest, "0x" + "f".repeat(64));
   assert.equal(commits[0].verified, true);
   assert.equal(commits[0].proof, STAR_PROOF);
+});
+
+test("commitsForEpoch batches node reads into one round trip", async (t) => {
+  // One RPC per node, folded into a single HTTP round trip by provider batching.
+  // Sequential code pays a round trip per node while the dispute window ticks;
+  // here contributorsOf plus both commits cost exactly 2 hits (batching engages
+  // because the reads overlap — sequential sends would need 3+).
+  const { reader, routes, ifaces } = await setup(t);
+  const ct = ifaces.cipherTask;
+  routes.calls.set(
+    ct.getFunction("contributorsOf").selector,
+    ct.encodeFunctionResult("contributorsOf", [[NODE_A, NODE_B]])
+  );
+  const commitOf = (proof, trace, verified, at) =>
+    encodeStruct(ct, "commits", {
+      proof,
+      encWeightsCid: "0x" + "c".repeat(64),
+      weightsDigest: "0x" + "d".repeat(64),
+      metricsCid: "0x" + "e".repeat(64),
+      traceDigest: trace,
+      committedAt: at,
+      revealNonce: 1n,
+      verified,
+    });
+  routes.calls.set(
+    ct.encodeFunctionData("commits", [1n, 0, NODE_A]),
+    commitOf(STAR_PROOF, "0x" + "f".repeat(64), true, 900n)
+  );
+  routes.calls.set(
+    ct.encodeFunctionData("commits", [1n, 0, NODE_B]),
+    commitOf(STAR_PROOF, "0x" + "e".repeat(64), true, 901n)
+  );
+  const commits = await reader.commitsForEpoch(1, 0);
+  assert.equal(commits.length, 2);
+  assert.equal(commits[0].node.toLowerCase(), NODE_A);
+  assert.equal(commits[1].node.toLowerCase(), NODE_B);
+  assert.equal(routes.hits, 2, `expected 1 contributorsOf + 1 batch, got ${routes.hits} round trips`);
 });
 
 test("tasksCreated decodes logs with their block numbers", async (t) => {

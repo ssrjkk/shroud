@@ -55,6 +55,10 @@ test("shortId and shortAddr never return an empty string", () => {
   assert.ok(shortId(12345678901234567890n).includes("…"));
   assert.equal(shortAddr(null), "—");
   assert.ok(shortAddr("0x1234567890abcdef1234567890abcdef12345678").includes("…"));
+  // Chain structs occasionally carry non-strings where an address belongs; like
+  // shortId, shortAddr shows the value instead of aborting the whole reply.
+  assert.equal(shortAddr(42), "42…42");
+  assert.equal(shortAddr(undefined), "—");
 });
 
 test("taskStatusName mirrors the contract enum and admits unknowns", () => {
@@ -207,6 +211,28 @@ test("pool handler reads newest-first and skips nothing", async () => {
   assert.ok(out.includes("Collecting"));
 });
 
+test("pool reads fan out instead of crawling the chain one RPC at a time", async () => {
+  // /pool was 12 sequential round trips. The stub delays every read: sequential code
+  // never overlaps two reads, concurrent code does. Order of results is newest-first
+  // either way (Promise.all preserves input order).
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const stub = {
+    taskCount: async () => 4,
+    task: async (id) => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { taskId: String(id), status: 2, statusName: "Collecting", budget: 1n, locked: 0n, contributors: 1, shards: 1, nextEpoch: 0, ctRoot: "0x", ctRootSet: false, params: null };
+    },
+  };
+  const { pool } = createHandlers(stub, {});
+  const out = await pool();
+  assert.ok(maxInFlight > 1, `pool reads serialized (max ${maxInFlight} in flight)`);
+  assert.ok(out.includes("Collecting"));
+});
+
 test("task handler threads the running epoch through commits, winner and quorum", async () => {
   const calls = [];
   const fakeTask = { taskId: "7", status: 5, statusName: "EpochCommitting", budget: 1n, locked: 0n, contributors: 1, shards: 1, nextEpoch: 4, ctRoot: "0x", ctRootSet: false, params: null };
@@ -253,6 +279,21 @@ test("status surfaces shed alerts, and stays silent when none were shed", async 
   const withDrops = createHandlers(stub, {}, { droppedSends: () => 7 });
   const out = await withDrops.status();
   assert.ok(out.includes("7 alert(s) shed"), "operator learns about the loss");
+});
+
+test("status surfaces a failing chain read instead of showing an empty pool", async () => {
+  // Same stub shape as above, plus a recorded read failure: the operator must see
+  // "RPC dead", not a clean bill of health.
+  const stub = {
+    chainId: async () => 31337,
+    blockNumber: async () => 100,
+    networkParams: async () => null,
+    lastReadError: () => "task: missing response for request",
+  };
+  const { status } = createHandlers(stub, {});
+  const out = await status();
+  assert.ok(out.includes("chain reads failing"), "outage is visible");
+  assert.ok(out.includes("task: missing response"), "source is named");
 });
 
 test("renderTask says 'no task' rather than rendering an empty task", () => {

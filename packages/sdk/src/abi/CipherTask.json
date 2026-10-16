@@ -697,6 +697,17 @@
         "internalType": "uint256",
         "name": "taskId",
         "type": "uint256"
+      }
+    ],
+    "name": "NoEpochOpened",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
       },
       {
         "internalType": "address",

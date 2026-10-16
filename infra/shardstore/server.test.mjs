@@ -129,6 +129,26 @@ describe("shardstore", () => {
     await part.arrayBuffer();
   });
 
+  it("answers 304 when the client already holds the ETag", async () => {
+    // Conditional GET saves a re-download: a matching If-None-Match (or *) returns
+    // no body. A stale tag still gets the bytes. CIDs are content addresses, so a
+    // match always means identical bytes — no weak-comparison pitfalls.
+    const body = Buffer.from("etag-revalidate");
+    const { cid } = await (await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body })).json();
+    const fresh = await fetch(`${BASE}/objects/${cid}`, { headers: { "If-None-Match": `"${cid}"` } });
+    assert.equal(fresh.status, 304);
+    assert.equal(fresh.headers.get("etag"), `"${cid}"`);
+    assert.equal((await fresh.arrayBuffer()).byteLength, 0);
+    const star = await fetch(`${BASE}/objects/${cid}`, { headers: { "If-None-Match": "*" } });
+    assert.equal(star.status, 304);
+    await star.arrayBuffer();
+    const stale = await fetch(`${BASE}/objects/${cid}`, {
+      headers: { "If-None-Match": '"0x0000000000000000000000000000000000000000000000000000000000000000"' },
+    });
+    assert.equal(stale.status, 200);
+    assert.deepEqual(Buffer.from(await stale.arrayBuffer()), body);
+  });
+
   it("serves suffix ranges per RFC 9110", async () => {
     const body = Buffer.from("0123456789");
     const put = await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body });

@@ -281,6 +281,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         Task storage t = _tasks[taskId];
         if (t.status == TaskStatus.None) revert UnknownTask(taskId);
         if (t.status == TaskStatus.Disclosed || t.status == TaskStatus.Aborted) revert AlreadyTerminal(taskId, t.status);
+        // No epoch ever opened (`epochDeadline == 0`): there is no deadline to be past, so the
+        // timestamp check below would always pass and let the owner kill a live contribution
+        // phase. Recovery there belongs to the buyer (`abort` needs no deadline).
+        if (t.epochDeadline == 0) revert NoEpochOpened(taskId);
         if (block.timestamp < t.epochDeadline + t.params.disputeWindow) revert EpochStillLive(taskId, t.epochDeadline);
         _unwind(taskId, _REASON_EMERGENCY_UNWIND);
     }
@@ -856,6 +860,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         }
         if (t.status == TaskStatus.None) revert UnknownTask(taskId);
         if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
+        // Settlement in flight owns the pools now: a reclaim racing the pages would
+        // compute against a moving balance. Wait for the final page instead.
+        if (_settlement.started[taskId]) revert SettlementBegun(taskId);
         if (t.locked != 0) revert EpochLocked(taskId);
         if (t.nextEpoch < t.params.epochs) revert EpochsRemain(taskId);
         return SettlementLib.reclaim(vault, taskId, t);
@@ -908,6 +915,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         // until honest contributors are paid and then burn their unreleased bonds anyway —
         // grief with no fraud behind it, indistinguishable on chain from a real slash.
         if (_settlement.settled[taskId]) revert AlreadySettled(taskId);
+        // No slashing once settlement began: mid-paging slashes turn honest contributors'
+        // shares into dust for the dust recipient, breaking page-independence. Release is
+        // the only path after this point.
+        if (_settlement.started[taskId]) revert SettlementBegun(taskId);
         if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
             revert AlreadyTerminal(taskId, t.status);
         }

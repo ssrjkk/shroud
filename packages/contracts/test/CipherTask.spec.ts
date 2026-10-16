@@ -1135,6 +1135,18 @@ describe("CipherTask", () => {
       await expect(fx.task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(task, "EpochStillLive");
     });
 
+    it("emergencyUnwind refuses a task with no opened epoch", async () => {
+      // epochDeadline == 0 before the first openEpoch: the deadline check would always
+      // pass, letting the owner kill a live contribution phase. Recovery there belongs
+      // to the buyer, whose abort needs no deadline.
+      const fx = await deployFixture();
+      const { task, buyer } = fx;
+      const id = await sealed(fx);
+      await time.increase(86_400 + 600 + 1);
+      await expect(task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(task, "NoEpochOpened");
+      await expect(task.connect(buyer).abort(id, reason4("changed_mind"))).to.emit(task, "TaskAborted");
+    });
+
     it("reclaimUnspentEpochs never touches the contributor or committee pools", async () => {
       const fx = await deployFixture();
       const { task, vault, token, buyer, node, node2, node3, node4, escrow } = fx;

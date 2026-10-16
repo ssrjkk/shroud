@@ -467,7 +467,10 @@ impl Watcher {
         );
         self.state.reset();
         self.anchors.lock().await.retain(|(n, _)| *n < block);
-        self.cursor.store(block, Ordering::SeqCst);
+        // Rewind INCLUSIVE of the fork block: `run` scans from `cursor + 1`, so storing
+        // `block` itself would skip the fork block's replacement logs forever — they were
+        // just discarded from the fold above and would never be refolded.
+        self.cursor.store(block.saturating_sub(1), Ordering::SeqCst);
         Ok(())
     }
 
@@ -1228,6 +1231,17 @@ mod tests {
         let w = Watcher::new(&cfg, Arc::new(NodeState::new())).expect("builds");
         assert_eq!(w.cursor.load(Ordering::SeqCst), 4_242_424);
         assert_eq!(w.checkpoint().last_scanned, 4_242_424);
+    }
+
+    #[tokio::test]
+    async fn replay_from_rewinds_to_include_the_fork_block() {
+        // `run` scans from `cursor + 1`: after a reorg at `block`, the cursor must sit
+        // one below it, or the fork block's replacement logs — just discarded from the
+        // fold — are never refolded and that block's events vanish from the node forever.
+        let w = Watcher::new(&Config::default(), Arc::new(NodeState::new())).expect("builds");
+        w.cursor.store(100, Ordering::SeqCst);
+        w.replay_from(90).await.expect("replay");
+        assert_eq!(w.cursor.load(Ordering::SeqCst), 89);
     }
 
     #[test]
