@@ -262,6 +262,18 @@ describe("CipherTask", () => {
       expect(a.weightQ16).to.be.lessThan(b.weightQ16 * 2n);
     });
 
+    it("rejects a copied ciphertextCid from a second contributor", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, alice, bob } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address));
+      const id = await task.taskCount();
+
+      await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(11), proofFor(1), bytes32Of(7), 1_000);
+      await expect(
+        task.connect(bob).submitContribution(id, bytes32Of(1), bytes32Of(12), proofFor(2), bytes32Of(8), 1_000)
+      ).to.be.revertedWithCustomError(task, "DuplicateShard");
+    });
+
     it("enforces one shard per address, minimum rows and proof presence", async () => {
       const fx = await deployFixture();
       const { task, buyer, alice } = fx;

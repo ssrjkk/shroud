@@ -124,6 +124,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => Task) private _tasks;
     mapping(uint256 => mapping(address => Contribution)) private _contributions;
     mapping(uint256 => mapping(uint256 => address)) private _contributionByLeaf;
+    mapping(uint256 => mapping(bytes32 => bool)) private _shardSeen;
     mapping(uint256 => mapping(uint32 => mapping(address => EpochCommit))) private _commits;
     mapping(uint256 => mapping(address => bool)) private _nodeRegistered;
     mapping(uint256 => address[]) private _contributorList;
@@ -370,6 +371,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             _tasks[taskId],
             _contributions[taskId],
             _contributionByLeaf[taskId],
+            _shardSeen[taskId],
             _contributorList[taskId],
             _totalWeight,
             _escrowToken,

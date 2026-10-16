@@ -195,6 +195,7 @@ interface ICipherTask {
     error BudgetTooSmall(uint256 minimum, uint128 provided);
     error ContributionWindowClosed(uint256 taskId);
     error AlreadyContributed(uint256 taskId, address contributor);
+    error DuplicateShard(uint256 taskId, bytes32 ciphertextCid);
     error ShardTooSmall(uint32 rows, uint32 minimum);
     error ShardTooLarge(uint32 rows, uint32 maximum);
     error CapReached(uint256 taskId, uint32 cap);

@@ -163,6 +163,7 @@ library ContributeLib {
         ICipherTask.Task storage t,
         mapping(address => ICipherTask.Contribution) storage contributions,
         mapping(uint256 => address) storage byLeaf,
+        mapping(bytes32 => bool) storage shardSeen,
         address[] storage contributorList,
         mapping(uint256 => uint256) storage totalWeight,
         IERC20 token,
@@ -182,6 +183,7 @@ library ContributeLib {
         if (block.timestamp > t.windowEnd) revert ICipherTask.ContributionWindowClosed(taskId);
         if (contributions[contributor].accepted) revert ICipherTask.AlreadyContributed(taskId, contributor);
         if (ciphertextCid == bytes32(0) || ctDigest == bytes32(0)) revert ICipherTask.ZeroContribution();
+        if (shardSeen[ciphertextCid]) revert ICipherTask.DuplicateShard(taskId, ciphertextCid);
         if (rows < t.params.minRowsPerShard) revert ICipherTask.ShardTooSmall(rows, t.params.minRowsPerShard);
         if (rows > maxRowsPerShard) revert ICipherTask.ShardTooLarge(rows, maxRowsPerShard);
         if (t.contributors >= t.params.maxContributors) revert ICipherTask.CapReached(taskId, t.params.maxContributors);
@@ -207,6 +209,7 @@ library ContributeLib {
         });
 
         byLeaf[leafIndex] = contributor;
+        shardSeen[ciphertextCid] = true;
         totalWeight[taskId] += w;
         t.ctRoot = keccak256(abi.encodePacked(t.ctRoot, leafIndex, ciphertextCid));
         contributorList.push(contributor);
