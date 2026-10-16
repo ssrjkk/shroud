@@ -91,18 +91,17 @@ interface ICipherTask {
         uint64 submittedAt;
         uint96 weightQ16; // Dividend.weight(rows, liveness), frozen at submission
         bool accepted;
-        /// @dev Always false. There is no slashing mechanism in this codebase: no bond is ever
-        ///      taken (`contributionBond` does not exist) and nothing writes this field. It is
-        ///      kept because `settle` reads it and because adding slashing later should not change
-        ///      the payout path — but do not read it as "fraud has been punished". Threat model
-        ///      F-01 records the missing bond as unimplemented work rather than a mitigation.
+        /// @dev True once `slashContributionBond` burns the contributor's bond to the
+        ///      treasury; `settle` then skips this contribution's reward share. The slash
+        ///      is attested, not proven — there is no on-chain proof the shard was bad
+        ///      (threat model F-01: the bond is opt-in, default zero).
         bool slashed;
     }
 
     struct EpochCommit {
         bytes32 proof; // STARK (or merkleRootOfProofs when segmented)
         bytes32 encWeightsCid; // ciphertext weights for epoch e+1
-        bytes32 weightsDigest; // sha256 of the plaintext weight vector
+        bytes32 weightsDigest; // keccak256 of the little-endian lane words (see Weights::digest)
         bytes32 metricsCid; // encrypted metrics (loss, acc) — never revealed
         bytes32 traceDigest; // digest of the STARK trace, for re-execution comparison
         uint64 committedAt;
