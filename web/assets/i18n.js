@@ -650,7 +650,7 @@
 
       "sec.title": "Security — Shroud: what is enforced and what is not",
       "sec.n": "SEC / STATUS", "sec.t": "What is enforced. And what is not.",
-      "sec.lede": "A protocol that moves money with an all-green table would be worthless — so failures sit here in the same type as wins. Deciding whether to trust it with value? Read the red section first. Full analysis: docs/04-threat-model.md (35 findings) and docs/05-honest-limitations.md.",
+      "sec.lede": "A protocol that moves money with an all-green table would be worthless — so failures sit here in the same type as wins. Deciding whether to trust it with value? Read the red section first. Full analysis: docs/04-threat-model.md (39 findings) and docs/05-honest-limitations.md.",
       "sec.st": "Status",
       "sec.stp": "The code moves funds and has not been externally audited. Do not deploy with real value. Current run counts live in CI. “Tested” ≠ “audited”.",
       "sec.c1t": "18 — enforced and covered",
