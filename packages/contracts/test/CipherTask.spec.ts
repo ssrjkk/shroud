@@ -5,7 +5,7 @@ import { ethers } from "hardhat";
 
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, NetworkParams, PaymentVault, TestToken } from "../typechain-types";
-import { bytes32Of, externalUint64, params, proofFor, proofRef, reason4, redeemDigest, sliceDomain } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef, reason4, redeemDigest, sliceDomain } from "./helpers";
 import { deployLinked } from "../scripts/libraries";
 
 /**
@@ -133,10 +133,10 @@ describe("CipherTask", () => {
    * transcript is derived from `(taskId, epoch, traceDigest)` and the mock verifier consumes a
    * transcript on first use.
    *
-   * The claimant is the *lowest address* of the set, because that is the tie-break `commitEpoch`
-   * applies � Hardhat signer addresses are not ordered by index, so picking `node` because it
-   * commits first would silently make a challenger the claim, and its own report would then read as
-   * agreement with the claim.
+   * The claimant commits first, which is what makes it the claim: the winner seat follows
+   * the first verified commit, so the fixture never depends on address ordering. Hardhat
+   * signer addresses are not ordered by index, so the sort below only keeps digests and
+   * proof references deterministic, not the outcome.
    */
   async function competingCommits(fx: Fx, id: bigint, epoch: number, nodes: Fx["node"][]) {
     const sorted = [...nodes].sort((a, b) => (BigInt(a.address) < BigInt(b.address) ? -1 : 1));
@@ -177,6 +177,17 @@ describe("CipherTask", () => {
       const { task } = await deployFixture();
       expect(await task.MAX_ROWS_PER_SHARD()).to.equal(100_000n);
       expect(await task.SETTLE_PAGE_SIZE()).to.equal(200n);
+      expect(await task.MAX_NODES()).to.equal(200n);
+    });
+
+    it("counts registered nodes per task", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node, node2 } = fx;
+      const id = await sealed(fx, { nodes: [node] });
+      expect(await task.nodeCount(id)).to.equal(1n);
+      await task.connect(node2).registerNode(id, bytes32Of(1001));
+      expect(await task.nodeCount(id)).to.equal(2n);
+      expect(await task.nodeRegistered(id, node2.address)).to.equal(true);
     });
   });
 
@@ -260,6 +271,18 @@ describe("CipherTask", () => {
       expect(a.weightQ16).to.be.greaterThan(b.weightQ16);
       // sqrt damping: 2x the rows must not be 2x the weight.
       expect(a.weightQ16).to.be.lessThan(b.weightQ16 * 2n);
+    });
+
+    it("rejects a copied ciphertextCid from a second contributor", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, alice, bob } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address));
+      const id = await task.taskCount();
+
+      await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(11), proofFor(1), bytes32Of(7), 1_000);
+      await expect(
+        task.connect(bob).submitContribution(id, bytes32Of(1), bytes32Of(12), proofFor(2), bytes32Of(8), 1_000)
+      ).to.be.revertedWithCustomError(task, "DuplicateShard");
     });
 
     it("enforces one shard per address, minimum rows and proof presence", async () => {
@@ -404,6 +427,24 @@ describe("CipherTask", () => {
       await expect(
         task.connect(node).commitEpoch(id, 0, proofRef(2), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(10))
       ).to.be.revertedWithCustomError(task, "DuplicateCommit");
+    });
+
+    it("keeps the winner seat with the first verified commit (no address steal)", async () => {
+      // A late copy with a lower address must not displace the first committer: otherwise any
+      // proof seen in the mempool can be replayed from a ground address to take the epoch.
+      const fx = await deployFixture();
+      const { task, buyer, node, node2 } = fx;
+      const [lower, higher] =
+        BigInt(node.address) < BigInt(node2.address) ? [node, node2] : [node2, node];
+      const id = await sealed(fx, { nodes: [lower, higher] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      await task
+        .connect(higher)
+        .commitEpoch(id, 0, proofRef(1), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(9));
+      await task
+        .connect(lower)
+        .commitEpoch(id, 0, proofRef(2), bytes32Of(4), bytes32Of(5), bytes32Of(6), bytes32Of(10));
+      expect(await task.epochWinner(id, 0)).to.equal(higher.address);
     });
   });
 
@@ -619,14 +660,10 @@ describe("CipherTask", () => {
       const { task, vault, token, buyer, alice, bob, node, treasury } = fx;
       const id = await sealed(fx, { epochs: 1, aRows: 4_000, bRows: 1_000 });
       await runEpoch(fx, id, 0, node);
-      await task.settle(id);
-
-      const aliceDue = await task.pendingPayout(alice.address);
-      const bobDue = await task.pendingPayout(bob.address);
-      expect(aliceDue).to.be.greaterThan(bobDue);
-      expect(aliceDue).to.be.lessThan(bobDue * 4n); // sqrt damping, not linear
 
       // Node pay streams through its channel rather than being credited at settlement.
+      // Redeem BEFORE the window matures: once matured, `settle` sweeps unredeemed locks
+      // back into the sub-balance instead of leaving them for the node.
       const channelId = await task.epochChannel(id, 0);
       const ch = await vault.channelInfo(channelId);
       const digest = await vault.redeemDigest(channelId, await task.getAddress(), node.address, ch.maxCumulative, ch.unlockAt, ethers.MaxUint256);
@@ -645,6 +682,16 @@ describe("CipherTask", () => {
       await vault.connect(node).redeem(channelId, 0, ch.maxCumulative, ethers.MaxUint256, sig);
       // Single-epoch task: the node pool is budget 1e9 * nodeShareBps 1500 / 10000 = 1.5e8.
       expect(await token.balanceOf(node.address)).to.equal(150_000_000n);
+
+      // The winner's reward channel matures 7 days after it opens; the final settlement
+      // page waits for every channel (F-22), so move past the window first.
+      await matureRewardWindows();
+      await task.settle(id);
+
+      const aliceDue = await task.pendingPayout(alice.address);
+      const bobDue = await task.pendingPayout(bob.address);
+      expect(aliceDue).to.be.greaterThan(bobDue);
+      expect(aliceDue).to.be.lessThan(bobDue * 4n); // sqrt damping, not linear
 
       await vault.connect(alice).claim();
       await vault.connect(bob).claim();
@@ -667,6 +714,7 @@ describe("CipherTask", () => {
       const { task, node } = fx;
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, node);
+      await matureRewardWindows();
       await task.settle(id);
       await expect(task.settle(id)).to.be.revertedWithCustomError(task, "AlreadySettled");
     });
@@ -695,6 +743,7 @@ describe("CipherTask", () => {
       await expect(task.settle(id)).to.be.revertedWithCustomError(task, "EpochsRemain");
 
       await runEpoch(fx, id, 2, node);
+      await matureRewardWindows();
       await expect(task.settle(id)).to.emit(task, "EscrowSettled");
     });
 
@@ -725,6 +774,7 @@ describe("CipherTask", () => {
       const fx = await deployFixture();
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, fx.node);
+      await matureRewardWindows();
       await fx.task.settle(id);
       return { fx, id };
     }
@@ -870,8 +920,7 @@ describe("CipherTask", () => {
       void node;
     });
 
-    it("retains a redeemable slice for a node that verified an epoch before the abort", async () => {
-      const fx = await deployFixture();
+    it("retains a redeemable slice for a node that verified an epoch before the abort", async () => {      const fx = await deployFixture();
       const { task, vault, token, buyer, node, escrow } = fx;
       const id = await sealed(fx, { epochs: 3 });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
@@ -895,6 +944,17 @@ describe("CipherTask", () => {
       expect(await token.balanceOf(buyer.address)).to.equal(escrow - slice);
       expect(await vault.taskBalance(id)).to.equal(0n);
       expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+    });
+
+    it("reverts abort when every epoch already ran (settle path only)", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node } = fx;
+      const id = await sealed(fx, { epochs: 1 });
+      await runEpoch(fx, id, 0, node);
+      await expect(task.connect(buyer).abort(id, reason4("rug"))).to.be.revertedWithCustomError(
+        task,
+        "SettleReady"
+      );
     });
   });
 
@@ -1042,6 +1102,7 @@ describe("CipherTask", () => {
       const { bls, outsider, gate, task } = fx;
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, fx.node);
+      await matureRewardWindows();
       await task.settle(id);
       const [cid] = await task.acceptedWeights(id);
       const message = await gate.revealMessage(id, cid);
@@ -1114,6 +1175,7 @@ describe("CipherTask", () => {
       expect(await token.balanceOf(buyer.address)).to.equal(0n);
 
       // `settle` still pays everyone out in full afterwards.
+      await matureRewardWindows();
       await task.settle(id);
       expect(await vault.taskBalance(id)).to.equal(0n);
       void escrow;
@@ -1125,6 +1187,7 @@ describe("CipherTask", () => {
       const fx = await deployFixture();
       const id = await sealed(fx, { epochs: 1 });
       await runEpoch(fx, id, 0, fx.node);
+      await matureRewardWindows();
       await fx.task.settle(id);
       return { fx, id };
     }

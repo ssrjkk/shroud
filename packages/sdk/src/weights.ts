@@ -17,8 +17,9 @@
  *
  * `weightsDigest` is `keccak256` over the lane words only — the `weightsDigest`
  * `commitEpoch` stores and the next epoch binds as `lastWeightsDigest`. The DA object id
- * (`encWeightsCid`) is `keccak256` of the whole file; use `pinPayload`/`FileShardStore`
- * for that, exactly like a shard.
+ * (`encWeightsCid`) is whatever the shard store addresses the file under (sha256 for the
+ * development stores, the service's sha3-256 in production) — an opaque transport address,
+ * never the pin. `publishWeights` returns both, from the store and from `weightsDigest`.
  */
 import { ethers } from "ethers";
 import type { Hex } from "./types.js";

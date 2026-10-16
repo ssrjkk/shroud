@@ -58,7 +58,7 @@ const TRANSCRIPT = {
   weightsDigest: "0xa68765884cb666d6f6f1673b17cd9d3d23bc01d171acdf0f77bcd5c0ae88544f",
   encWeightsCid: "0x3678b6346b5d7438951ee3fd450cfe307d900e56e2fbb316aca2dc85423e8bbd",
   ctRoot: "0xa3d7329343c8b278393d3e6d990e99e514d3474f8d4f4df834630ecbdf9d0827",
-  expected: "0x4abdca8df798a87c70c8d71e451d62074a9769cca624cedb289f9d579702d27c",
+  expected: "0xdc1867631d1169dfd4f8aea83777cd1547c6803912701565add73fb417faafa2",
 };
 
 /**
@@ -105,7 +105,7 @@ const PINNED_LOGS = [
   {
     name: "ContributionSubmitted",
     topic0: "0xc37fa11865d20db8c2f9f36ef55d1f99c41a0ee1f98fd66fcad5c3e82cae8ef3",
-    address: "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+    address: "0x959922be3caee4b8cd9a407cc3ac1c251c2007b1",
     topics: [
       "0xc37fa11865d20db8c2f9f36ef55d1f99c41a0ee1f98fd66fcad5c3e82cae8ef3",
       "0x0000000000000000000000000000000000000000000000000000000000000001",
@@ -119,7 +119,7 @@ const PINNED_LOGS = [
   {
     name: "EpochCommitted",
     topic0: "0xbe1c0401080fba30020b1609c22d6c3de654f750279eb2c12daac731b9c5f668",
-    address: "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+    address: "0x959922be3caee4b8cd9a407cc3ac1c251c2007b1",
     topics: [
       "0xbe1c0401080fba30020b1609c22d6c3de654f750279eb2c12daac731b9c5f668",
       "0x0000000000000000000000000000000000000000000000000000000000000001",
@@ -131,7 +131,7 @@ const PINNED_LOGS = [
   {
     name: "EpochVerified",
     topic0: "0xde1a096b42a741da9abd8e171b97e821d67b222feddb8d4e6efdfd642df44091",
-    address: "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+    address: "0x959922be3caee4b8cd9a407cc3ac1c251c2007b1",
     topics: [
       "0xde1a096b42a741da9abd8e171b97e821d67b222feddb8d4e6efdfd642df44091",
       "0x0000000000000000000000000000000000000000000000000000000000000001",
@@ -145,7 +145,7 @@ const PINNED_LOGS = [
     // is what ties the accumulation chain to the log the watcher folds.
     name: "TaskSealed",
     topic0: "0x99bf7cc8880bbbcd95ba1c122c314cb230e1607837b7aed2ea1957185b28c41b",
-    address: "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+    address: "0x959922be3caee4b8cd9a407cc3ac1c251c2007b1",
     topics: [
       "0x99bf7cc8880bbbcd95ba1c122c314cb230e1607837b7aed2ea1957185b28c41b",
       "0x0000000000000000000000000000000000000000000000000000000000000001",
@@ -158,7 +158,7 @@ const PINNED_LOGS = [
   {
     name: "EpochOpened",
     topic0: "0x7e3cb4c8395e586b6b675ae99ac10bb09551b19d95aeae90a896aead64caab2b",
-    address: "0x8a791620dd6260079bf849dc5567adc3f2fdc318",
+    address: "0x959922be3caee4b8cd9a407cc3ac1c251c2007b1",
     topics: [
       "0x7e3cb4c8395e586b6b675ae99ac10bb09551b19d95aeae90a896aead64caab2b",
       "0x0000000000000000000000000000000000000000000000000000000000000001",
@@ -249,7 +249,7 @@ describe("chain vectors", () => {
     const chainId = (await ethers.provider.getNetwork()).chainId;
 
     expect(chainId).to.equal(31_337);
-    expect(await task.getAddress()).to.equal("0x8A791620dd6260079BF849Dc5567aDC3F2FdC318");
+    expect(await task.getAddress()).to.equal("0x959922bE3CAee4b8Cd9a407cc3ac1C251C2007B1");
     expect(await vault.getAddress()).to.equal("0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512");
 
     // --- ctRoot ------------------------------------------------------------------------

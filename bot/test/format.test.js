@@ -239,6 +239,20 @@ test("task handler threads the running epoch through commits, winner and quorum"
   assert.ok(out.includes("0/3"), "quorum progress shown");
   assert.ok((await task([])).includes("usage"));
   assert.ok((await task(["abc"])).includes("decimal integers"));
+  assert.ok((await task(["9".repeat(21)])).includes("decimal integers"), "kilobyte ids rejected pre-RPC");
+});
+
+test("status surfaces shed alerts, and stays silent when none were shed", async () => {
+  const stub = {
+    chainId: async () => 31337,
+    blockNumber: async () => 100,
+    networkParams: async () => null,
+  };
+  const { status } = createHandlers(stub, {});
+  assert.ok(!(await status()).includes("shed"), "no drops, no line");
+  const withDrops = createHandlers(stub, {}, { droppedSends: () => 7 });
+  const out = await withDrops.status();
+  assert.ok(out.includes("7 alert(s) shed"), "operator learns about the loss");
 });
 
 test("renderTask says 'no task' rather than rendering an empty task", () => {

@@ -36,12 +36,12 @@
 <main id="main">
 <section class="sect">
   <div class="sect-head"><span class="sect-num" data-i18n="sec.n">SEC / STATUS</span><h2 class="sect-title" data-i18n="sec.t">Что enforced. И что нет.</h2></div>
-  <p class="sect-lede" data-i18n="sec.lede">Протокол двигает деньги. Зелёная таблица без красного стоила бы ничего — поэтому провалы лежат здесь с тем же кеглем, что победы. Решаешь, доверять ли ценность, — читай красный раздел первым. Полный разбор: docs/04-threat-model.md (35 находок) и docs/05-honest-limitations.md.</p>
+  <p class="sect-lede" data-i18n="sec.lede">Протокол двигает деньги. Зелёная таблица без красного стоила бы ничего — поэтому провалы лежат здесь с тем же кеглем, что победы. Решаешь, доверять ли ценность, — читай красный раздел первым. Полный разбор: docs/04-threat-model.md (39 находок) и docs/05-honest-limitations.md.</p>
   <div class="notice"><b class="t" data-i18n="sec.st">Статус</b><span data-i18n="sec.stp">Код двигает средства и не проходил внешнего аудита. Не использовать с реальной ценностью. Актуальные числа прогонов — в CI. «Протестировано» ≠ «аудировано».</span></div>
   <div class="cols3">
-    <article class="card rv" style="border-left:6px solid var(--good)"><h3 data-i18n="sec.c1t">14 — enforced и покрыто</h3><p data-i18n="sec.c1p">Учёт эскроу, реентрантность, пулы, abort, таргет споров, оплата ре-экзекьюторов, порог раскрытия, key-pin в SDK, запрет cleartext по умолчанию, hostile-DA, ротации.</p></article>
-    <article class="card rv" style="border-left:6px solid var(--warn)"><h3 data-i18n="sec.c2t">4 — задокументировано, не реализовано</h3><p data-i18n="sec.c2p">Сегментированные пруфы недостижимы, devnet-нюансы, immature-каналы, часть экономики — описаны как отсутствие, а не как механизм.</p></article>
-    <article class="card rv" style="border-left:6px solid var(--bad)"><h3 data-i18n="sec.c3t">4 — известные пробелы</h3><p data-i18n="sec.c3p">Sybil-кворум, бонд контрибьютора, полная STARK-проверка, подмена ключа по умолчанию. Ниже — каждый с последствиями.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--good)"><h3 data-i18n="sec.c1t">18 — enforced и покрыто</h3><p data-i18n="sec.c1p">Учёт эскроу, реентрантность, пулы, abort, таргет споров, commit-reveal, оплата ре-экзекьюторов, порог раскрытия, key-pin в SDK (fail-closed), запрет cleartext по умолчанию, hostile-DA, ротации без перезаписи, fee-tokens fail-closed, сегментированный путь.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--warn)"><h3 data-i18n="sec.c2t">3 — задокументировано, не реализовано</h3><p data-i18n="sec.c2p">Devnet-нюансы, часть экономики (взвешенное назначение ре-экзекьюторов), настоящий STARK-прувер — описаны как отсутствие, а не как механизм.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--bad)"><h3 data-i18n="sec.c3t">4 — известные пробелы</h3><p data-i18n="sec.c3p">Sybil-кворум (плоские 3), бонд взносов opt-in без fraud-proof, полная STARK-проверка, подмена ключа вне дефолтных конфигов. Ниже — каждый с последствиями.</p></article>
   </div>
 </section>
 
@@ -52,9 +52,9 @@
 <section class="sect">
   <div class="sect-head"><span class="sect-num" data-i18n="sec.gn">01 / GAPS</span><h2 class="sect-title" data-i18n="sec.gt">Не enforced — то, что укусит</h2></div>
   <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="pro.ah1">Атака</th><th data-i18n="sec.gh2">Что это значит</th><th>Ref</th></tr>
-    <tr><td><span data-i18n="sec.g1t">Кворум споров не Sybil-устойчив</span> <span class="stamp no">3 / 3</span></td><td data-i18n="sec.g1p">Бонд + запрет повторных BLS-ключей, но кворум — плоские 3 адреса, капитал возвращается. Кольцо из 3 адресов лишает узел награды и сжигает его бонд; украсть награду или протащить лживую эпоху не может.</td><td>F-01, F-19</td></tr>
-    <tr><td><span data-i18n="sec.g2t">Подмену FHE-ключа не видно по умолчанию</span> <span class="stamp no">F-08</span></td><td data-i18n="sec.g2p">NetworkParams пинит ключ корректно, но по умолчанию его никто не читает: SDK — только при переданных networkParams + fhePublicKeyHash, проверка узла — opt-in. Форензика задним числом возможна.</td><td>F-08</td></tr>
-    <tr><td><span data-i18n="sec.g3t">Нет слэшабельного бонда взносов</span> <span class="stamp no">missing</span></td><td data-i18n="sec.g3p">Фермерство фейковых строк сдерживается лишь sqrt(rows) + один шард на адрес. Бонда нет нигде в дереве.</td><td>F-01</td></tr>
+    <tr><td><span data-i18n="sec.g1t">Кворум споров не Sybil-устойчив</span> <span class="stamp no">3 / 3</span></td><td data-i18n="sec.g1p">Бонд + commit-reveal споров + PoP-привязка BLS-ключей, но кворум — плоские 3 адреса, капитал возвращается. Кольцо лишает узел награды и сжигает его бонд; украсть награду или протащить лживую эпоху не может, скопировать чужой спор из мемпула — тоже.</td><td>F-04</td></tr>
+    <tr><td><span data-i18n="sec.g2t">Подмену FHE-ключа не видно по умолчанию</span> <span class="stamp no">F-08</span></td><td data-i18n="sec.g2p">NetworkParams пинит ключ корректно. SDK с шифрующим encryptor без пина теперь отказывается конструироваться (fail-closed); проверка узла — opt-in, но её отсутствие — WARN в логе старта. Форензика задним числом возможна.</td><td>F-08</td></tr>
+    <tr><td><span data-i18n="sec.g3t">Бонд взносов — opt-in, не fraud-proof</span> <span class="stamp mid">opt-in</span></td><td data-i18n="sec.g3p">Покупатель может требовать бонд (кап, слэш — только в treasury, слэш снимает и долю в settle). По умолчанию требования нет; ончейн-доказательства «шард — яд» не существует — слэш аттестован, не доказан.</td><td>F-01</td></tr>
     <tr><td><span data-i18n="sec.g4t">Цепочка не проверяет STARK целиком</span> <span class="stamp no">sampled</span></td><td data-i18n="sec.g4p">Ончейн — привязка транскрипта и сэмпл сегментов; полная проверка — off-chain в ops-контуре.</td><td>§3</td></tr>
     <tr><td><span data-i18n="sec.g5t">Большинство комитета расшифрует строки</span> <span class="stamp mid">by design</span></td><td data-i18n="sec.g5p">Свойство пороговой схемы: меньшинство не может, сговор большинства — может.</td><td>F-10</td></tr>
   </table></div>
@@ -83,8 +83,8 @@
   <div class="sect-head"><span class="sect-num" data-i18n="sec.kn">03 / KNOWN</span><h2 class="sect-title" data-i18n="sec.kt">Известные нюансы</h2></div>
   <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="sec.kh1">Нюанс</th><th data-i18n="sec.kh2">Суть</th></tr>
     <tr><td data-i18n="sec.k1t">Devnet и пиновый плагин</td><td data-i18n="sec.k1p">hardhat run без моков ревертит конструктор без причины; deploy.ts печатает диагноз вместо голого реверта. Сьюта контракты покрывает полностью.</td></tr>
-    <tr><td data-i18n="sec.k2t">Сегментированные пруфы</td><td data-i18n="sec.k2p">Документированы как достижимые, но реализации в дереве нет. Доки так и говорят.</td></tr>
-    <tr><td data-i18n="sec.k3t">Незрелые каналы жмут пул</td><td data-i18n="sec.k3p">Невыкупленные контрибьюторы возвращаются лишь при settlement. Лечится протоколом, не патчем.</td></tr>
+    <tr><td data-i18n="sec.k2t">Сегментированные пруфы</td><td data-i18n="sec.k2p">Путь достижим (commitEpochSegmented → verifyProofSegmented, покрыт тестом), но прувера в репо нет — проверяется мок по форме, не AIR.</td></tr>
+    <tr><td data-i18n="sec.k3t">Незрелые каналы ждут окно</td><td data-i18n="sec.k3p">Финальная страница settle ждёт созревания каналов (ChannelsImmature) — комитет и refund приходят до +7 дней после последней эпохи. Контрибьюторы платятся раньше, из замороженного пула.</td></tr>
     <tr><td data-i18n="sec.k4t">Зависимости-аудиты</td><td data-i18n="sec.k4p">npm audit ругается на транзитивы Hardhat 2 — это раннер тестов, не байткод. Фикс — мажор Hardhat 2→3 после релиза fhevm-плагина.</td></tr>
   </table></div>
   <div class="notice good"><b class="t" data-i18n="sec.rep">Сообщить об уязвимости</b><span data-i18n="sec.repp">Приватно через GitHub Security Advisories: github.com/ssrjkk/shroud/security/advisories/new. Не открывай публичный issue, не прикладывай ключи и креды. Подтверждение — в течение 3 рабочих дней. В скоупе: логика CipherTask/PaymentVault/DecryptionGate/NetworkParams/ProofVerifier, криптомисюз, утечки секретов. Вне скоупа: задокументированные ограничения FHE/STARK, операторские single-ключи, фичреквесты.</span></div>
@@ -95,7 +95,7 @@
   <div><p class="foot-brand">Shroud</p><p data-i18n="f.secnote">Протокол двигает деньги. Красное читай первым.</p></div>
   <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
   <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/main/SECURITY.md" data-i18n="f.secp">Security policy</a><br /><a href="https://github.com/ssrjkk/shroud/tree/main/docs" data-i18n="f.docs">Документы</a></p></div>
-</div><div class="foot-base"><span>© 2026 ssrjkk</span><span data-i18n="f.base4">threats 35 · honest first</span></div></footer>
+</div><div class="foot-base"><span>© 2026 ssrjkk</span><span data-i18n="f.base4">threats 39 · honest first</span></div></footer>
 <script src="./assets/i18n.js"></script>
 <script src="./assets/app.js"></script>
 </body>

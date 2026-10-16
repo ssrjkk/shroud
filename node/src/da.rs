@@ -35,14 +35,14 @@ pub fn read_object(cache_dir: &Path, cid: &B256, max_bytes: u64) -> Result<Vec<u
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::Io(e)
         } else {
-            Error::Shard(ShardError::Malformed {
+            Error::ShardStore(ShardError::Malformed {
                 offset: 0,
                 reason: format!("cannot read {}: {e}", path.display()),
             })
         }
     })?;
     if bytes.len() as u64 > max_bytes {
-        return Err(Error::Shard(ShardError::TooLarge {
+        return Err(Error::ShardStore(ShardError::TooLarge {
             cid: *cid,
             size: bytes.len() as u64,
             max: max_bytes,
@@ -59,14 +59,14 @@ pub fn read_object(cache_dir: &Path, cid: &B256, max_bytes: u64) -> Result<Vec<u
 /// silently keep the first writer's bytes.
 pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B256> {
     if bytes.len() as u64 > max_bytes {
-        return Err(Error::Shard(ShardError::TooLarge {
+        return Err(Error::ShardStore(ShardError::TooLarge {
             cid: keccak256(bytes),
             size: bytes.len() as u64,
             max: max_bytes,
         }));
     }
     std::fs::create_dir_all(cache_dir).map_err(|e| {
-        Error::Shard(ShardError::Malformed {
+        Error::ShardStore(ShardError::Malformed {
             offset: 0,
             reason: format!("cannot create {}: {e}", cache_dir.display()),
         })
@@ -76,7 +76,7 @@ pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B2
     match std::fs::read(&path) {
         Ok(existing) if existing == bytes => return Ok(cid),
         Ok(existing) => {
-            return Err(Error::Shard(ShardError::DigestMismatch {
+            return Err(Error::ShardStore(ShardError::DigestMismatch {
                 expected: cid,
                 got: keccak256(&existing),
                 len: existing.len() as u64,
@@ -84,7 +84,7 @@ pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B2
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => {
-            return Err(Error::Shard(ShardError::Malformed {
+            return Err(Error::ShardStore(ShardError::Malformed {
                 offset: 0,
                 reason: format!("cannot read {}: {e}", path.display()),
             }));
@@ -92,14 +92,14 @@ pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B2
     }
     let tmp = cache_dir.join(format!(".tmp-{}", file_name(&cid)));
     std::fs::write(&tmp, bytes).map_err(|e| {
-        Error::Shard(ShardError::Malformed {
+        Error::ShardStore(ShardError::Malformed {
             offset: 0,
             reason: format!("cannot write {}: {e}", tmp.display()),
         })
     })?;
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        Error::Shard(ShardError::Malformed {
+        Error::ShardStore(ShardError::Malformed {
             offset: 0,
             reason: format!("cannot publish {}: {e}", path.display()),
         })
@@ -112,7 +112,7 @@ pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B2
 pub fn verify_bytes(expected: &B256, bytes: &[u8]) -> Result<()> {
     let got = keccak256(bytes);
     if got != *expected {
-        return Err(Error::Shard(ShardError::DigestMismatch {
+        return Err(Error::ShardStore(ShardError::DigestMismatch {
             expected: *expected,
             got,
             len: bytes.len() as u64,
@@ -239,7 +239,7 @@ fn object_path(prefix: &str, cid: &B256) -> object_store::path::Path {
 
 #[cfg(feature = "da")]
 async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> {
-    use object_store::ObjectStore;
+    use object_store::ObjectStoreExt;
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
@@ -252,7 +252,7 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
         .await
         .map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
     if bytes.len() as u64 > max_bytes {
-        return Err(Error::Shard(ShardError::TooLarge {
+        return Err(Error::ShardStore(ShardError::TooLarge {
             cid: *cid,
             size: bytes.len() as u64,
             max: max_bytes,
@@ -263,7 +263,7 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
 
 #[cfg(feature = "da")]
 async fn store_remote(url: &str, cid: &B256, bytes: &[u8]) -> Result<()> {
-    use object_store::ObjectStore;
+    use object_store::ObjectStoreExt;
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
@@ -288,7 +288,7 @@ async fn store_remote(url: &str, _cid: &B256, _bytes: &[u8]) -> Result<()> {
 /// feature. Kept next to the condition so the message and the gate cannot drift apart.
 #[cfg(not(feature = "da"))]
 fn remote_needs_feature(url: &str) -> Error {
-    Error::Shard(ShardError::Malformed {
+    Error::ShardStore(ShardError::Malformed {
         offset: 0,
         reason: format!(
             "da endpoint {url} needs remote storage, but this binary was built \
@@ -328,7 +328,7 @@ mod tests {
         let err = write_object(dir.path(), b"first", 1 << 20).expect_err("must refuse");
         assert!(matches!(
             err,
-            Error::Shard(ShardError::DigestMismatch { .. })
+            Error::ShardStore(ShardError::DigestMismatch { .. })
         ));
     }
 
@@ -338,12 +338,12 @@ mod tests {
         let bytes = vec![7u8; 64];
         assert!(matches!(
             write_object(dir.path(), &bytes, 8),
-            Err(Error::Shard(ShardError::TooLarge { .. }))
+            Err(Error::ShardStore(ShardError::TooLarge { .. }))
         ));
         let cid = write_object(dir.path(), &bytes, 128).expect("write");
         assert!(matches!(
             read_object(dir.path(), &cid, 8),
-            Err(Error::Shard(ShardError::TooLarge { .. }))
+            Err(Error::ShardStore(ShardError::TooLarge { .. }))
         ));
     }
 
@@ -402,6 +402,9 @@ mod tests {
         let err = fetch(dir.path(), "https://da.example/shards", &cid, 1 << 20)
             .await
             .expect_err("needs the da feature");
-        assert!(matches!(err, Error::Shard(ShardError::Malformed { .. })));
+        assert!(matches!(
+            err,
+            Error::ShardStore(ShardError::Malformed { .. })
+        ));
     }
 }

@@ -38,6 +38,9 @@ Consequences, stated plainly:
   commit each. It cannot *steal* the payout — the winner is still chosen by STARK validity —
   but it can deny a node its reward and burn the honest winner's bond with it, at the cost of
   three bonds locked and three commits computed.
+- Copying a bare dispute from the mempool no longer works unmodified: disputes are filed
+  commit-reveal (`commitDispute` → `reportDisputeWithSalt`, salt bound to the reporter), and
+  the node files them that way. A ring must re-execute to produce its own digests.
 - Conversely, an honest node cannot exclude Sybil reporters, and locked capital returns to the
   attacker after terminality: the bond is a spam price, not a burn.
 
@@ -49,9 +52,12 @@ bad claimant backed by a priced identity, not as a Sybil-resistant economic guar
 
 The EVM cannot verify a 2^20 STARK in one call. MVP: the contract verifies the transcript
 binding, the aggregate proof digest, and a *sampled* segment; full verification happens
-off-chain in the ops path. Production needs recursive proof aggregation (recursive STARK →
-one Groth16) so that "the chain verified the proof" is literally true. This is the single
-most important missing piece before mainnet.
+off-chain in the ops path. Both entry points exist on chain now (`commitEpoch` and
+`commitEpochSegmented`, the latter reaching the previously unreachable segmented verifier).
+Production still needs recursive proof aggregation (recursive STARK → one Groth16) so that
+"the chain verified the proof" is literally true. This is the single most important missing
+piece before mainnet — and no prover exists in this repo at all (mock verifier on devnet),
+so the missing half is cryptography, not plumbing.
 
 ## 4. Committee majority can decrypt rows
 
@@ -73,9 +79,10 @@ mitigated, not solved. Single devnet sequencer in this repo.
 
 ## 7. Audit status
 
-Nothing here has been externally audited. The Solidity has a Hardhat suite (102 tests plus the
-`test-vectors/` byte-layout vectors) and the node has 165 unit tests including the state fold,
-but "tested" ≠ "audited". Do not deploy with real value.
+Nothing here has been externally audited. The Solidity has a Hardhat suite (119 tests: lifecycle,
+dispute commit-reveal, contribution bonds, segmented commits, settlement maturity, stateful fuzz,
+gas snapshot, admin controls, byte-layout vectors) and the node has 165+ unit tests including the
+state fold, but "tested" ≠ "audited". Do not deploy with real value.
 
 ## 7b. Dependency advisories are dev-tooling transitives blocked on upstream majors
 
@@ -144,23 +151,28 @@ on encrypted data. Neither property is hidden: both are in the module docs.
 
 What remains true:
 
-- The sandbox this was developed in cannot run `cargo check` or `cargo test` at all:
-  its Smart App Control policy blocks loading freshly compiled DLLs (proc-macro
-  `.dll`s included), so even `proc-macro2`'s build script fails to load. Every Rust
-  change here is verified by CI, never locally — `cargo fmt` (parse-only) is the one
-  Rust gate that runs in the sandbox. If CI is red, the tree is unverified — treat it
-  as such.
+- The sandbox this was developed in cannot *link* Rust (`link.exe` is absent and
+  Smart App Control blocks freshly compiled DLLs), so `cargo check`/`cargo test` run on CI,
+  never locally — `cargo fmt --check` (parse + layout) is the one Rust gate that runs in the
+  sandbox. If CI is red, the tree is unverified — treat it as such.
 - Nothing here has run against a live chain beyond the devnet-live CI job, which is
   wired to go further than register + bond (a two-node execution agreement check on a
   task with real pins) but has not reported green on that leg yet: the execution legs
   are otherwise covered by unit tests with captured fixtures, and the first
   *production* `commitEpoch` from this node is still ahead of us.
+- Settlement now waits for reward maturity on its final page (`ChannelsImmature`): the node
+  re-arms settlement at the earliest channel `unlockAt` instead of burning gas on the revert.
+  Operator-visible consequence — committee/buyer legs land up to one reward window after the
+  last epoch.
+- `node.strict_weights` (default off) turns the genesis-zeros fallback into a hard error for
+  deployments whose buyers always publish SDK-encoded seed files.
 
 ## 9. What is genuinely finished in this repo
 
-- `CipherTask.sol`: complete state machine, escrow, dividend, staged withdrawal, fraud window.
-  Covered by the Hardhat suite (96 tests across the contracts, including the `test-vectors/`
-  byte-layout vectors).
+- `CipherTask.sol`: complete state machine, escrow, dividend, staged withdrawal, fraud window,
+  opt-in contribution bonds, commit-reveal disputes, segmented commits. Covered by the Hardhat
+  suite (119 tests across the contracts, including the `test-vectors/`
+  byte-layout vectors and the `Hardening` spec for the mechanisms in this paragraph).
 - `PaymentVault.sol`: EIP-712 signed streaming channel with monotonic slices and reclaims, plus an
   O(1) `totalLocked == subBalances + channelLocks` invariant asserted on every balance movement.
   The reentrancy guard has its own test driven by a hostile token that calls back mid-transfer.
@@ -193,7 +205,9 @@ What remains true:
   shard store with byte budget and remote backends, deterministic reference fixed-point
   engine plus `tfhe-rs` backend behind `prover`, `FheEngine`-trait execution wired into
   `Work::Execute`/`Work::Reexecute` with duplicate-commit and taint gates, gRPC peer
-  mesh, EIP-712 slice signer, dispute gossip. **Builds and tests green on CI (160+
-  pre-existing tests plus the engine/DA suites), but the first live `commitEpoch` from
-  this node has not happened yet — see §8.** The `proof` it commits verifies on
-  mock-verifier chains only; the STARK prover is still Phase 3.
+  mesh (per-IP inbound throttle, stream cap) with EIP-712 slice signer, commit-reveal
+  disputes, settlement that waits for reward maturity. **Builds and tests green on CI,
+  but the first live `commitEpoch` from this node has not happened yet — see §8.** The
+  `proof` it commits verifies on mock-verifier chains only; the STARK prover is still
+  Phase 3. Config refuses dead flags (`shard.aead_transport`) and zero mesh caps instead
+  of silently misconfiguring.

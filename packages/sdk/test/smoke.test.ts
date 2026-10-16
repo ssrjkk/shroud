@@ -63,6 +63,15 @@ test("SDK PaymentVault ABI matches the compiled artifact (no drift)", () => {
   assert.equal(selector(sdk, "redeem"), selector(compiled, "redeem"));
 });
 
+test("SDK DecryptionGate ABI matches the compiled artifact (no drift)", () => {
+  // The gate had an exported ABI but no client; the drift test is what keeps the new
+  // `DecryptionGateClient` honest against the contract it talks to.
+  const sdk = sdkAbi("DecryptionGate");
+  const compiled = compiledAbi("DecryptionGate.sol/DecryptionGate");
+  assert.deepEqual(sdk, compiled);
+  assert.equal(selector(sdk, "revealCompleted"), selector(compiled, "revealCompleted"));
+});
+
 test("the task id comes from TaskCreated, never from a counter", () => {
   // `createTask` used to read `taskCount()` after sending, so a task another buyer created in the
   // same block made this client monitor, contribute to and fund the wrong task.
@@ -204,6 +213,21 @@ test("MemoryShardStore returns a local keccak digest, and get() can reach every 
   await assert.rejects(() => store.get(ethers.keccak256(new Uint8Array([9]))), /not found/);
 });
 
+test("dev stores split transport cid and on-chain pin like production does", async () => {
+  // Regression: both dev stores once used keccak256 for cid AND digest, so code comparing
+  // `cid` against the on-chain `ctDigest` passed in dev and failed live. Now cid is sha256
+  // (transport, like the reference service) and digest is keccak256 (the pin).
+  for (const store of [new MemoryShardStore()] as ShardStore[]) {
+    const payload = new TextEncoder().encode("split-addressing");
+    const { cid, digest } = await store.put(payload);
+    assert.equal(cid, ethers.sha256(payload));
+    assert.equal(digest, ethers.keccak256(payload));
+    assert.notEqual(cid, digest);
+    assert.equal(ethers.dataLength(cid), 32);
+    assert.deepEqual(await store.getVerified(cid, digest), payload);
+  }
+});
+
 test("every ShardStore must verify, not just hand back bytes", async () => {
   // `getVerified` is in the interface for the same reason `get` is: re-execution is the protocol's
   // dispute mechanism, and it has to work against whichever store a deployment is pointed at. An
@@ -261,6 +285,7 @@ test("FileShardStore persists across instances and verifies like the memory stor
     const payload = new TextEncoder().encode("file-backed");
     const { cid, digest } = await a.put(payload);
     assert.equal(digest, ethers.keccak256(payload));
+    assert.equal(cid, ethers.sha256(payload)); // transport vs pin, как в проде
     // A second instance over the same directory sees the object: the directory is the
     // authority, so SDK uploads and node reads stay coherent across processes.
     const b: ShardStore = new FileShardStore(dir);
@@ -268,7 +293,7 @@ test("FileShardStore persists across instances and verifies like the memory stor
     assert.deepEqual(await b.getVerified(cid, digest), payload);
     await assert.rejects(() => b.get(ethers.keccak256(new Uint8Array([9]))), /not found/);
     await assert.rejects(() => b.getVerified(cid, ethers.id("a-different-commit")), /failed integrity check/);
-    await assert.rejects(() => b.get("../../etc/passwd"), /unsafe shard digest/);
+    await assert.rejects(() => b.get("../../etc/passwd"), /unsafe shard cid/);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -362,6 +387,42 @@ test("HttpShardStore caps object size on both upload and download", async () => 
 
     const big = ethers.keccak256(new Uint8Array([1]));
     await assert.rejects(() => store.get(big), /over the 8 byte cap/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("HttpShardStore retries 503s with backoff and gives up after the budget", async () => {
+  // Transient overload must not fail a pull; a dead store must fail fast-ish, not hang.
+  // Attempts = 1 + maxRetries; backoff is jittered, so the test only asserts counts.
+  const original = globalThis.fetch;
+  const cid = ethers.keccak256(new Uint8Array([1]));
+  try {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls < 3) return new Response(null, { status: 503 });
+      return new Response(new Uint8Array([7, 7]), { status: 200 });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid", { retryBaseMs: 1 });
+    assert.deepEqual(await store.get(cid), new Uint8Array([7, 7]));
+    assert.equal(calls, 3);
+
+    calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(null, { status: 500 });
+    }) as typeof fetch;
+    await assert.rejects(() => store.get(cid), /GET failed.*: 500/);
+    assert.equal(calls, 4); // 1 + 3 retries, then the error surfaces
+
+    calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(null, { status: 404 });
+    }) as typeof fetch;
+    await assert.rejects(() => store.get(cid), /: 404/);
+    assert.equal(calls, 1); // deliberate answers are never retried
   } finally {
     globalThis.fetch = original;
   }
@@ -703,6 +764,8 @@ test("ShroudSdk uploads through the pin when the configured key is the pinned on
 test("without a configured key hash the pin check is skipped, not silently failed", async () => {
   // `networkParams` without `fhePublicKeyHash` is refused at construction (test above), so the only
   // unconfigured shape is neither field — and that must not be read as "the key is fine".
+  // (NoopEncryptor declares no key, so the fail-closed rule for confidential encryptors below
+  // does not apply here.)
   const sdk = new ShroudSdk({
     cipherTask: "0x0000000000000000000000000000000000000001",
     paymentVault: "0x0000000000000000000000000000000000000002",
@@ -711,6 +774,44 @@ test("without a configured key hash the pin check is skipped, not silently faile
     chainId: 31337n,
   });
   assert.equal(sdk.networkParams, undefined);
+});
+
+test("a confidential encryptor without a pin is fail-closed unless explicitly allowed", () => {
+  // F-08: an encryptor producing real ciphertext under a known key, with no on-chain pin to
+  // compare it to, is exactly what a key-substitution attack needs. The old default skipped
+  // the check silently; construction now refuses unless the deployment pins out of band.
+  const confidential: Encryptor = {
+    providesConfidentiality: true,
+    publicKeyHash: ethers.id("real-key"),
+    encryptRows: async () => ({ ciphertext: new Uint8Array([1]), rowCommitment: ethers.id("rc") }),
+  };
+  const base = {
+    cipherTask: "0x0000000000000000000000000000000000000001",
+    paymentVault: "0x0000000000000000000000000000000000000002",
+    signer: new ethers.Wallet(ethers.id("test").slice(2, 66)),
+    provider: { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider,
+    encryptor: confidential,
+  };
+  assert.throws(() => new ShroudSdk(base), /allowUnpinnedKey/);
+  const allowed = new ShroudSdk({ ...base, allowUnpinnedKey: true });
+  assert.equal(allowed.networkParams, undefined);
+});
+
+test("disputeCommitment binds digest, salt and reporter exactly like the contract", async () => {
+  // `CipherTask.commitDispute` expects keccak256(abi.encode(digest, salt, reporter)); the SDK
+  // helper must produce byte-identical commitments or every commit would be unrevealable.
+  const { CipherTaskClient } = await import("../dist/cipher.js");
+  const client = new CipherTaskClient(
+    "0x0000000000000000000000000000000000000001",
+    { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider
+  );
+  const digest = ethers.id("trace");
+  const salt = ethers.id("salt");
+  const reporter = "0x00000000000000000000000000000000000000a1";
+  assert.equal(
+    client.disputeCommitment(digest, salt, reporter),
+    ethers.keccak256(ethers.AbiCoder.defaultAbiCoder().encode(["bytes32", "bytes32", "address"], [digest, salt, reporter]))
+  );
 });
 
 test("domainSeparator is deterministic", () => {
@@ -763,9 +864,11 @@ test("ShroudSdk publishes seed weights the node decodes", async () => {
     chainId: 31337n,
   });
   const { cid, weightsDigest } = await sdk.publishWeights(2, [60000, 30000]);
-  // The CID pins the file, the digest pins the lanes: the pair openEpoch needs.
+  // The CID addresses the file (transport, sha256), the digest pins the lanes (keccak):
+  // the pair openEpoch needs. `getVerified` proves they belong together.
   const stored = await sdk.shardStore.get(cid);
-  assert.equal(ethers.keccak256(stored), cid);
+  assert.equal(cid, ethers.sha256(stored));
+  assert.deepEqual(await sdk.shardStore.getVerified(cid, pinPayload(stored).ctDigest), stored);
   assert.deepEqual(decodeWeights(stored, 2), [60000, 30000]);
   assert.equal(weightsDigest.length, 66);
   await assert.rejects(() => sdk.publishWeights(2, [1.5, 0]), /integer/);
@@ -837,6 +940,9 @@ test("uploadAndMonetize omits the shape proof as empty bytes when none is requir
           if (data.startsWith(sel("shapeProofsRequired"))) {
             return iface.encodeFunctionResult("shapeProofsRequired", [false]);
           }
+          if (data.startsWith(sel("contributionBondRequired"))) {
+            return iface.encodeFunctionResult("contributionBondRequired", [0n]);
+          }
           throw new Error(`stub: unexpected eth_call ${data.slice(0, 10)}`);
         }
         case "eth_sendRawTransaction":
@@ -897,6 +1003,162 @@ test("uploadAndMonetize omits the shape proof as empty bytes when none is requir
     const calldata = ethers.Transaction.from(submitted!).data;
     const parsed = iface.parseTransaction({ data: calldata });
     assert.equal(parsed?.args.shapeProof, "0x");
+    assert.match(out.contributionTx, /^0x[0-9a-f]{64}$/);
+  }
+});
+
+test("uploadAndMonetize approves a missing contribution bond before submitting", async () => {
+  // Bonded task: the SDK must approve exactly the requirement up front (never a max
+  // approval) instead of burning gas on a BondInsufficient revert. The stub serves the
+  // bond views plus a minimal ERC-20 and records every transaction in order.
+  const cipherTask = "0x00000000000000000000000000000000000000c1";
+  const vault = "0x00000000000000000000000000000000000000c2";
+  const token = "0x00000000000000000000000000000000000000c3";
+  const wallet = new ethers.Wallet(ethers.id("upload-bond-test").slice(2, 66));
+  const me = await wallet.getAddress();
+  const iface = new ethers.Interface(sdkAbi("CipherTask"));
+  const erc20 = new ethers.Interface([
+    "function approve(address spender, uint256 amount) returns (bool)",
+    "function allowance(address owner, address spender) view returns (uint256)",
+    "function balanceOf(address account) view returns (uint256)",
+  ]);
+  const sel = (sig: string) => iface.getFunction(sig)!.selector;
+  const taskTuple = [
+    [
+      me, ethers.ZeroAddress, 3, 1, 100, 1, 2, 8, 86400, 3600, 600, 1000,
+      8000, 1500, 500, 200, ethers.ZeroHash, ethers.ZeroHash, 1,
+    ],
+    1_000_000_000n, 0n, 0n, 0n, 0n, 0n, 0, 0, 0,
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 1, false,
+  ];
+  const emptyContribution = [
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 0, 0, 0, 0, false, false,
+  ];
+  const sent: { to: string; data: string }[] = [];
+  const fr = new ethers.FetchRequest("http://stub.invalid");
+  fr.getUrlFunc = (async (req: { body?: Uint8Array }) => {
+    const serveOne = (payload: { id?: unknown; method: string; params: any[] }): unknown => {
+      switch (payload.method) {
+        case "eth_chainId":
+          return "0x7a69";
+        case "eth_blockNumber":
+          return "0x2";
+        case "eth_getTransactionCount":
+          return "0x0";
+        case "eth_maxPriorityFeePerGas":
+        case "eth_gasPrice":
+          return "0x1";
+        case "eth_getBlockByNumber":
+          return {
+            number: "0x2", hash: ethers.ZeroHash, parentHash: ethers.ZeroHash,
+            timestamp: "0x1", nonce: "0x0000000000000000", difficulty: "0x0",
+            gasLimit: "0xffffffffff", gasUsed: "0x0", miner: ethers.ZeroAddress,
+            extraData: "0x", baseFeePerGas: "0x1", receiptsRoot: ethers.ZeroHash,
+            stateRoot: ethers.ZeroHash, transactionsRoot: ethers.ZeroHash,
+            sha3Uncles: ethers.ZeroHash, logsBloom: "0x" + "0".repeat(512),
+            mixHash: ethers.ZeroHash, size: "0x1", totalDifficulty: "0x1",
+            uncles: [], transactions: [],
+          };
+        case "eth_estimateGas":
+          return "0x200000";
+        case "eth_call": {
+          const to = String(payload.params[0].to).toLowerCase();
+          const data: string = payload.params[0].data;
+          if (to === cipherTask.toLowerCase()) {
+            if (data.startsWith(sel("taskCount"))) return iface.encodeFunctionResult("taskCount", [1n]);
+            if (data.startsWith(sel("tasks"))) return iface.encodeFunctionResult("tasks", [taskTuple]);
+            if (data.startsWith(sel("contributions"))) {
+              return iface.encodeFunctionResult("contributions", [emptyContribution]);
+            }
+            if (data.startsWith(sel("shapeProofsRequired"))) {
+              return iface.encodeFunctionResult("shapeProofsRequired", [false]);
+            }
+            if (data.startsWith(sel("contributionBondRequired"))) {
+              return iface.encodeFunctionResult("contributionBondRequired", [1_000_000n]);
+            }
+            if (data.startsWith(sel("contributionBondOf"))) {
+              return iface.encodeFunctionResult("contributionBondOf", [0n]);
+            }
+            if (data.startsWith(sel("escrowToken"))) {
+              return iface.encodeFunctionResult("escrowToken", [token]);
+            }
+          }
+          if (to === token.toLowerCase()) {
+            if (data.startsWith(erc20.getFunction("balanceOf")!.selector)) {
+              return erc20.encodeFunctionResult("balanceOf", [2_000_000n]);
+            }
+            if (data.startsWith(erc20.getFunction("allowance")!.selector)) {
+              return erc20.encodeFunctionResult("allowance", [0n]);
+            }
+          }
+          throw new Error(`stub: unexpected eth_call to=${to} ${data.slice(0, 10)}`);
+        }
+        case "eth_sendRawTransaction": {
+          const raw: string = payload.params[0];
+          const parsed = ethers.Transaction.from(raw);
+          sent.push({ to: String(parsed.to).toLowerCase(), data: String(parsed.data) });
+          return ethers.keccak256(raw);
+        }
+        case "eth_getTransactionReceipt":
+          return {
+            status: "0x1", blockNumber: "0x1", transactionHash: ethers.id("sent-tx"),
+            index: "0x0", transactionIndex: "0x0", blockHash: ethers.ZeroHash,
+            gasUsed: "0x100000", cumulativeGasUsed: "0x100000",
+            logs: [], logsBloom: "0x" + "0".repeat(512),
+            contractAddress: null, type: "0x2",
+          };
+        case "eth_getTransactionByHash":
+          return {
+            hash: payload.params[0], blockNumber: "0x1", transactionIndex: "0x0",
+            from: me, to: cipherTask, value: "0x0", nonce: "0x0", data: "0x",
+            gasLimit: "0x200000", maxFeePerGas: "0x1", maxPriorityFeePerGas: "0x1",
+            chainId: "0x7a69", type: "0x2", v: "0x0", r: ethers.ZeroHash, s: ethers.ZeroHash,
+          };
+        default:
+          throw new Error(`stub: unhandled method ${payload.method}`);
+      }
+    };
+    const envelope = (id: unknown, result: unknown) => ({
+      statusCode: 200,
+      statusMessage: "OK",
+      headers: {},
+      body: ethers.toUtf8Bytes(JSON.stringify({ jsonrpc: "2.0", id: id ?? 1, result })),
+    });
+    const parsed = JSON.parse(ethers.toUtf8String(req.body ?? new Uint8Array()));
+    if (Array.isArray(parsed)) {
+      const parts = parsed.map((p) => ({ jsonrpc: "2.0", id: p.id ?? 1, result: serveOne(p) }));
+      return {
+        statusCode: 200,
+        statusMessage: "OK",
+        headers: {},
+        body: ethers.toUtf8Bytes(JSON.stringify(parts)),
+      };
+    }
+    return envelope(parsed.id, serveOne(parsed));
+  }) as unknown as (req: never) => Promise<never>;
+
+  {
+    const provider = new ethers.JsonRpcProvider(fr);
+    const sdk = new ShroudSdk({
+      cipherTask,
+      paymentVault: vault,
+      signer: new ethers.Wallet(wallet.privateKey, provider),
+      provider,
+      chainId: 31337n,
+    });
+    const out = await sdk.uploadAndMonetize([1, 2, 3, 4, 5, 6], 1n, {
+      features: 3,
+      allowUnencrypted: true,
+    });
+    // Approve first (exact requirement, spender = the task), submit second.
+    assert.equal(sent.length, 2);
+    const approval = erc20.parseTransaction({ data: sent[0].data });
+    assert.equal(sent[0].to, token.toLowerCase());
+    assert.equal(approval?.args.spender.toLowerCase(), cipherTask.toLowerCase());
+    assert.equal(approval?.args.amount, 1_000_000n);
+    const submission = iface.parseTransaction({ data: sent[1].data });
+    assert.equal(sent[1].to, cipherTask.toLowerCase());
+    assert.equal(submission?.name, "submitContribution");
     assert.match(out.contributionTx, /^0x[0-9a-f]{64}$/);
   }
 });

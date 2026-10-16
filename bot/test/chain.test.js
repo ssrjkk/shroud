@@ -223,6 +223,34 @@ test("tasksCreated decodes logs with their block numbers", async (t) => {
   assert.ok(got[0].args, "decoded args present");
 });
 
+test("decoded logs carry their transaction hash and log index for dedupe", async (t) => {
+  // `#decode` once read `log.hash`, which does not exist on an ethers v6 Log, so every
+  // rendered "tx …" was `undefined` and the alert loop had no identity to deduplicate on.
+  const { reader, routes, ifaces } = await setup(t);
+  const frag = ifaces.cipherTask.getEvent("TaskCreated");
+  const enc = ifaces.cipherTask.encodeEventLog(
+    frag,
+    frag.inputs.map((c, i) => fill(c, 60 + i))
+  );
+  routes.logs = [
+    {
+      address: TASK,
+      topics: enc.topics,
+      data: enc.data,
+      blockNumber: 124,
+      blockHash: "0x" + "2".repeat(64),
+      transactionHash: "0x" + "9".repeat(64),
+      transactionIndex: 1,
+      index: 7,
+      removed: false,
+    },
+  ];
+  const got = await reader.tasksCreated(100, 200);
+  assert.equal(got.length, 1);
+  assert.equal(got[0].txHash, "0x" + "9".repeat(64));
+  assert.equal(got[0].logIndex, 7);
+});
+
 test("networkParams maps the pin fields by name", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
   routes.calls.set(
@@ -306,4 +334,37 @@ test("pendingRotation maps the queued rotation by name", async (t) => {
   assert.equal(got.expectedHash, "0x" + (501).toString(16).padStart(64, "0"));
   assert.equal(got.proposer.toLowerCase(), ("0x" + (502).toString(16).padStart(40, "0")).toLowerCase());
   assert.equal(got.approver.toLowerCase(), ("0x" + (503).toString(16).padStart(40, "0")).toLowerCase());
+});
+
+test("connect fails fast on a dead RPC instead of hanging (RPC_TIMEOUT_MS)", async (t) => {
+  // Шторка, которая принимает соединение и молчит: без дедлайна getBlockNumber
+  // висел бы вечно и клал оба poll-цикла. С дедлайном — отказ за ~таймаут.
+  const hanging = http.createServer(() => {});
+  const hangingSockets = new Set();
+  hanging.on("connection", (s) => {
+    hangingSockets.add(s);
+    s.on("close", () => hangingSockets.delete(s));
+  });
+  await new Promise((resolve) => hanging.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => {
+    // Висящий клиентский запрос держит серверный сокет: рвём их, иначе close()
+    // ждёт вечно и раннер не завершается.
+    for (const s of hangingSockets) s.destroy();
+    hanging.close(() => resolve());
+  }));
+  const port = hanging.address().port;
+  const started = Date.now();
+  await assert.rejects(
+    ChainReader.connect(
+      // chainId задан → staticNetwork, без фонового network-detection (иначе его
+      // retry-таймеры держали бы процесс после теста).
+      { rpcUrl: `http://127.0.0.1:${port}`, chainId: 31337, rpcTimeoutMs: 1000 },
+      makeInterfaces()
+    ),
+    (e) => {
+      assert.match(String(e?.message ?? e), /timeout/i);
+      return true;
+    }
+  );
+  assert.ok(Date.now() - started < 10_000, "must fail near the timeout, not hang");
 });

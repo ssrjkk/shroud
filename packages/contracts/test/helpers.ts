@@ -1,7 +1,22 @@
 import { ethers, fhevm } from "hardhat";
+import { time } from "@nomicfoundation/hardhat-network-helpers";
 
 /** "STAR" — the magic prefix `MockStarkVerifier` requires on every accepted proof blob. */
 export const STARK_MAGIC = "0x53544152";
+
+/**
+ * Mirror of `CipherTask.rewardChannelWindow`: a node's reward channel stays redeemable for
+ * 7 days after it opens, and the final settlement page waits until every channel of the
+ * task has matured (otherwise the committee/buyer legs would be paid from an incomplete
+ * balance — threat model F-22). Tests that settle a task with a paid epoch must move past
+ * this window first.
+ */
+export const REWARD_WINDOW = 7 * 24 * 3600;
+
+/** Move past every open reward window so the final settlement page can run. */
+export async function matureRewardWindows(): Promise<void> {
+  await time.increase(REWARD_WINDOW + 1);
+}
 
 /** Deterministic 32-byte value from a small integer or label, for readable test fixtures. */
 export function bytes32Of(n: number | bigint | string): string {

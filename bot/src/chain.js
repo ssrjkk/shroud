@@ -13,7 +13,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { Interface, JsonRpcProvider, Contract, id as keccakId, getAddress } from "ethers";
+import { Interface, JsonRpcProvider, FetchRequest, Contract, id as keccakId, getAddress } from "ethers";
 import { ROOT } from "./config.js";
 
 const ABI_DIR = resolve(ROOT, "..", "packages", "sdk", "src", "abi");
@@ -108,7 +108,11 @@ export class ChainReader {
       ? { chainId: config.chainId, name: `shroud-${config.chainId}` }
       : undefined;
 
-    const provider = new JsonRpcProvider(config.rpcUrl, network, {
+    // Bounded RPC: a dead node must fail reads in milliseconds, not hang the poll loops
+    // forever. FetchRequest carries the timeout; JsonRpcProvider honors it per request.
+    const request = new FetchRequest(config.rpcUrl);
+    request.timeout = config.rpcTimeoutMs ?? 15_000;
+    const provider = new JsonRpcProvider(request, network, {
       staticNetwork: Boolean(network),
       batchMaxCount: 1,
     });
@@ -184,7 +188,17 @@ export class ChainReader {
           topics: log.topics,
           data: log.data,
         });
-        if (item) parsed.push({ ...item, blockNumber: log.blockNumber, txHash: log.hash });
+        // Identity, not just position: `transactionHash` + `index` is what lets the alert
+        // loop deduplicate across restarts and rewinds. (This used to read `log.hash`, which
+        // does not exist on an ethers v6 `Log` — every rendered "tx …" was `undefined`.)
+        if (item) {
+          parsed.push({
+            ...item,
+            blockNumber: log.blockNumber,
+            txHash: log.transactionHash,
+            logIndex: log.index,
+          });
+        }
       } catch {
         // A log we cannot decode is skipped rather than fatal: a contract
         // upgrade should not stop the bot from reporting everything else.
@@ -357,7 +371,10 @@ export class ChainReader {
   async disputeEvents(fromBlock, toBlock) {
     // Only events that actually exist in the ABI are queried. There is no
     // `DisputeRejected`; a rejection surfaces as `EpochVerified(ok=false)`.
-    const names = ["DisputeReported", "EpochVerified", "TaskSettled", "TaskStatusChanged"];
+    // `DisputeCommitted` is the commit-reveal front half of a dispute: worth watching
+    // because a commitment with no follow-up reveal is either a stuck reporter or a
+    // ring testing the quorum.
+    const names = ["DisputeCommitted", "DisputeReported", "EpochVerified", "TaskSettled", "TaskStatusChanged"];
     const out = [];
     for (const name of names) {
       try {

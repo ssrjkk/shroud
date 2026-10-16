@@ -4,14 +4,15 @@ import { ethers } from "hardhat";
 
 import type { CipherTask, PaymentVault } from "../typechain-types";
 import { deployLinked } from "../scripts/libraries";
-import { bytes32Of, externalUint64, params, proofFor, proofRef, reason4 } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef, reason4 } from "./helpers";
 
 /**
  * Stateful fuzz over the epoch lifecycle and the settlement accounting.
  *
  * A deterministic PRNG (mulberry32, fixed seeds) drives a weighted mix of every
  * money-moving entry point across several tasks — create, contribute, seal, open,
- * register, commit (honest and divergent digests), dispute, finalize, paged settlement,
+ * register, commit (honest and divergent digests), dispute (bare and commit-reveal),
+ * contribution-bond requirements, finalize, paged settlement,
  * bond release, aborts and time travel — while two invariants are asserted after *every*
  * step, whether the step succeeded or reverted:
  *
@@ -100,12 +101,16 @@ describe("LifecycleFuzz", () => {
     it(`keeps the vault solvent through a random lifecycle (seed ${seed})`, async function () {
       this.timeout(600_000);
       const fx = await deployFixture();
-      const { task, vault, buyer, node, node2, node3, alice, bob, carol, outsider } = fx;
+      const { task, token, vault, buyer, node, node2, node3, alice, bob, carol, outsider } = fx;
       const rand = mulberry32(seed);
       const nodes = [node, node2, node3];
       const contributors = [alice, bob, carol, outsider];
       const tasks: bigint[] = [];
       let ctr = 1_000_000;
+      // Cached once: the PoP message binds all five, and re-reading them per step would
+      // spend two RPCs per registration for values that never change mid-run.
+      const taskAddr = await task.getAddress();
+      const chainId = Number((await ethers.provider.getNetwork()).chainId);
       let okCommits = 0;
       let okFinalizes = 0;
       const attempts: Record<string, number> = {};
@@ -123,7 +128,15 @@ describe("LifecycleFuzz", () => {
           if (firstRevert[kind] === undefined) {
             firstRevert[kind] = String((e as Error)?.message ?? e).split("\n")[0].slice(0, 160);
           }
-          const name = /custom error '(\w+)/.exec(String((e as Error)?.message ?? ""))?.[1] ?? "other";
+          // EDR names custom errors only when it recognises the executing contract, and
+          // that recognition is flaky across multi-fixture runs (same selector, same
+          // transaction: named alone, "unrecognized" in a pack). Fall back to the raw
+          // 4-byte selector so the tally keeps its granularity either way; the selectors
+          // themselves are pinned against the artifacts, not against prose.
+          const msg = String((e as Error)?.message ?? "");
+          const name = /custom error '(\w+)/.exec(msg)?.[1]
+            ?? /return data: (0x[0-9a-f]{8})/.exec(msg)?.[1]
+            ?? "other";
           const tally = (revertKinds[kind] ??= {});
           tally[name] = (tally[name] ?? 0) + 1;
         }
@@ -160,7 +173,7 @@ describe("LifecycleFuzz", () => {
         phase.set(id, Math.max(phase.get(id) ?? 0, to));
       };
       for (let step = 0; step < STEPS; step++) {
-        const roll = rand() * 106;
+        const roll = rand() * 118;
         let act = "idle";
         try {
           if (roll < 8) {
@@ -213,7 +226,21 @@ describe("LifecycleFuzz", () => {
             if (id === null) continue;
             const n = pick(nodes);
             act = `register/${id}/${n.address.slice(0, 10)}`;
-            await task.connect(n).registerNode(id, bytes32Of(ctr++));
+            if (rand() < 0.4) {
+              // Proof-of-possession registration: the BLS key bound to a live signer.
+              // Same bond path as the bare registration underneath.
+              const key = bytes32Of(ctr++);
+              const inner = ethers.keccak256(
+                ethers.AbiCoder.defaultAbiCoder().encode(
+                  ["uint256", "bytes32", "address", "uint256", "address"],
+                  [id, key, n.address, chainId, taskAddr]
+                )
+              );
+              const sig = await n.signMessage(ethers.getBytes(inner));
+              await task.connect(n).registerNodeWithPop(id, key, sig);
+            } else {
+              await task.connect(n).registerNode(id, bytes32Of(ctr++));
+            }
             if (!registered.has(id)) registered.set(id, new Set());
             registered.get(id)?.add(n.address);
           } else if (roll < 70) {
@@ -226,17 +253,25 @@ describe("LifecycleFuzz", () => {
             const digest =
               rand() < 0.7 ? honestDigest(id, epoch) : byzDigest(id, epoch, ctr++);
             act = `commit/${id}/${epoch}/${n.address.slice(0, 10)}`;
-            await task
-              .connect(n)
-              .commitEpoch(
-                id,
-                epoch,
-                proofRef(ctr++),
-                bytes32Of(ctr++),
-                bytes32Of(ctr++),
-                bytes32Of(ctr++),
-                digest
-              );
+            const pins = [bytes32Of(ctr++), bytes32Of(ctr++), bytes32Of(ctr++)];
+            if (rand() < 0.3) {
+              // Segmented path: same bindings and winner logic through the segmented verifier.
+              await task
+                .connect(n)
+                .commitEpochSegmented(id, epoch, proofRef(ctr++), pins[0], pins[1], pins[2], digest);
+            } else {
+              await task
+                .connect(n)
+                .commitEpoch(
+                  id,
+                  epoch,
+                  proofRef(ctr++),
+                  pins[0],
+                  pins[1],
+                  pins[2],
+                  digest
+                );
+            }
             raise(id, 4);
             okCommits++;
           } else if (roll < 78) {
@@ -286,6 +321,65 @@ describe("LifecycleFuzz", () => {
             const dt = 1 + Math.floor(rand() * 900);
             act = `time+${dt}s`;
             await time.increase(dt);
+          } else if (roll < 108) {
+            // Contribution-bond requirement (buyer/manager only, pre-seal preferred).
+            // Funded + approved for one random contributor so later submits on this task
+            // exercise the pull path instead of only the revert path; unbonded tasks are
+            // unaffected. Bonds live in the orchestrator, outside the vault invariant.
+            const id = pickPhase(0, 1) ?? anyAlive();
+            if (id === null) continue;
+            act = `bond/${id}`;
+            const amount = pick([0n, 500_000n, 2_000_000n]);
+            await task.connect(buyer).setContributionBondRequirement(id, amount);
+            if (amount > 0n) {
+              const c = pick(contributors);
+              await token.mint(c.address, amount);
+              await token.connect(c).approve(await task.getAddress(), amount);
+            }
+          } else if (roll < 111) {
+            // Commit-reveal dispute: same standing rule as the bare path (own verified
+            // commit, digest differs from the claim), but the digest stays hidden until
+            // the reveal. Reports that agree with the claim revert inside and are skipped.
+            const id = pickPhase(2, 5) ?? anyAlive();
+            if (id === null) continue;
+            const t = await task.tasks(id);
+            act = `commitreveal/${id}/${t.nextEpoch}`;
+            let sent = 0;
+            for (const n of nodes) {
+              const mine = await task.commits(id, t.nextEpoch, n.address);
+              if (!mine.verified || mine.traceDigest === ethers.ZeroHash) continue;
+              try {
+                const salt = bytes32Of(ctr++);
+                const commitment = ethers.solidityPackedKeccak256(
+                  ["bytes32", "bytes32", "address"],
+                  [mine.traceDigest, salt, n.address]
+                );
+                await task.connect(n).commitDispute(id, t.nextEpoch, commitment);
+                await task.connect(n).reportDisputeWithSalt(id, t.nextEpoch, mine.traceDigest, salt);
+                sent++;
+              } catch {
+                // Agrees with the claim, already recorded (bare or committed), outside the
+                // window, or a commitment already open from an earlier step. The commit
+                // itself may still have landed — money never moves here either way.
+              }
+            }
+            // No `continue` on sent == 0: even a reads-only pass is a scheduled step worth
+            // tallying, and the invariant check below must run regardless.
+          } else if (roll < 114) {
+            // Slash a contribution bond (buyer). Mostly reverts with NoBondToRelease on
+            // unbonded tasks — the path, not the payout, is what's exercised — and honors
+            // the post-settlement cutoff when a bonded task actually settles.
+            const id = anyAlive();
+            if (id === null) continue;
+            act = `slashbond/${id}`;
+            await task.connect(buyer).slashContributionBond(id, pick(contributors).address);
+          } else if (roll < 116) {
+            // Release a contribution bond (permissionless, pays the contributor only).
+            // Reverts until the task can no longer slash; succeeds after.
+            const id = anyAlive();
+            if (id === null) continue;
+            act = `releasebond/${id}`;
+            await task.releaseContributionBond(id, pick(contributors).address);
           } else {
             // Abort only setup-stage tasks: killing a pipeline mid-epoch proves nothing
             // about the unwind path that aborting a fresh task does not, and it starves
@@ -362,6 +456,9 @@ describe("LifecycleFuzz", () => {
           .commitEpoch(id, 0, proofRef(ctr++), bytes32Of(ctr++), bytes32Of(ctr++), bytes32Of(ctr++), digest);
         await time.increase(600 + 120 + 1);
         await task.finalizeEpoch(id, 0);
+        // The directed task pays its winner through a fresh channel; the final settlement
+        // page waits for it to mature (F-22).
+        await matureRewardWindows();
         for (let page = 0; page < 12; page++) {
           try {
             await task.settleFrom(id, await task.settleCursor(id));

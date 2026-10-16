@@ -113,7 +113,7 @@ impl Weights {
     /// Decode and validate a weight file. `expected_features` is the task's `features`;
     /// anything else is a shape error, never a silent reinterpretation.
     pub fn decode(bytes: &[u8], expected_features: u32) -> Result<Self> {
-        let fail = |reason: String| Error::Shard(ShardError::Malformed { offset: 0, reason });
+        let fail = |reason: String| Error::ShardStore(ShardError::Malformed { offset: 0, reason });
         if bytes.len() < WEIGHTS_MAGIC.len() + 8 {
             return Err(fail(format!(
                 "weight object is {} bytes, shorter than the header",
@@ -159,7 +159,7 @@ impl Weights {
 /// on a huge positive with no error anywhere downstream.
 fn quantize(value: f64, scale: u32, index: usize) -> Result<u64> {
     let malformed = |reason: String| {
-        Error::Shard(ShardError::Malformed {
+        Error::ShardStore(ShardError::Malformed {
             offset: index,
             reason,
         })
@@ -201,7 +201,7 @@ pub struct ShardRows {
 /// parameter here, never a default.
 pub fn decode_noop_shard(bytes: &[u8], expected_features: u32, scale: u32) -> Result<ShardRows> {
     let malformed =
-        |offset: usize, reason: String| Error::Shard(ShardError::Malformed { offset, reason });
+        |offset: usize, reason: String| Error::ShardStore(ShardError::Malformed { offset, reason });
     if bytes.len() < NOOP_SHARD_MAGIC.len() {
         return Err(malformed(
             0,
@@ -526,10 +526,10 @@ impl FheEngine for ReferenceCpuEngine {
                 let base = r * f;
                 // Prediction in quantised units: Σ w·x / S + bias.
                 let mut dot: i128 = 0;
-                for j in 0..f - 1 {
+                for (j, wj) in w.iter().enumerate().take(f - 1) {
                     dot = dot
                         .checked_add(
-                            i128::from(w[j])
+                            i128::from(*wj)
                                 .checked_mul(i128::from(shard.values[base + j]))
                                 .ok_or_else(|| overflow("dot product"))?,
                         )
@@ -540,8 +540,8 @@ impl FheEngine for ReferenceCpuEngine {
                 loss = loss
                     .checked_add(err.checked_mul(err).ok_or_else(|| overflow("loss"))?)
                     .ok_or_else(|| overflow("loss"))?;
-                for j in 0..f - 1 {
-                    grad[j] = grad[j]
+                for (j, gj) in grad.iter_mut().enumerate().take(f - 1) {
+                    *gj = (*gj)
                         .checked_add(
                             err.checked_mul(i128::from(shard.values[base + j]))
                                 .ok_or_else(|| overflow("gradient"))?,
@@ -694,7 +694,7 @@ mod tfhe_backend {
     use tfhe::safe_serialization::safe_deserialize;
     use tfhe::{CompressedServerKey, FheUint32, ServerKey};
 
-    use super::{EpochInputs, EpochOutput, TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC};
+    use super::{EpochInputs, EpochOutput, Weights, TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC};
     use crate::error::{Error, FheError, Result, ShardError};
 
     /// Maximum serialised object this backend will deserialise (server keys are GB-scale).
@@ -766,6 +766,9 @@ mod tfhe_backend {
                     path.display()
                 )))
             };
+            // `bad` is used twice below, so it cannot be moved into `map_err`:
+            // the borrow is load-bearing, and clippy's suggestion does not apply.
+            #[allow(clippy::needless_borrows_for_generic_args)]
             let mtime = std::fs::metadata(path)
                 .map_err(&bad)?
                 .modified()
@@ -802,7 +805,7 @@ mod tfhe_backend {
             expected_features: u32,
         ) -> Result<Vec<FheUint32>> {
             let malformed = |offset: usize, reason: String| {
-                Error::Shard(ShardError::Malformed { offset, reason })
+                Error::ShardStore(ShardError::Malformed { offset, reason })
             };
             if bytes.len() < magic.len() + 8 {
                 return Err(malformed(0, format!("{what} is shorter than the header")));

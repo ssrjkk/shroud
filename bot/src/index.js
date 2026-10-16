@@ -18,6 +18,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { loadConfig, configuredContracts, ConfigError, ROOT } from "./config.js";
 import { TelegramBot } from "./telegram.js";
+import { ChatAbuseGuard, loadAbuseConfig } from "./abuse.mjs";
 import { ChainReader, makeInterfaces, poolIds, shortId, shortAddr } from "./chain.js";
 import {
   renderStatus,
@@ -65,26 +66,74 @@ function log(level, config) {
  * down; starting at zero would re-alert on the entire history. A bounded
  * catch-up window is the honest middle, and the value is configurable because
  * "how far back" depends entirely on how long the bot is expected to be off.
+ *
+ * The cursor also carries the identities of the events already alerted on
+ * (`txHash:logIndex`, capped), so a restart or a reorg rewind does not re-alert
+ * on the same logs: at-least-once delivery with duplicate suppression, rather
+ * than the previous at-most-once `save-before-send`.
  */
 async function loadCursor(startBlock, catchupBlocks) {
   try {
     const raw = JSON.parse(await readFile(CURSOR_FILE, "utf8"));
-    if (Number.isInteger(raw.cursor) && raw.cursor >= 0) return raw.cursor;
+    if (Number.isInteger(raw.cursor) && raw.cursor >= 0) {
+      const seen = Array.isArray(raw.seen) ? raw.seen.filter((s) => typeof s === "string") : [];
+      return { cursor: raw.cursor, seen: new Set(seen) };
+    }
   } catch {
     // No cursor yet, or unreadable: fall through to a fresh window.
   }
-  return Math.max(0, startBlock - catchupBlocks);
+  return { cursor: Math.max(0, startBlock - catchupBlocks), seen: new Set() };
 }
 
-async function saveCursor(cursor) {
+/** Cap on remembered event identities: enough for weeks of alerts, small on disk. */
+export const MAX_SEEN_EVENTS = 2000;
+
+async function saveCursor(cursor, seen) {
   try {
     await mkdir(dirname(CURSOR_FILE), { recursive: true });
-    await writeFile(CURSOR_FILE, JSON.stringify({ cursor, at: Date.now() }, null, 2));
+    const arr = [...seen].slice(-MAX_SEEN_EVENTS);
+    await writeFile(CURSOR_FILE, JSON.stringify({ cursor, at: Date.now(), seen: arr }, null, 2));
   } catch (err) {
     // A cursor we cannot persist only costs us alert continuity on the next
     // start; it must not take the bot down.
     console.warn("could not persist cursor:", err.message);
   }
+}
+
+/**
+ * Stable identity of a decoded log, or `null` when the log carries none.
+ *
+ * `txHash:logIndex` survives reorgs (a reorged log has a different hash) and restarts.
+ * Logs without either field cannot be deduplicated and are always surfaced: for an ops
+ * bot a duplicate alert is noise, a lost one is an incident.
+ */
+export function eventUid(ev) {
+  if (typeof ev?.txHash === "string" && Number.isInteger(ev?.logIndex)) {
+    return `${ev.txHash}:${ev.logIndex}`;
+  }
+  return null;
+}
+
+/**
+ * Split `events` into unseen ones, recording everything observed.
+ *
+ * Pure so the rewind/dedupe behaviour is pinned by a test rather than by inspection:
+ * identity-less events always pass through (see `eventUid`), seen events are dropped,
+ * and every identity observed is remembered for the next scan.
+ */
+export function dedupeEvents(events, seen) {
+  const fresh = [];
+  for (const ev of events) {
+    const uid = eventUid(ev);
+    if (uid === null) {
+      fresh.push(ev);
+      continue;
+    }
+    if (seen.has(uid)) continue;
+    seen.add(uid);
+    fresh.push(ev);
+  }
+  return fresh;
 }
 
 /**
@@ -112,7 +161,7 @@ export function mismatchArgs(ev, prev) {
  * are recorded, which is what pins the pool window and the /task composition
  * (commits/winner/quorum for the running epoch) without a chain.
  */
-export function createHandlers(chain, config) {
+export function createHandlers(chain, config, ops = {}) {
   return {
     async help() {
       return renderHelp();
@@ -124,10 +173,19 @@ export function createHandlers(chain, config) {
       const chainIdNow = await chain.chainId();
       const np = await chain.networkParams();
       const pending = np ? await chain.pendingRotation() : null;
-      return renderStatus(
+      const out = renderStatus(
         { chainId: chainIdNow, blockNumber: await chain.blockNumber(), networkParams: np, pendingRotation: pending },
         config
       );
+      // Shed alerts are invisible by design (the queue drops newest-first overflow) —
+      // surfacing the counter here is the only way an operator learns alerts were lost.
+      const dropped = typeof ops.droppedSends === "function" ? ops.droppedSends() : 0;
+      if (dropped > 0) {
+        return out + `\n\n${"⚠️"} <b>${dropped} alert(s) shed by the send queue</b> — ` +
+          `the bot dropped outbound messages faster than Telegram drained them. ` +
+          `Treat recent silence as data loss, not as calm.`;
+      }
+      return out;
     },
     async pool() {
       const count = await chain.taskCount();
@@ -139,7 +197,9 @@ export function createHandlers(chain, config) {
     },
     async task(args) {
       if (!args.length) return "usage: /task &lt;id&gt;";
-      if (!/^\d+$/.test(args[0])) return "task ids are decimal integers. Try /pool.";
+      // Санитизация до RPC: id — короткий decimal. Длинная строка здесь — либо мусор,
+      // либо попытка заставить ноду жевать BigInt из килобайта цифр.
+      if (!/^\d{1,20}$/.test(args[0])) return "task ids are decimal integers. Try /pool.";
       const id = BigInt(args[0]);
       const t = await chain.task(id);
       const commits = t ? await chain.commitsForEpoch(id, t.nextEpoch) : [];
@@ -242,22 +302,44 @@ async function main() {
   // which epoch's commits /task shows) is unit-testable without a chain: handlers
   // take an already-resolved chain reader, and the tests hand them a stub.
 
-  const handlers = createHandlers(chain, config);
+  const handlers = createHandlers(chain, config, { droppedSends: () => bot.droppedSends });
+
+  // Анти-абьюз: квоты в единицах RPC-нагрузки (/pool стоит 15), флуд-детект, tarpit
+  // для greylisted и shadowban для спамеров — правдоподобный ответ без единого RPC.
+  // Хендлеры сверх этого идут с жёстким дедлайном (runHandler).
+  const abuseGuard = new ChatAbuseGuard(loadAbuseConfig(process.env));
 
   async function handleCommand(msg) {
     const text = msg.text ?? "";
-    const [rawName, ...args] = text.split(/\s+/);
-    const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
-    const handler = handlers[name];
-    if (!handler) {
-      return renderHelp();
+    let verdict;
+    try {
+      verdict = await abuseGuard.guardChat(msg.chat?.id ?? "unknown", text);
+    } catch {
+      verdict = { action: "pass" }; // fail-open охраны: лучше лишний RPC, чем мёртвый бот
+    }
+    if (verdict.action === "deny-usage" || verdict.action === "deny-rate" || verdict.action === "shadow") {
+      return verdict.reply;
     }
     try {
-      return await handler(args);
+      return await abuseGuard.runHandler(msg.chat?.id ?? "unknown", async () => {
+        const [rawName, ...args] = text.split(/\s+/);
+        const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
+        const handler = handlers[name];
+        if (!handler) {
+          return renderHelp();
+        }
+        try {
+          return await handler(args);
+        } catch (err) {
+          // A failing command must not kill the process: an ops bot that crashes on
+          // one bad RPC read is worse than one that says "that failed".
+          return `could not complete /${name}: ${err.message}`;
+        }
+      });
     } catch (err) {
       // A failing command must not kill the process: an ops bot that crashes on
       // one bad RPC read is worse than one that says "that failed".
-      return `could not complete /${name}: ${err.message}`;
+      return `could not complete: ${err.message}`;
     }
   }
 
@@ -300,9 +382,16 @@ async function main() {
 
   // --- alert scanner -------------------------------------------------------
 
-  async function scanOnce(cursor) {
-    const head = await chain.blockNumber();
-    if (head <= cursor) return { cursor, alerts: [] };
+  async function scanOnce(cursor, seen) {
+    let head = await chain.blockNumber();
+    if (head < cursor) {
+      // Reorg below the cursor: block numbers now repeat with different contents.
+      // Rewind instead of skipping the range forever; the seen-set suppresses the
+      // logs that did not actually change.
+      log("warn", config)(`head ${head} is below cursor ${cursor} (reorg); rewinding`);
+      cursor = head;
+    }
+    if (head <= cursor) return { cursor, alerts: [], seen };
 
     const alerts = [];
     const alertsCfg = config.alerts;
@@ -314,7 +403,7 @@ async function main() {
     scanOnce.seenDigest = seenDigest;
 
     if (config.cipherTask) {
-      const commits = await chain.commitEvents(cursor + 1, head);
+      const commits = dedupeEvents(await chain.commitEvents(cursor + 1, head), seen);
       for (const ev of commits) {
         const key = `${ev.args.taskId}/${ev.args.epoch}/${ev.args.node}`;
         const prev = seenDigest.get(key);
@@ -326,7 +415,7 @@ async function main() {
     }
 
     if (config.cipherTask && alertsCfg.disputes) {
-      const events = await chain.disputeEvents(cursor + 1, head);
+      const events = dedupeEvents(await chain.disputeEvents(cursor + 1, head), seen);
       for (const ev of events) {
         const rendered = renderDispute(ev);
         if (rendered) alerts.push(rendered);
@@ -335,7 +424,7 @@ async function main() {
 
     if (config.networkParams && alertsCfg.keyRotation) {
       const { executed, proposed } = await chain.rotationEvents(cursor + 1, head);
-      for (const ev of proposed) {
+      for (const ev of dedupeEvents(proposed, seen)) {
         alerts.push(
           renderRotation("proposed", {
             proposer: ev.args.proposer,
@@ -344,7 +433,7 @@ async function main() {
           })
         );
       }
-      for (const ev of executed) {
+      for (const ev of dedupeEvents(executed, seen)) {
         alerts.push(
           renderRotation("executed", {
             keyVersion: ev.args.keyVersion,
@@ -354,21 +443,29 @@ async function main() {
       }
     }
 
-    return { cursor: head, alerts };
+    return { cursor: head, alerts, seen };
   }
 
   async function pollAlerts() {
-    let cursor = await loadCursor(await chain.blockNumber(), config.catchupBlocks);
-    log("info", config)(`alert scanner starting at block ${cursor}`);
+    const start = await loadCursor(await chain.blockNumber(), config.catchupBlocks);
+    let cursor = start.cursor;
+    const seen = start.seen;
+    log("info", config)(`alert scanner starting at block ${cursor} (${seen.size} events remembered)`);
 
     for (;;) {
       try {
-        const { cursor: next, alerts } = await scanOnce(cursor);
+        // `seen` is mutated in place by the scan (every observed identity is remembered);
+        // persisting it after sending is what suppresses re-alerts across restarts.
+        const { cursor: next, alerts } = await scanOnce(cursor, seen);
         cursor = next;
-        await saveCursor(cursor);
+        // At-least-once: send first, persist after. A crash between the two re-alerts
+        // (the seen-set was not saved yet); a crash before sending loses nothing, because
+        // the cursor did not move either. For security alerts a duplicate is noise and a
+        // loss is an incident, so this is the right bias.
         for (const a of alerts) {
           await send(a);
         }
+        await saveCursor(cursor, seen);
       } catch (err) {
         log("error", config)("alert scan failed:", err.message);
       }

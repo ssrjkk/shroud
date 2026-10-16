@@ -24,8 +24,8 @@
  *   NODE_CACHE_DIR=$RUNNER_TEMP/shroud-cache OPERATOR_B_KEY=0x… \
  *     npx hardhat run scripts/devnet-execute-check.ts --network localhost
  */
-import { ethers } from "hardhat";
-import { readFileSync } from "fs";
+import { ethers, fhevm } from "hardhat";
+import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { bytes32Of, externalUint64 } from "../test/helpers";
 
@@ -47,6 +47,10 @@ const ROWS = 8;
 const MATRIX = Array.from({ length: ROWS }, (_, i) => [i + 1, 2 * (i + 1)]).flat();
 
 async function main() {
+  // `hardhat test` initializes the fhevm mock in-process, but `hardhat run --network
+  // localhost` does not: encrypted inputs need the CLI API pointed at the standalone
+  // node first, otherwise `createEncryptedInput` throws "plugin is not initialized".
+  await fhevm.initializeCLIApi();
   const addrs = JSON.parse(readFileSync(OUT, "utf8"));
   const [buyer, alice] = await ethers.getSigners();
   const provider = ethers.provider;
@@ -59,12 +63,15 @@ async function main() {
   // @ts-ignore: cross-package `.js` import — contracts tsconfig uses moduleResolution
   // node, which takes `.js` literally and misses the adjacent `.d.ts`; node resolves it
   // fine at runtime.
-  const sdk = await import("../../../sdk/dist/index.js");
+  const sdk = await import("../../sdk/dist/index.js");
   // @ts-ignore: same as above.
-  const weights = await import("../../../sdk/dist/weights.js");
+  const weights = await import("../../sdk/dist/weights.js");
+  // @ts-ignore: FileShardStore is node-only (node:fs), so it lives under the
+  // `./file-store` subpath rather than the browser-safe index.
+  const filestore = await import("../../sdk/dist/file-store.js");
 
   // --- 1-2. Seed the shared DA directory -------------------------------------------
-  const store = new sdk.FileShardStore(cacheDir);
+  const store = new filestore.FileShardStore(cacheDir);
   const shard = await new sdk.NoopEncryptor().encryptRows(MATRIX, FEATURES);
   const putShard = await store.put(shard.ciphertext);
   const ctDigest = ethers.keccak256(shard.ciphertext);
@@ -178,10 +185,21 @@ async function main() {
   if (!done.a.verified || !done.b.verified) throw new Error("a commit is not verified");
   for (const [who, c] of [["A", done.a], ["B", done.b]] as const) {
     if (!String(c.proof).startsWith("0x53544152")) throw new Error(`${who} proof lacks the STAR prefix`);
-    if (String(c.encWeightsCid).toLowerCase() !== putWeights.cid.toLowerCase()) {
-      throw new Error(`${who} committed weights ${c.encWeightsCid}, published ${putWeights.cid}`);
-    }
     if (String(c.metricsCid) === ethers.ZeroHash) throw new Error(`${who} committed empty metrics`);
+  }
+  // The commit carries the *computed* epoch weights, not the seed: one gradient step moves
+  // them, so the CID differs from `putWeights.cid` by design. What must hold is agreement --
+  // both nodes derived the same bytes -- and presence: the bytes are in the shared DA dir
+  // the nodes publish to, or the commit points at nothing any peer can fetch.
+  if (done.a.encWeightsCid === ethers.ZeroHash || done.b.encWeightsCid === ethers.ZeroHash) {
+    throw new Error("a node committed empty weights");
+  }
+  if (String(done.a.encWeightsCid).toLowerCase() !== String(done.b.encWeightsCid).toLowerCase()) {
+    throw new Error(`nodes disagree on weights: A=${done.a.encWeightsCid} B=${done.b.encWeightsCid}`);
+  }
+  const weightsFile = join(cacheDir, String(done.a.encWeightsCid).slice(2).toLowerCase());
+  if (!existsSync(weightsFile)) {
+    throw new Error(`committed weights ${done.a.encWeightsCid} missing from shared DA dir`);
   }
   console.log("DEVNET EXECUTE E2E OK");
 }

@@ -68,6 +68,14 @@ pub enum ChainEvent {
         reporter: Address,
         digest: B256,
     },
+    /// Commit half of a commit-reveal dispute. The digest stays hidden until the reveal,
+    /// so the fold reacts by re-executing to form its own opinion rather than by counting
+    /// a digest it cannot see.
+    DisputeCommitted {
+        task_id: U256,
+        epoch: u32,
+        reporter: Address,
+    },
     EpochCommitted {
         task_id: U256,
         epoch: u32,
@@ -149,6 +157,7 @@ impl ChainEvent {
         match self {
             ChainEvent::ContributionSubmitted { task_id, .. }
             | ChainEvent::DisputeReported { task_id, .. }
+            | ChainEvent::DisputeCommitted { task_id, .. }
             | ChainEvent::EpochCommitted { task_id, .. }
             | ChainEvent::EpochOpened { task_id, .. }
             | ChainEvent::EpochRejected { task_id, .. }
@@ -177,6 +186,7 @@ impl ChainEvent {
         match self {
             ChainEvent::ContributionSubmitted { .. } => "ContributionSubmitted",
             ChainEvent::DisputeReported { .. } => "DisputeReported",
+            ChainEvent::DisputeCommitted { .. } => "DisputeCommitted",
             ChainEvent::EpochCommitted { .. } => "EpochCommitted",
             ChainEvent::EpochOpened { .. } => "EpochOpened",
             ChainEvent::EpochRejected { .. } => "EpochRejected",
@@ -691,6 +701,7 @@ fn bool_of(b: B256) -> Option<bool> {
 /// | event                     | indexed                        | data                                        |
 /// |---------------------------|--------------------------------|---------------------------------------------|
 /// | `ContributionSubmitted`   | taskId, contributor, leafIndex | ciphertextCid, rows                         |
+/// | `DisputeCommitted`          | taskId, epoch, reporter        | commitment (opaque until revealed)          |
 /// | `DisputeReported`         | taskId, epoch, reporter        | digest                                      |
 /// | `EpochCommitted`          | taskId, epoch, node            | traceDigest                                 |
 /// | `EpochOpened`             | taskId, epoch                  | encWeightsCid, weightsDigest                |
@@ -709,6 +720,16 @@ pub fn decode_task_event(sig: &B256, topics: &[B256], data: &[u8]) -> Option<Cha
             leaf_index: indexed_u32(topics, 2)?,
             ciphertext_cid: data_word(data, 0)?,
             rows: u32_of(data_word(data, 1)?),
+        });
+    }
+    if *sig == *events::DISPUTE_COMMITTED_TOPIC {
+        // `commitment` (the only data word) is deliberately not decoded into the fold:
+        // it hides the digest by design, and persisting it would invite comparing against
+        // a value that is not the claim. The fold reacts with a re-execution instead.
+        return Some(ChainEvent::DisputeCommitted {
+            task_id: indexed(topics, 0)?,
+            epoch: indexed_u32(topics, 1)?,
+            reporter: indexed_address(topics, 2)?,
         });
     }
     if *sig == *events::DISPUTE_REPORTED_TOPIC {
@@ -840,7 +861,7 @@ mod tests {
     use super::*;
 
     /// The addresses of the deployment the logs below were captured from.
-    const TASK_ADDR: &str = "0x8a791620dd6260079bf849dc5567adc3f2fdc318";
+    const TASK_ADDR: &str = "0x959922be3caee4b8cd9a407cc3ac1c251c2007b1";
     const VAULT_ADDR: &str = "0xe7f1725e7734ce288f8367e1bb143e90bb3f0512";
     const NODE: &str = "0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc";
     const ALICE: &str = "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc";
@@ -948,6 +969,7 @@ mod tests {
     #[rustfmt::skip]
     const REAL_LOGS: &[RealLog] = &[
         RealLog { name: "ContributionSubmitted", address: TASK_ADDR, topics: &["0xc37fa11865d20db8c2f9f36ef55d1f99c41a0ee1f98fd66fcad5c3e82cae8ef3", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000003c44cdddb6a900fa2b585dd299e03d12fa4293bc", "0x0000000000000000000000000000000000000000000000000000000000000000"], data: "0x7cb28e2fbd63cc4d4a519f09950cf70541ff7d13878e887d59fb1341ac17890c00000000000000000000000000000000000000000000000000000000000003e8" },
+        RealLog { name: "DisputeCommitted", address: TASK_ADDR, topics: &["0xc99d9e000cdf25faf80e5443b83ddbcf61258670e265d0a9d8e41e12d1ff24d9", "0x0000000000000000000000000000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000000000000000000000000000000", "0x00000000000000000000000023618e81e3f5cdf7f54c3d65f7fbc0abf5b21e8f"], data: "0xd1f5202bead4648ffd58a77010587476276518c6ade453c1c5596f8444ac4984" },
         RealLog { name: "DisputeReported", address: TASK_ADDR, topics: &["0x56c6da7aeff81fba1958ad3eddabcec10d01fa5edbe133afd962121e89b9acf9", "0x0000000000000000000000000000000000000000000000000000000000000002", "0x0000000000000000000000000000000000000000000000000000000000000000", "0x00000000000000000000000023618e81e3f5cdf7f54c3d65f7fbc0abf5b21e8f"], data: "0x9e8b8a6f48ae2afb4feccb8a3d14ad5fc0a2279f3cb83cc5c6f549468b6aaaff" },
         RealLog { name: "EpochCommitted", address: TASK_ADDR, topics: &["0xbe1c0401080fba30020b1609c22d6c3de654f750279eb2c12daac731b9c5f668", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000000000000000000000000000000", "0x0000000000000000000000009965507d1a55bcc2695c58ba16fb37d819b0a4dc"], data: "0x01c8a3e3937be1c605ffbdfd93fa4c7b1a68ef7dd87913adf52d6c0739ee7f62" },
         RealLog { name: "EpochOpened", address: TASK_ADDR, topics: &["0x7e3cb4c8395e586b6b675ae99ac10bb09551b19d95aeae90a896aead64caab2b", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000000000000000000000000000000"], data: "0x7058f9c48824b4113784aea72c20faae780d67e13596f1adfa8d87ac2f68d021f4559db0122e9706e35b50592c904d11d671491d7d9443d1d19abc75b5f62225" },
@@ -958,7 +980,7 @@ mod tests {
         RealLog { name: "TaskAborted", address: TASK_ADDR, topics: &["0xe445d9d031ef936fdcc51bb3f78ad934dc35d6a085ab35864de6329a6e9f65c8", "0x0000000000000000000000000000000000000000000000000000000000000003"], data: "0xb551a22b00000000000000000000000000000000000000000000000000000000" },
         RealLog { name: "TaskSealed", address: TASK_ADDR, topics: &["0x99bf7cc8880bbbcd95ba1c122c314cb230e1607837b7aed2ea1957185b28c41b", "0x0000000000000000000000000000000000000000000000000000000000000001"], data: "0xb719daf526966b94fd548fd4de7c9659c119d4b006beaf12759e5c94da10dd1400000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002" },
         RealLog { name: "TaskSettled", address: TASK_ADDR, topics: &["0x64b9379e52477e67cef49489615cca11e9f6343f94879ddc0c0f50ba19a4be65", "0x0000000000000000000000000000000000000000000000000000000000000001"], data: "0x000000000000000000000000000000000000000000000000000000002faf08000000000000000000000000000000000000000000000000000000000008f0d1800000000000000000000000000000000000000000000000000000000002faf080" },
-        RealLog { name: "ChannelOpened", address: VAULT_ADDR, topics: &["0x70d39e0205cc39a51528f1c53832da8ccc0820ec76bec1d321bfa6c864c829cf", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000009965507d1a55bcc2695c58ba16fb37d819b0a4dc"], data: "0x0000000000000000000000008a791620dd6260079bf849dc5567adc3f2fdc31800000000000000000000000000000000000000000000000000000000047868c0000000000000000000000000000000000000000000000000000000006ad641fd" },
+        RealLog { name: "ChannelOpened", address: VAULT_ADDR, topics: &["0x70d39e0205cc39a51528f1c53832da8ccc0820ec76bec1d321bfa6c864c829cf", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000009965507d1a55bcc2695c58ba16fb37d819b0a4dc"], data: "0x000000000000000000000000959922be3caee4b8cd9a407cc3ac1c251c2007b100000000000000000000000000000000000000000000000000000000047868c0000000000000000000000000000000000000000000000000000000006ad641fd" },
         RealLog { name: "SliceRedeemed", address: VAULT_ADDR, topics: &["0x107845e530b551b1ff303785868633c9e6e01096d45d483f669269e4b5995a69", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000009965507d1a55bcc2695c58ba16fb37d819b0a4dc"], data: "0x00000000000000000000000000000000000000000000000000000000047868c000000000000000000000000000000000000000000000000000000000047868c00000000000000000000000000000000000000000000000000000000000000000" },
         RealLog { name: "ChannelReclaimed", address: VAULT_ADDR, topics: &["0x97c9fd82973dc049001bdce58b00498bb0ed44ee59212ca45dbe5f1e8201ba84", "0x0000000000000000000000000000000000000000000000000000000000000001", "0x0000000000000000000000009965507d1a55bcc2695c58ba16fb37d819b0a4dc"], data: "0x0000000000000000000000000000000000000000000000000000000000000000" },
     ];

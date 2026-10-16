@@ -4,7 +4,7 @@ import type { ContractTransactionResponse } from "ethers";
 import { ethers } from "hardhat";
 
 import { deployLinked } from "../scripts/libraries";
-import { bytes32Of, externalUint64, params, proofFor, proofRef } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef } from "./helpers";
 
 /**
  * Gas snapshot for one full single-epoch lifecycle.
@@ -93,6 +93,7 @@ describe("GasSnapshot", () => {
     );
     await time.increase(600 + 120 + 1);
     await track("finalizeEpoch", task.finalizeEpoch(id, 0));
+    await matureRewardWindows();
     await track("settle", task.settle(id));
     await track("releaseBond", vault.releaseBond(id, node.address));
 

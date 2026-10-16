@@ -3,12 +3,16 @@
  *
  * Node-only: this module imports `node:fs` and is therefore a separate entry point
  * (`@shroud/sdk/file-store`), not part of the browser-safe `index.js`. Same `ShardStore`
- * interface as `MemoryShardStore`, but objects survive restarts: each payload is a file named
- * by its keccak256 digest under `dir`, written atomically (temp + rename) so a crash never
- * leaves a torn object behind.
+ * interface as `MemoryShardStore`, but objects survive restarts: each payload is a file
+ * named by its transport cid (sha256, see `put`) under `dir`, written atomically
+ * (temp + rename) so a crash never leaves a torn object behind.
  *
- * Like `MemoryShardStore`, the cid *is* the keccak256 digest here, so cid and on-chain pin
- * cannot drift apart. Unlike the memory store, `get` re-reads from disk every time: the
+ * Like `MemoryShardStore`, the cid (sha256) and the on-chain pin (keccak256) differ by
+ * design, mirroring the production service. Files written by the old keccak-named layout
+ * are ignored, not migrated: this store is development-only, and silent aliasing of two
+ * addressing schemes would be worse than a clean break.
+ *
+ * Unlike the memory store, `get` re-reads from disk every time: the
  * directory is the authority, which keeps multi-process use (SDK uploads next to a node
  * reading the same dir) coherent without any cache-invalidation protocol.
  */
@@ -36,14 +40,14 @@ export class FileShardStore implements ShardStore {
     mkdirSync(dir, { recursive: true });
   }
 
-  private pathFor(digest: string): string {
-    // `digest` is always a `0x`-prefixed 32-byte hex string this class computed itself (see
+  private pathFor(cid: string): string {
+    // `cid` is always a `0x`-prefixed 32-byte hex string this class computed itself (see
     // `put`), never a caller-supplied path — but `get` takes arbitrary cids, so validate here
     // rather than trusting either call site.
-    if (!/^0x[0-9a-fA-F]{64}$/.test(digest) || digest.includes(sep) || digest.includes("..")) {
-      throw new Error(`unsafe shard digest ${JSON.stringify(digest)}`);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(cid) || cid.includes(sep) || cid.includes("..")) {
+      throw new Error(`unsafe shard cid ${JSON.stringify(cid)}`);
     }
-    return join(this.dir, digest.slice(2));
+    return join(this.dir, cid.slice(2));
   }
 
   async put(payload: Uint8Array): Promise<{ cid: string; digest: string }> {
@@ -52,8 +56,10 @@ export class FileShardStore implements ShardStore {
         `refusing to store ${payload.byteLength} bytes; the shard cap is ${this.maxObjectBytes}`
       );
     }
+    // Transport address (sha256) vs on-chain pin (keccak256): see the header note.
+    const cid = ethers.sha256(payload);
     const digest = ethers.keccak256(payload);
-    const path = this.pathFor(digest);
+    const path = this.pathFor(cid);
     if (!existsSync(path)) {
       // Temp + rename: a concurrent reader either sees the old state (absent) or the complete
       // new file, never a half-written one.
@@ -61,7 +67,7 @@ export class FileShardStore implements ShardStore {
       writeFileSync(tmp, payload);
       renameSync(tmp, path);
     }
-    return { cid: digest, digest };
+    return { cid, digest };
   }
 
   async get(cid: string): Promise<Uint8Array> {

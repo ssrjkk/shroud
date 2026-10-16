@@ -436,6 +436,56 @@ impl OrchestratorClient {
         Ok((q.need, q.have))
     }
 
+    /// Contributors paid per settlement call (`CipherTask.SETTLE_PAGE_SIZE`).
+    ///
+    /// Read rather than hardcoded so a future paging change moves the node with it. The
+    /// worker uses it to recognise the final page — the only page gated on reward-channel
+    /// maturity (F-22) — without guessing from a constant that lives in another repo layer.
+    pub async fn settle_page_size(&self) -> Result<U256> {
+        let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        c.SETTLE_PAGE_SIZE()
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))
+    }
+
+    /// Channel ids the vault opened for `task_id`, in opening order.
+    pub async fn channel_ids(&self, task_id: U256) -> Result<Vec<U256>> {
+        let v = IPaymentVault::new(self.vault, self.provider.clone());
+        v.channelIds(task_id)
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))
+    }
+
+    /// Whether `task_id` still has an open reward channel whose window has not matured.
+    ///
+    /// Consulted before the final settlement page only: earlier pages pay contributors from
+    /// the frozen pool, which node locks can never eat into, so they must not wait.
+    pub async fn has_immature_channels(&self, task_id: U256) -> Result<bool> {
+        let v = IPaymentVault::new(self.vault, self.provider.clone());
+        v.hasImmatureChannels(task_id)
+            .call()
+            .await
+            .map_err(|e| Error::Alloy(format!("{e}")))
+    }
+
+    /// Earliest chain time at which no channel of `task_id` is immature anymore.
+    ///
+    /// `None` means nothing is outstanding and the final page may run now. This is what the
+    /// worker waits for instead of burning gas on a `ChannelsImmature` revert every poll for
+    /// the whole reward window.
+    pub async fn immature_until(&self, task_id: U256, now: u64) -> Result<Option<u64>> {
+        let mut until: Option<u64> = None;
+        for id in self.channel_ids(task_id).await? {
+            let ch = self.channel(id).await?;
+            if !ch.closed && ch.unlock_at > now {
+                until = Some(until.map_or(ch.unlock_at, |u: u64| u.min(ch.unlock_at)));
+            }
+        }
+        Ok(until)
+    }
+
     /// Full channel state as the vault holds it.
     pub async fn channel(&self, channel_id: U256) -> Result<ChannelOnChain> {
         let v = IPaymentVault::new(self.vault, self.provider.clone());
@@ -485,7 +535,10 @@ impl OrchestratorClient {
     /// and it is a hard error rather than a warning.
     pub async fn verify_key_pin(&self, cfg: &Config) -> Result<()> {
         if !cfg.node.enforce_key_pin {
-            info!("node.enforce_key_pin is off; the on-chain key is not checked");
+            // Loud, not silent: without the pin nothing would notice a substituted `s_pub`
+            // (threat model F-08) — the node would train under the attacker's key and look
+            // healthy doing it. Operators who accept that must do so knowingly.
+            warn!("node.enforce_key_pin is off; the on-chain FHE key is NOT checked — a substituted s_pub would go undetected");
             return Ok(());
         }
         let local = cfg
@@ -613,6 +666,45 @@ impl OrchestratorClient {
             "reportDispute"
         );
         info!(%task_id, epoch, %hash, "dispute reported");
+        Ok(hash)
+    }
+
+    /// Commit to a dispute digest without revealing it (commit-reveal front half).
+    ///
+    /// `commitment` must be `transcript::dispute_commitment(digest, salt, operator)`. The
+    /// digest stays hidden until the reveal, so a mempool observer cannot copy the report
+    /// into its own dispute for free.
+    pub async fn commit_dispute(
+        &self,
+        task_id: U256,
+        epoch: u32,
+        commitment: B256,
+    ) -> Result<B256> {
+        let contract = ICipherTaskWrite::new(self.cipher_task, self.provider.clone());
+        let hash = submit_tx!(
+            contract.commitDispute(task_id, epoch, commitment),
+            None,
+            "commitDispute"
+        );
+        info!(%task_id, epoch, %hash, "dispute committed");
+        Ok(hash)
+    }
+
+    /// Reveal a committed dispute digest (commit-reveal back half).
+    pub async fn report_dispute_with_salt(
+        &self,
+        task_id: U256,
+        epoch: u32,
+        digest: B256,
+        salt: B256,
+    ) -> Result<B256> {
+        let contract = ICipherTaskWrite::new(self.cipher_task, self.provider.clone());
+        let hash = submit_tx!(
+            contract.reportDisputeWithSalt(task_id, epoch, digest, salt),
+            None,
+            "reportDisputeWithSalt"
+        );
+        info!(%task_id, epoch, %hash, "dispute revealed");
         Ok(hash)
     }
 

@@ -102,6 +102,21 @@ describe("shardstore", () => {
     assert.equal(bad.status, 416);
   });
 
+  it("serves suffix ranges per RFC 9110", async () => {
+    const body = Buffer.from("0123456789");
+    const put = await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body });
+    const { cid } = await put.json();
+    const tail = await fetch(`${BASE}/objects/${cid}`, { headers: { Range: "bytes=-4" } });
+    assert.equal(tail.status, 206);
+    assert.equal(tail.headers.get("content-range"), `bytes 6-9/${body.length}`);
+    assert.equal(await tail.text(), "6789");
+    // Суффикс длиннее объекта — весь объект; пустой суффикс — 416.
+    const whole = await fetch(`${BASE}/objects/${cid}`, { headers: { Range: "bytes=-100" } });
+    assert.equal(whole.status, 206);
+    assert.equal(await whole.text(), "0123456789");
+    assert.equal((await fetch(`${BASE}/objects/${cid}`, { headers: { Range: "bytes=-0" } })).status, 416);
+  });
+
   it("deletes objects and their disk copies", async () => {
     const body = Buffer.from("ephemeral");
     const { cid } = await (

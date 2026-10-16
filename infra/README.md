@@ -21,6 +21,37 @@ docker compose up -d --build devnet shardstore
   (plus the shell-sourcable `addresses.env`).
 - `shardstore` serves the content-addressed store the SDK talks to (`PUT /objects`, `GET /objects/:cid`).
 
+### 1a. ShardStore perimeter (`infra/shardstore/guard.mjs`)
+
+The DA is a public HTTP surface, so it runs behind an in-process guard (zero
+dependencies, in-memory engines + `StoreAdapter` interface for a future Redis swap):
+
+- hierarchical throttling: global load-shed + per-IP quotas, reads and writes priced
+  separately (`429` + `Retry-After`); repeat offenders land in a penalty box with
+  exponential backoff `t·2^k` (capped);
+- decay risk scoring per IP (auth failures, rate hits, 404-probing, duplicate
+  payloads, machine-regular PUT timing): `MEDIUM` → tarpit on violating requests,
+  `HIGH` → shadowban — an authorized write gets a plausible `201` with the correct
+  cid but is **not stored** (subsequent `GET` → `404`), so the attacker cannot tell
+  isolation from success;
+- `Idempotency-Key` on PUT (replay returns the first result, parallel duplicates
+  collapse into one execution — singleflight), strict input sanitization
+  (null-bytes, dot-segments, invisible unicode, single-range only), bearer-auth
+  timing-safe compare, `x-request-id` tracing, secret-masked JSONL audit
+  (`FRAUD`/`RATE_LIMIT`/`SHADOWBAN` series) and in-memory metrics on `/healthz`;
+- fail-open everywhere: guard failure → `CRITICAL` log + local pass, never a 500
+  from the guard itself; disk persist runs behind a Circuit Breaker (fallback:
+  memory-only + `degraded` + DLQ spill); atomic `tmp+rename` writes; socket
+  timeouts; global in-flight byte budget; `SIGINT`/`SIGTERM` graceful shutdown
+  with a deadline (`SHUTDOWN_TIMEOUT_MS`, default 10s).
+
+Tuning is env-only, all `GUARD_*` (see `loadGuardConfig` defaults in `guard.mjs`):
+`GUARD_WRITE_BURST`/`GUARD_WRITE_RPS`, `GUARD_PENALTY_*`, `GUARD_RISK_*`,
+`GUARD_TARPIT_*`, `GUARD_IDEMPOTENCY_*`, `GUARD_CB_*`, `GUARD_MAX_INFLIGHT_BYTES`.
+Tests: `guard.test.mjs` (27 unit proofs incl. 50-way race singleflight) and
+`hardening.test.mjs` (live-server: 429, penalty block, shadowban isolation,
+idempotent replay, graceful restart with data intact).
+
 The SDK smoke tests cross-check their embedded ABIs against the compiled contracts, so the
 contracts must be compiled first: `cd packages/contracts && npm run build`.
 
@@ -79,7 +110,14 @@ bls_pub_key = "0x..."     # per-task registration identity (must be unique per t
 min_epoch_window = { secs = 300, nanos = 0 }  # refuse commits with less time left (a
                           # commit that cannot finish before the deadline is burned gas)
 enforce_key_pin = false   # opt-in: refuse to start unless fhe.public_key_hash equals
-                          # the on-chain pin (one check at boot, not per epoch)
+                          # the on-chain pin (one check at boot, not per epoch).
+                          # Off logs a WARN naming F-08: without the pin a substituted
+                          # s_pub is undetectable. Devnet sets neither field.
+strict_weights = false    # opt-in: refuse epochs whose seed weights are not a decodable
+                          # shroud/weights/v1 file, instead of executing from genesis
+                          # zeros. Default off is a consensus choice (every node running
+                          # this code agrees on zeros); turn on when buyers always
+                          # publish SDK-encoded seeds and drift must be loud.
 
 [fhe]
 backend = "reference"     # reference | tfhe-short-integer | tfhe-concrete | accelerator
@@ -101,6 +139,20 @@ max_ciphertext_bytes = 8589934592
 [stark]
 digest_only = false       # true = dispute-only watchdog: never join the commit race,
                           # only re-execute, report and collect payment duties
+
+[mesh]
+# listen = "0.0.0.0:7331" # gRPC endpoint peers dial (compose maps it per node)
+# Peers are untrusted: fetch_shard does disk I/O and gossip writes grow the shard
+# index, so inbound work is token-bucketed per peer IP (burst headroom, sustained rate)
+# and gossip streams are capped per connection. Over quota → gRPC RESOURCE_EXHAUSTED
+# (fetch) or a negative ack on the stream (gossip); the stream stays alive.
+inbound_rps = 100           # sustained inbound requests/sec per peer IP
+inbound_burst = 200         # burst headroom per peer IP
+max_streams_per_connection = 100  # each gossip stream costs a task + channel
+# mTLS (all three or none; without it the mesh serves plaintext — logged as WARN):
+# mtls_cert = "/keys/mesh.crt"
+# mtls_key = "/keys/mesh.key"
+# ca_cert = "/keys/ca.crt"
 ```
 
 Backend choice is a privacy decision, not just a performance one: `reference`
@@ -109,3 +161,11 @@ refuses anything else rather than training on bytes it cannot read. Point it at 
 encrypted shards and every epoch errors out loudly with no gas spent. Encrypted data
 needs a `tfhe-*` backend **plus** `server_key_path`, on a binary built with
 `--features prover`.
+
+Settlement timing is a protocol rule, not an operator choice: the final settlement page
+reverts `ChannelsImmature` while any reward channel of the task is still redeemable, and
+succeeds once the 7-day reward window passes. Contributor pages settle any time; the
+committee cut and buyer refund land up to one window after the last epoch. The node waits
+for the earliest channel `unlockAt` instead of burning gas on the revert, and disputes go
+out commit-reveal (`commitDispute` → `reportDisputeWithSalt`), so no operator action is
+needed on either path.

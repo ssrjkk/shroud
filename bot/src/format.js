@@ -214,6 +214,16 @@ export function renderDispute(ev) {
     `\n\n${mono(`block ${ev.blockNumber}`)} ${mono(`tx ${shortHash(ev.txHash)}`)}`;
 
   switch (ev.name) {
+    case "DisputeCommitted":
+      return (
+        `${WARN} <b>Dispute commitment posted</b>\n\n` +
+        `task ${mono(shortId(a.taskId))} · epoch ${mono(a.epoch)}\n` +
+        `reporter ${mono(shortAddr(a.reporter))}\n\n` +
+        `A node committed to a dispute digest without revealing it yet (commit-reveal ` +
+        `against mempool front-running). A commitment with no follow-up reveal is a stuck ` +
+        `reporter — or someone testing the quorum.` +
+        tail
+      );
     case "DisputeReported":
       return (
         `${WARN} <b>Dispute reported</b>\n\n` +

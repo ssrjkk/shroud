@@ -11,7 +11,7 @@ on:
 jobs:
   test:
     name: server unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: infra/shardstore
@@ -20,4 +20,4 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - run: node --test server.test.mjs
+      - run: node --test guard.test.mjs server.test.mjs hardening.test.mjs

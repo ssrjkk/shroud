@@ -143,6 +143,15 @@ library SettlementLib {
             emit SettleProgress(taskId, end, count);
             return Outcome(false, userPool, committeePool, 0);
         }
+
+        // Final page: every reward channel must have matured (redeemed, reclaimed, or swept
+        // above). Paying the committee/buyer legs against an incomplete balance permanently
+        // shorts them — the task is terminal after this call, so no later call can top them
+        // up (threat model F-22). Contributor pages are unaffected and may run at any time:
+        // their shares come from the frozen pool, which node locks can never eat into.
+        // If this reverts, wait out the reward window and call again; settlement is
+        // permissionless, so anyone can finish it.
+        if (vault.hasImmatureChannels(taskId)) revert ICipherTask.ChannelsImmature(taskId);
         s.settled[taskId] = true;
 
         uint128 dust = userPool > uint128(distributed) ? uint128(userPool) - uint128(distributed) : 0;
