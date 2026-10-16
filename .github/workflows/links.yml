@@ -39,5 +39,6 @@ jobs:
           args: >-
             --no-progress
             --max-retries 3
+            --exclude '^/shroud/$'
             README.md docs/ web/
           fail: true
