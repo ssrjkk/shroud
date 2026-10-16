@@ -100,6 +100,17 @@ jobs:
       - run: npx hardhat node --hostname 127.0.0.1 --port 8545 &
         working-directory: packages/contracts
       - run: sleep 12
+      # Keep the automining devnet producing blocks like any live chain: the watcher
+      # only folds logs with `finality.confirmations` (2) behind the head, and after
+      # the seal no one transacts until the nodes register -- without a timer the
+      # seal never confirms and both nodes wait forever (devnet-execute-check timeout).
+      - name: enable interval mining on devnet
+        run: |
+          resp=$(curl -s -X POST -H 'Content-Type: application/json' \
+            --data '{"jsonrpc":"2.0","method":"evm_setIntervalMining","params":[2000],"id":1}' \
+            http://127.0.0.1:8545)
+          echo "$resp"
+          echo "$resp" | grep -q '"result":true' || (echo "interval mining not enabled" && exit 1)
       - run: npm run deploy:devnet
         working-directory: packages/contracts
       - run: npx hardhat run scripts/devnet-e2e-check.ts --network localhost
@@ -161,6 +172,31 @@ jobs:
               const tx = await faucet.sendTransaction({ to, value: ethers.parseEther('2') });
               await tx.wait();
               console.log('funded operator B', to);
+            })();
+          "
+        working-directory: packages/contracts
+        env:
+          OPERATOR_B_KEY: ${{ env.OPERATOR_B_KEY }}
+      # Pre-fund B's registration bond AND approval before its node starts: with no
+      # TestToken balance `registerNode` reverts `TransferFailed`, the worker burns its
+      # 5 bounded retries on task 1, and the nonce manager drifts (attempt 5 fails with
+      # "Nonce too high") -- wedging B before task 2 is even created.
+      - name: pre-fund operator B bond and approval
+        run: |
+          node -e "
+            const { ethers } = require('ethers');
+            (async () => {
+              const provider = new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+              const addrs = require('../../infra/devnet/addresses.json');
+              const faucet = new ethers.Wallet('0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider);
+              const token = new ethers.Contract(addrs.token, ['function mint(address,uint256)', 'function balanceOf(address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], provider);
+              const vault = new ethers.Contract(addrs.vault, ['function REGISTRATION_BOND() view returns (uint256)'], provider);
+              const bond = await vault.REGISTRATION_BOND();
+              const b = new ethers.Wallet(process.env.OPERATOR_B_KEY, provider);
+              const addrB = await b.getAddress();
+              await (await token.connect(faucet).mint(addrB, bond)).wait();
+              await (await token.connect(b).approve(addrs.vault, ethers.MaxUint256)).wait();
+              console.log('prefunded operator B', addrB, 'bond', bond.toString());
             })();
           "
         working-directory: packages/contracts
