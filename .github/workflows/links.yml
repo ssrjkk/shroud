@@ -36,9 +36,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # 404.html is excluded: its only unresolvable link is the Pages `<base>`
+          # deployment tag, and its external footer links byte-duplicate the five
+          # checked pages. The branch-links job above still guards 404 for /main/.
           args: >-
             --no-progress
             --max-retries 3
-            --exclude '^/shroud/$'
+            --exclude-path 'web/404.html'
             README.md docs/ web/
           fail: true
