@@ -155,6 +155,37 @@ export function mismatchArgs(ev, prev) {
 }
 
 /**
+ * Resolve the command to dispatch: the abuse guard's single parse wins, raw text is only
+ * re-parsed when the guard failed open (its verdict then carries no name).
+ *
+ * Two parsers on the same text drifted before: the guard trims, the handler did not, so
+ * `"  /pool"` was accounted as the 15-cost `pool` but dispatched as `` (help). One parse,
+ * one accounting, one dispatch.
+ */
+export function commandFromVerdict(verdict, text) {
+  if (verdict && typeof verdict.name === "string") {
+    return { name: verdict.name, args: Array.isArray(verdict.args) ? verdict.args : [] };
+  }
+  const [rawName, ...args] = text.split(/\s+/);
+  const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
+  return { name, args };
+}
+
+/**
+ * Reply to a command through the bounded send queue, never past it.
+ *
+ * `pollCommands` used raw `sendMessage`: a reply storm bypassed the queue cap, the
+ * `droppedSends` counter and the /status shed warning — the one path exempt from the
+ * accounting every other send goes through. Returns true when Telegram accepted the
+ * reply, false when the queue shed it under load (the operator sees the shed count
+ * in /status; silence under load is data loss only if it is invisible).
+ */
+export async function sendReply(bot, chatId, text, html) {
+  const out = await bot.sendQueued(chatId, text, html ? { parse_mode: "HTML" } : {});
+  return out?.dropped !== true;
+}
+
+/**
  * Command handlers over an already-resolved chain reader.
  *
  * Exported for tests: `main` wires the real reader, tests hand a stub whose calls
@@ -322,8 +353,7 @@ async function main() {
     }
     try {
       return await abuseGuard.runHandler(msg.chat?.id ?? "unknown", async () => {
-        const [rawName, ...args] = text.split(/\s+/);
-        const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
+        const { name, args } = commandFromVerdict(verdict, text);
         const handler = handlers[name];
         if (!handler) {
           return renderHelp();
@@ -370,7 +400,7 @@ async function main() {
 
           const reply = await handleCommand(msg);
           if (reply) {
-            await bot.sendMessage(msg.chat.id, reply, config.html ? { parse_mode: "HTML" } : {});
+            await sendReply(bot, msg.chat.id, reply, config.html);
           }
         }
       } catch (err) {
