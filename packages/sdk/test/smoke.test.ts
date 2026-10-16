@@ -520,6 +520,36 @@ test("HttpShardStore.getRange checks that the bytes really are the requested win
   }
 });
 
+test("HttpShardStore.getVerified memoizes verified bytes and isolates callers", async () => {
+  // A re-executing node pulls the same shard per epoch it checks: one fetch, N epochs.
+  // The memo key binds cid AND digest, and cached bytes are copies — mutating a return
+  // must not poison later reads, and a different digest must re-fetch, never hit.
+  const original = globalThis.fetch;
+  try {
+    let calls = 0;
+    const payload = new TextEncoder().encode("cached-shard");
+    const cid = ethers.keccak256(new Uint8Array([1]));
+    const digest = ethers.keccak256(payload);
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(payload.slice(), { status: 200 });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid");
+    const first = await store.getVerified(cid, digest);
+    const second = await store.getVerified(cid, digest);
+    assert.deepEqual(Array.from(second), Array.from(payload));
+    assert.equal(calls, 1);
+    first[0] ^= 0xff; // caller mutates its copy
+    const third = await store.getVerified(cid, digest);
+    assert.deepEqual(Array.from(third), Array.from(payload));
+    assert.equal(calls, 1);
+    await assert.rejects(() => store.getVerified(cid, ethers.ZeroHash), /failed integrity check/);
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("HttpShardStore.getVerified rejects bytes that do not match the committed digest", async () => {
   // The integrity decision must be made locally. A store that returns the wrong object has to be
   // distinguishable from an honest one, otherwise a re-executor compares digests against itself.

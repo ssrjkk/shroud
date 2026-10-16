@@ -128,6 +128,8 @@ export class HttpShardStore implements ShardStore {
   /** 64 MiB. A shard is FHE ciphertext for one contribution; anything larger is a mistake or an attack. */
   static readonly DEFAULT_MAX_OBJECT_BYTES = 64 * 1024 * 1024;
   static readonly DEFAULT_TIMEOUT_MS = 30_000;
+  /** Verified-bytes memo entries (FIFO). Content-addressed: a hit re-verified nothing. */
+  static readonly VERIFIED_CACHE_ENTRIES = 256;
 
   private readonly baseUrl: string;
   private readonly authToken?: string;
@@ -135,6 +137,7 @@ export class HttpShardStore implements ShardStore {
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
   private readonly retryBaseMs: number;
+  private readonly verifiedCache = new Map<string, Uint8Array>();
 
   constructor(baseUrl: string, opts: HttpShardStoreOptions = {}) {
     // A trailing slash would produce `//objects` and break the path.
@@ -307,10 +310,22 @@ export class HttpShardStore implements ShardStore {
    *
    * `expectedCtDigest` is the on-chain `ctDigest` (keccak256). The store's own addressing is
    * ignored for the integrity decision: the bytes are hashed locally and compared.
+   *
+   * Verified bytes are memoized (bounded, FIFO): a re-executing node pulls the same shard
+   * for every epoch it checks, and a content-addressed object verified once against its
+   * digest cannot change under the same address. The cache never serves unverified bytes.
    */
   async getVerified(cid: string, expectedCtDigest: string): Promise<Uint8Array> {
+    const key = `${cid}:${expectedCtDigest.toLowerCase()}`;
+    const hit = this.verifiedCache.get(key);
+    if (hit) return Uint8Array.from(hit);
     const bytes = await this.get(cid);
     assertDigest(bytes, expectedCtDigest, cid);
+    this.verifiedCache.set(key, Uint8Array.from(bytes));
+    if (this.verifiedCache.size > HttpShardStore.VERIFIED_CACHE_ENTRIES) {
+      const oldest = this.verifiedCache.keys().next();
+      if (!oldest.done) this.verifiedCache.delete(oldest.value);
+    }
     return bytes;
   }
 
