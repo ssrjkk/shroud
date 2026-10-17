@@ -243,9 +243,8 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
-    // Bound before buffering: stat the object first so a hostile backend cannot make
-    // the node eat an unbounded body just to reject it afterwards. The post-read check
-    // below stays as the second net for objects that grow between the two calls.
+    // Bound before buffering: stat the object first so an honest oversize
+    // object fails without any body transfer.
     let meta = store
         .head(&location)
         .await
@@ -261,18 +260,43 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
         .get(&location)
         .await
         .map_err(|e| Error::Other(anyhow::anyhow!("da fetch of {cid:#x} from {url}: {e}")))?;
-    let bytes = result
-        .bytes()
-        .await
-        .map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(Error::ShardStore(ShardError::TooLarge {
-            cid: *cid,
-            size: bytes.len() as u64,
-            max: max_bytes,
-        }));
+    // ...but `head` is the server's own claim: stream the body and enforce the
+    // cap chunk by chunk. Buffering first and checking afterwards would let a
+    // backend that understates the size make the node hold an unbounded body
+    // just to reject it (the same shape the SDK's readCapped guards against).
+    read_capped(result.into_stream(), cid, max_bytes, url).await
+}
+
+/// Drain a byte stream enforcing the budget chunk by chunk.
+///
+/// Split out of `fetch_remote` so the cap logic is unit-testable without a
+/// network: the security property is that an understated size never lets the
+/// buffer grow past `max_bytes`, no matter what the metadata claimed.
+#[cfg(feature = "da")]
+async fn read_capped<S, E>(mut stream: S, cid: &B256, max_bytes: u64, url: &str) -> Result<Vec<u8>>
+where
+    S: futures::Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    use futures::StreamExt;
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk
+            .map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
+        // saturating: chunk lengths arrive over the network, and hostile
+        // lengths must be errors, never panics.
+        let grown = (bytes.len() as u64).saturating_add(chunk.len() as u64);
+        if grown > max_bytes {
+            return Err(Error::ShardStore(ShardError::TooLarge {
+                cid: *cid,
+                size: grown,
+                max: max_bytes,
+            }));
+        }
+        bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 #[cfg(feature = "da")]
@@ -406,6 +430,71 @@ mod tests {
             .await
             .expect("fetch");
         assert_eq!(back, bytes);
+    }
+
+    #[cfg(feature = "da")]
+    #[tokio::test]
+    async fn remote_body_is_stream_capped_despite_lying_metadata() {
+        // The security property behind the streaming read: chunks are capped
+        // as they arrive, so a backend that understated HEAD can never push
+        // the buffer past max_bytes, no matter how much it sends. A synthetic
+        // stream (not a socket) keeps this hermetic: CI sandboxes may proxy
+        // or block even localhost HTTP.
+        use futures::stream;
+        let cid = B256::repeat_byte(0x4);
+        let chunks: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+            Ok(bytes::Bytes::from_static(b"0123456789")),
+            Ok(bytes::Bytes::from_static(b"0123456789")),
+            Ok(bytes::Bytes::from_static(b"0123456789")),
+        ];
+        let err = read_capped(stream::iter(chunks), &cid, 25, "test://lying")
+            .await
+            .expect_err("third chunk breaks the cap");
+        assert!(
+            matches!(
+                err,
+                Error::ShardStore(ShardError::TooLarge {
+                    size: 30,
+                    max: 25,
+                    ..
+                })
+            ),
+            "unexpected: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "da")]
+    #[tokio::test]
+    async fn remote_small_body_streams_fine() {
+        // The honest path through the same code: capped chunks assemble in order.
+        use futures::stream;
+        let cid = B256::repeat_byte(0x5);
+        let chunks: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+            Ok(bytes::Bytes::from_static(b"ab")),
+            Ok(bytes::Bytes::from_static(b"cd")),
+            Ok(bytes::Bytes::from_static(b"")),
+        ];
+        let back = read_capped(stream::iter(chunks), &cid, 64, "test://honest")
+            .await
+            .expect("honest body");
+        assert_eq!(back, b"abcd");
+    }
+
+    #[cfg(feature = "da")]
+    #[tokio::test]
+    async fn remote_stream_error_is_not_a_size_error() {
+        // A transport failure mid-body must surface as-is, not as TooLarge,
+        // so operators do not chase a byte budget for a network fault.
+        use futures::stream;
+        let cid = B256::repeat_byte(0x6);
+        let chunks: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+            Ok(bytes::Bytes::from_static(b"ab")),
+            Err("connection reset".to_string()),
+        ];
+        let err = read_capped(stream::iter(chunks), &cid, 64, "test://flaky")
+            .await
+            .expect_err("transport failure");
+        assert!(matches!(err, Error::Other(_)), "unexpected: {err:?}");
     }
 
     #[cfg(not(feature = "da"))]
