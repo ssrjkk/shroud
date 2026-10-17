@@ -239,7 +239,6 @@ fn object_path(prefix: &str, cid: &B256) -> object_store::path::Path {
 
 #[cfg(feature = "da")]
 async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> {
-    use futures::StreamExt;
     use object_store::ObjectStoreExt;
 
     let (store, prefix) = store_for(url).await?;
