@@ -9,7 +9,8 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeEvents, eventUid, commandFromVerdict, sendReply } from "../src/index.js";
+import { dedupeEvents, eventUid, commandFromVerdict, sendReply, shouldDeliverAlert } from "../src/index.js";
+import { emptyState, addWatch, setAlertOverride } from "../src/watchlist.js";
 
 test("eventUid binds a log to its transaction hash and index", () => {
   assert.equal(eventUid({ txHash: "0xabc", logIndex: 3 }), "0xabc:3");
@@ -81,4 +82,54 @@ test("sendReply goes through the bounded queue, never raw sendMessage", async ()
   // Shed under load is visible (false), not silent.
   const shedder = { sendQueued: async () => ({ dropped: true }) };
   assert.equal(await sendReply(shedder, 7, "hi", false), false);
+  // Handler-shaped replies carry their keyboard through the same queue.
+  const kb = { inline_keyboard: [] };
+  const viaMarkup = { sendQueued: async (...a) => (calls.push(["queued", ...a]), {}) };
+  assert.equal(await sendReply(viaMarkup, 7, { text: "hi", markup: kb }, true), true);
+  assert.deepEqual(calls.at(-1), ["queued", 7, "hi", { parse_mode: "HTML", reply_markup: kb }]);
+});
+
+/**
+ * Delivery routing: the matrix behind the broadcast loop.
+ *
+ * A wrong row here is either a missed security alert (flag logic) or spam
+ * (watchlist logic), so every combination of flag source × watchlist state ×
+ * alert scope is pinned rather than left to inspection.
+ */
+const ALL_ON = { commitMismatch: true, disputes: true, keyRotation: true };
+
+test("shouldDeliverAlert follows the global flags by default", () => {
+  const state = emptyState();
+  assert.ok(shouldDeliverAlert({ key: "disp", taskId: "42" }, ALL_ON, state, 1));
+  assert.ok(shouldDeliverAlert({ key: "rot", taskId: null }, ALL_ON, state, 1));
+  assert.ok(!shouldDeliverAlert({ key: "disp", taskId: "42" }, { ...ALL_ON, disputes: false }, state, 1));
+  // Rotation still flows when only disputes are off.
+  assert.ok(shouldDeliverAlert({ key: "rot", taskId: null }, { ...ALL_ON, disputes: false }, state, 1));
+});
+
+test("shouldDeliverAlert lets a chat override the global flags either way", () => {
+  const state = emptyState();
+  const off = { commitMismatch: false, disputes: false, keyRotation: false };
+  assert.ok(!shouldDeliverAlert({ key: "mm", taskId: "1" }, off, state, 1));
+  setAlertOverride(state, 1, "mm", true);
+  assert.ok(shouldDeliverAlert({ key: "mm", taskId: "1" }, off, state, 1));
+  // …and lets it silence what is globally loud.
+  setAlertOverride(state, 1, "disp", false);
+  assert.ok(!shouldDeliverAlert({ key: "disp", taskId: "1" }, ALL_ON, state, 1));
+});
+
+test("shouldDeliverAlert filters task alerts by watchlist, never rotation", () => {
+  const state = emptyState();
+  addWatch(state, 1, "42");
+  assert.ok(shouldDeliverAlert({ key: "disp", taskId: "42" }, ALL_ON, state, 1));
+  assert.ok(!shouldDeliverAlert({ key: "disp", taskId: "43" }, ALL_ON, state, 1));
+  assert.ok(!shouldDeliverAlert({ key: "mm", taskId: "43" }, ALL_ON, state, 1));
+  // Rotation is global: the watchlist never gates it.
+  assert.ok(shouldDeliverAlert({ key: "rot", taskId: null }, ALL_ON, state, 1));
+  // Other chats keep the default everything-filter.
+  assert.ok(shouldDeliverAlert({ key: "disp", taskId: "43" }, ALL_ON, state, 2));
+});
+
+test("shouldDeliverAlert drops unknown alert keys instead of broadcasting", () => {
+  assert.ok(!shouldDeliverAlert({ key: "nope", taskId: "1" }, ALL_ON, emptyState(), 1));
 });

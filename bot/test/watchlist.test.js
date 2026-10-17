@@ -19,6 +19,7 @@ import {
   loadWatchlist,
   saveWatchlist,
   createMemoryStore,
+  createFileStore,
   addWatch,
   removeWatch,
   setAlertOverride,
@@ -114,4 +115,37 @@ test("memory store mirrors the file-store mutation contract", async () => {
   assert.deepEqual(store.listWatched(1), ["5"]);
   await store.setAlert(1, "mm", false);
   assert.deepEqual(effectiveAlerts({ commitMismatch: true }, store.state(), 1).mm, false);
+});
+
+test("file store persists every mutation to disk", async () => {
+  const file = tmpFile();
+  const store = createFileStore(file);
+  await store.addWatch(3, "11");
+  await store.setAlert(3, "disp", false);
+  // A fresh load sees both mutations: nothing lived only in memory.
+  const back = await loadWatchlist(file);
+  assert.deepEqual(back.chats["3"].watched, ["11"]);
+  assert.deepEqual(back.chats["3"].alerts, { disp: false });
+  // No-op mutations skip the write but stay truthful.
+  const again = await store.addWatch(3, "11");
+  assert.ok(!again.added);
+  const gone = await store.removeWatch(3, "11");
+  assert.ok(gone.removed);
+  assert.deepEqual((await loadWatchlist(file)).chats["3"].watched, []);
+});
+
+test("file store replaceState swaps the whole world (startup load)", async () => {
+  const file = tmpFile();
+  const store = createFileStore(file);
+  await store.addWatch(1, "1");
+  store.replaceState({ chats: { 9: { watched: ["42"], alerts: { rot: true } } } });
+  assert.deepEqual(store.listWatched(1), []);
+  assert.deepEqual(store.listWatched(9), ["42"]);
+  assert.equal(effectiveAlerts({}, store.state(), 9).rot, true);
+});
+
+test("file store starts empty when constructed without history", async () => {
+  const file = tmpFile();
+  const store = createFileStore(file);
+  assert.deepEqual(store.listWatched(12345), []);
 });

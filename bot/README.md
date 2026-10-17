@@ -138,7 +138,7 @@ know.
 npm test
 ```
 
-88 tests, no bot token and no chain required. They cover the parts that fail
+103 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -163,7 +163,11 @@ quietly in production:
   a throw), every emitted payload fits the 64-byte cap, pool pages clamp,
   watch/unwatch flip state with a toast, alert toggles resolve against globals
 - watchlist persistence: atomic tmp+rename writes, corrupt-file backup with an
-  empty start, empty-means-everything filtering
+  empty start, empty-means-everything filtering, file-store mutation contract
+- delivery routing: flag source × watchlist × alert scope matrix, unknown keys
+  dropped rather than broadcast
+- transport: callback ack/edit payloads, toast truncation, explicit 4096-cut
+  that always fits, stale-edit fallback contract
 
 ## Honest limits of the bot itself
 

@@ -125,6 +125,21 @@ async function saveCursor(cursor, seen) {
 }
 
 /**
+ * Whether a scanned alert reaches a chat.
+ *
+ * Pure routing behind the broadcast loop: the effective flag (per-chat
+ * override wins, otherwise global) decides first, then the watchlist (empty
+ * means everything; task-scoped alerts only for watched tasks; global
+ * rotation alerts carry no task and skip the filter). Exported so the matrix
+ * is pinned by tests instead of by reading the poll loop.
+ */
+export function shouldDeliverAlert(alert, globalAlerts, state, chatId) {
+  const eff = effectiveAlerts(globalAlerts ?? {}, state, chatId);
+  if (!eff[alert.key]) return false;
+  return passesWatchlist(state, chatId, alert.taskId);
+}
+
+/**
  * Stable identity of a decoded log, or `null` when the log carries none.
  *
  * `txHash:logIndex` survives reorgs (a reorged log has a different hash) and restarts.
@@ -792,20 +807,13 @@ async function main() {
   }
 
   /**
-   * Deliver one scanned alert to every chat that wants it.
-   *
-   * Two filters, both per chat: the effective alert flag (override wins,
-   * otherwise global) and the watchlist (empty means everything;
-   * task-scoped alerts for watched tasks only). Rotation alerts carry no
-   * task and skip the watchlist. Exported for tests: the poll loop is
-   * infinite, the routing is pure enough to pin.
+   * Deliver one scanned alert to every chat that wants it (see
+   * `shouldDeliverAlert` for the routing matrix, pinned by tests).
    */
   function deliverAlert(alert) {
     const jobs = [];
     for (const chatId of config.allowedChatIds) {
-      const eff = effectiveAlerts(config.alerts ?? {}, watchStore.state(), chatId);
-      if (!eff[alert.key]) continue;
-      if (!passesWatchlist(watchStore.state(), chatId, alert.taskId)) continue;
+      if (!shouldDeliverAlert(alert, config.alerts, watchStore.state(), chatId)) continue;
       jobs.push(
         bot
           .sendQueued(chatId, alert.text, {

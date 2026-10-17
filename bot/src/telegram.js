@@ -27,6 +27,17 @@ export class TelegramError extends Error {
   }
 }
 
+/** Telegram silently truncates past 4096; a truncated security alert is worse
+ * than a shorter one, so the cut is explicit and the result always fits. */
+export const TELEGRAM_TEXT_LIMIT = 4096;
+const TRUNC_SUFFIX = "\n…(truncated)";
+
+export function truncateText(text) {
+  const s = String(text);
+  if (s.length <= TELEGRAM_TEXT_LIMIT) return s;
+  return `${s.slice(0, TELEGRAM_TEXT_LIMIT - TRUNC_SUFFIX.length)}${TRUNC_SUFFIX}`;
+}
+
 export class TelegramBot {
   #token;
   #base;
@@ -108,7 +119,7 @@ export class TelegramBot {
     // security alert is worse than a shorter one.
     const body = {
       chat_id: chatId,
-      text: text.length > 4096 ? `${text.slice(0, 4090)}\n…(truncated)` : text,
+      text: truncateText(text),
       disable_web_page_preview: true,
       ...extra,
     };
@@ -173,7 +184,7 @@ export class TelegramBot {
       return await this.#call("editMessageText", {
         chat_id: chatId,
         message_id: messageId,
-        text: text.length > 4096 ? `${text.slice(0, 4090)}\n…(truncated)` : text,
+        text: truncateText(text),
         disable_web_page_preview: true,
         ...extra,
       });
