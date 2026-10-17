@@ -103,9 +103,12 @@ function normalizeChainId(v: unknown): bigint | undefined {
 }
 
 /** Minimal ERC-20 surface the SDK needs for bond approvals. Never add transfer here:
- *  the SDK moves no funds of its own; approvals are the only token writes it performs. */
+ *  the SDK moves no funds of its own; approvals are the only token writes it performs.
+ *  `increaseAllowance` is preferred over `approve` for tokens like USDT that require
+ *  zero-first (they revert on non-zero-to-nonzero approve). */
 const ERC20_MIN_ABI = [
   "function approve(address spender, uint256 amount) returns (bool)",
+  "function increaseAllowance(address spender, uint256 addedValue) returns (bool)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function balanceOf(address account) view returns (uint256)",
 ] as const;
@@ -194,6 +197,23 @@ export class ShroudSdk {
   }
 
   private providerFallback?: Provider;
+
+  /**
+   * The provider reads go through. `cfg.provider` wins when set (see the constructor);
+   * otherwise the signer's own provider is used. Fails closed when neither exists —
+   * every `provider.*` call below is a consensus read (chain id, block time) or a
+   * preflight simulation, and silently running those against `undefined` is how
+   * wrong-chain signatures and phantom submissions happen.
+   */
+  private activeProvider(): Provider {
+    const p = this.providerFallback ?? this.signer.provider;
+    if (!p) {
+      throw new Error(
+        "no provider available: pass cfg.provider or construct the SDK with a signer that carries one"
+      );
+    }
+    return p;
+  }
 
   /** Attach a provider explicitly when the signer exposes none. */
   withProvider(provider: Provider): this {
@@ -295,11 +315,18 @@ export class ShroudSdk {
     }
 
     // `submitContribution` -> ContributionWindowClosed. `windowEnd` is fixed at task creation.
+    // Use block timestamp, not Date.now(), to avoid false positives/negatives from clock skew.
     const windowEnd = BigInt(t.windowEnd ?? 0);
-    if (windowEnd > 0n && BigInt(Math.floor(Date.now() / 1000)) > windowEnd) {
-      throw new Error(
-        `the contribution window for task ${resolvedId} closed at ${windowEnd}; anyone can now seal it instead`
-      );
+    if (windowEnd > 0n) {
+      const block = await this.activeProvider().getBlock("latest");
+      // `Block.timestamp` is a number; the comparison below is against a bigint, and
+      // mixing the two throws, so normalize first. Chain time, not wall-clock: see above.
+      const nowSec = BigInt(block?.timestamp ?? Math.floor(Date.now() / 1000));
+      if (nowSec > windowEnd) {
+        throw new Error(
+          `the contribution window for task ${resolvedId} closed at ${windowEnd}; anyone can now seal it instead`
+        );
+      }
     }
 
     // `submitContribution` -> CapReached.
@@ -372,6 +399,26 @@ export class ShroudSdk {
       rowCommitment,
       rows,
     };
+
+    // TOCTOU guard: simulate the call before sending so a task that was sealed or filled
+    // between the preflight checks (lines 288-335) and now surfaces as a revert rather
+    // than burning gas on an obviously failing transaction. `from: me` matters: the real
+    // transaction runs as the contributor (bond pull included), so simulating from the
+    // zero address would false-positive on every bonded task.
+    const taskContract = this.cipherTask.contract;
+    const submitData = taskContract.interface.encodeFunctionData("submitContribution", [
+      resolvedId, shard.ciphertextCid, shard.ctDigest, shard.shapeProof, shard.rowCommitment, shard.rows,
+    ]);
+    try {
+      await this.activeProvider().call({ to: taskContract.target, from: me, data: submitData });
+    } catch (simError: any) {
+      const revertReason = simError?.reason ?? simError?.message ?? String(simError);
+      throw new Error(
+        `submitContribution dry-run reverted for task ${resolvedId}: ${revertReason}. ` +
+          `The task state may have changed (sealed/filled/closed) since the preflight checks.`
+      );
+    }
+
     const contributionTx = await this.cipherTask.submitContribution(resolvedId, shard);
 
     return { taskId: resolvedId, ...shard, contributionTx };
@@ -420,9 +467,24 @@ export class ShroudSdk {
     }
     const allowance = BigInt(await token.allowance(contributor, taskAddr));
     if (allowance < required) {
-      const tx = await token.approve(taskAddr, required);
+      // Use increaseAllowance for tokens like USDT that require zero-first (they revert on
+      // non-zero-to-nonzero approve). If increaseAllowance is not available, fall back to
+      // approve directly — it will work for standard ERC-20s.
+      let tx;
+      try {
+        tx = await (token as any)["increaseAllowance"](taskAddr, required);
+      } catch {
+        // Token doesn't support increaseAllowance: use approve directly. For USDT this
+        // would revert, so the caller must use a compatible token or this will surface.
+        tx = await token.approve(taskAddr, required);
+      }
       const receipt = await tx.wait();
-      if (!receipt) throw new Error("no receipt for the bond approval");
+      if (!receipt || receipt.status !== 1) {
+        throw new Error(
+          `bond approval transaction failed (status ${receipt?.status}) — ` +
+            `token may require zero-first approval (USDT pattern); consider using increaseAllowance`
+        );
+      }
     }
   }
 
