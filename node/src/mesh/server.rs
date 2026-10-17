@@ -42,7 +42,7 @@ use alloy::primitives::{keccak256, B256, U256};
 use sha2::{Digest as _, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, Semaphore},
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{
@@ -299,6 +299,14 @@ struct Shared {
     state: Arc<NodeState>,
     index: Arc<Mutex<ShardIndex>>,
     inbound: Arc<Mutex<InboundThrottle>>,
+    /// Global cap on in-flight mesh RPCs across ALL connections.
+    ///
+    /// M15 fix: `concurrency_limit_per_connection` alone does not stop a peer that opens
+    /// many connections. Every handler (and every spawned gossip stream) holds one permit;
+    /// when none is free the RPC is shed with `resource_exhausted` instead of spawning
+    /// another task. Shed, never queue: queueing would let a hostile peer fill memory
+    /// with pending streams while legitimate callers wait behind them.
+    in_flight: Arc<Semaphore>,
 }
 
 /// The gRPC service.
@@ -321,6 +329,7 @@ impl MeshService {
                     InboundThrottle::new(cfg.mesh.inbound_rps, cfg.mesh.inbound_burst)
                         .with_max_peers(cfg.mesh.max_throttle_peers),
                 )),
+                in_flight: Arc::new(Semaphore::new(cfg.mesh.max_global_streams.max(1))),
             }),
         }
     }
@@ -344,6 +353,15 @@ impl mesh_server::Mesh for MeshService {
         &self,
         request: Request<Streaming<Envelope>>,
     ) -> std::result::Result<Response<Self::GossipStream>, Status> {
+        // Global gate first: one permit per live gossip stream, held by the spawned task
+        // for the stream's whole life. Shed when saturated — a gossip stream that waited
+        // for a slot would hold its sender buffer open while the peer keeps writing.
+        let permit = self
+            .inner
+            .in_flight
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("mesh saturated; retry later"))?;
         // Captured before `into_inner` consumes the request: the stream loop needs the peer
         // IP for throttling peer-fed writes, and there is no other place to get it.
         let peer_ip = request.remote_addr().map(|a| a.ip());
@@ -351,6 +369,7 @@ impl mesh_server::Mesh for MeshService {
         let (tx, rx) = mpsc::channel(OUTBOUND_BUFFER);
         let shared = self.inner.clone();
         tokio::spawn(async move {
+            let _permit = permit;
             run_gossip(&mut inbound, tx, shared, peer_ip).await;
         });
         Ok(Response::new(ReceiverStream::new(rx)))
@@ -360,6 +379,14 @@ impl mesh_server::Mesh for MeshService {
         &self,
         request: Request<ShardRequest>,
     ) -> std::result::Result<Response<ShardResponse>, Status> {
+        // Global gate before any per-peer accounting or disk I/O: a range fetch is a
+        // seek + read, and the permit is held until the chunk is served.
+        let _permit = self
+            .inner
+            .in_flight
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("mesh saturated; retry later"))?;
         // Throttle before any disk I/O: a range fetch is a seek + read, and an uncapped peer
         // turns those into a disk DoS. Unknown peer address (unix socket) is admitted — the
         // throttle keys on IP, and refusing traffic we cannot attribute would break local use.
@@ -451,6 +478,14 @@ impl mesh_server::Mesh for MeshService {
         &self,
         request: Request<EpochAnnouncement>,
     ) -> std::result::Result<Response<Ack>, Status> {
+        // Cheap handler, but still gated: uniformity means one number (`max_global_streams`)
+        // bounds every task this server can be holding, with no per-RPC asterisks.
+        let _permit = self
+            .inner
+            .in_flight
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Status::resource_exhausted("mesh saturated; retry later"))?;
         let a = request.into_inner();
         let task_id = parse_id(&a.task_id).ok_or_else(|| {
             Status::invalid_argument(format!("task_id {:?} is not a decimal uint256", a.task_id))
@@ -891,8 +926,11 @@ pub async fn serve(
     };
 
     builder = builder
-        // Each gossip stream spawns a task plus a channel: uncapped streams per connection
-        // are task/memory exhaustion by handshake. The cap lives in config, not code.
+        // M15 fix: the per-connection cap alone does not stop a peer that opens many
+        // connections, so the handlers shed past `max_global_streams` in-flight RPCs
+        // (see `Shared::in_flight`). The h2-level cap stays as the inner bound: each
+        // gossip stream spawns a task plus a channel, so uncapped streams per connection
+        // are task/memory exhaustion by handshake. Both caps live in config, not code.
         .concurrency_limit_per_connection(cfg.mesh.max_streams_per_connection);
 
     builder
@@ -972,6 +1010,7 @@ mod tests {
             state: Arc::new(NodeState::new()),
             index: Arc::new(Mutex::new(ShardIndex::new(capacity))),
             inbound: Arc::new(Mutex::new(InboundThrottle::new(100, 200))),
+            in_flight: Arc::new(Semaphore::new(1024)),
         }
     }
 
@@ -1122,6 +1161,7 @@ mod tests {
             state: Arc::new(NodeState::new()),
             index: Arc::new(Mutex::new(ShardIndex::new(16))),
             inbound: Arc::new(Mutex::new(InboundThrottle::new(100, 200))),
+            in_flight: Arc::new(Semaphore::new(1024)),
         };
         let mut a = announce();
         a.bytes = 2048;

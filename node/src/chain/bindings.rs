@@ -107,7 +107,7 @@ sol! {
         function divisorFor(uint256 taskId) external view returns (uint128);
         function nodePoolOf(uint256 taskId) external view returns (uint128);
         function rewardChannelWindow() external view returns (uint64);
-        function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest) external view returns (bytes32);
+        function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest, address node) external view returns (bytes32);
         function epochChannel(uint256 taskId, uint32 epoch) external view returns (uint256);
         function epochWinner(uint256 taskId, uint32 epoch) external view returns (address);
         function nodeRegistered(uint256 taskId, address node) external view returns (bool);
