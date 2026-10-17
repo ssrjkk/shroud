@@ -239,13 +239,13 @@ fn object_path(prefix: &str, cid: &B256) -> object_store::path::Path {
 
 #[cfg(feature = "da")]
 async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> {
+    use futures::StreamExt;
     use object_store::ObjectStoreExt;
 
     let (store, prefix) = store_for(url).await?;
     let location = object_path(&prefix, cid);
-    // Bound before buffering: stat the object first so a hostile backend cannot make
-    // the node eat an unbounded body just to reject it afterwards. The post-read check
-    // below stays as the second net for objects that grow between the two calls.
+    // Bound before buffering: stat the object first so an honest oversize
+    // object fails without any body transfer.
     let meta = store
         .head(&location)
         .await
@@ -261,18 +261,28 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
         .get(&location)
         .await
         .map_err(|e| Error::Other(anyhow::anyhow!("da fetch of {cid:#x} from {url}: {e}")))?;
-    let bytes = result
-        .bytes()
-        .await
-        .map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(Error::ShardStore(ShardError::TooLarge {
-            cid: *cid,
-            size: bytes.len() as u64,
-            max: max_bytes,
-        }));
+    // ...but `head` is the server's own claim: stream the body and enforce the
+    // cap chunk by chunk. Buffering first and checking afterwards would let a
+    // backend that understates the size make the node hold an unbounded body
+    // just to reject it (the same shape the SDK's readCapped guards against).
+    let mut stream = result.into_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
+        // saturating: chunk lengths arrive over the network, and hostile
+        // headers must be errors, never panics.
+        let grown = (bytes.len() as u64).saturating_add(chunk.len() as u64);
+        if grown > max_bytes {
+            return Err(Error::ShardStore(ShardError::TooLarge {
+                cid: *cid,
+                size: grown,
+                max: max_bytes,
+            }));
+        }
+        bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
 #[cfg(feature = "da")]
@@ -406,6 +416,80 @@ mod tests {
             .await
             .expect("fetch");
         assert_eq!(back, bytes);
+    }
+
+    #[cfg(feature = "da")]
+    #[tokio::test]
+    async fn remote_body_is_stream_capped_despite_lying_metadata() {
+        // A backend that understates HEAD and floods the GET body: the byte cap
+        // must fire while streaming, not after buffering 1 MiB to reject it.
+        // std sockets (not tokio::net) so no new runtime features are needed.
+        let body_len = 1usize << 20;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            // Exactly the two requests one fetch makes: HEAD then GET.
+            for stream in listener.incoming().take(2) {
+                let mut stream = stream.expect("accept");
+                let mut buf = vec![0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if buf[..n].starts_with(b"HEAD") {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
+                        .expect("head");
+                } else {
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {body_len}\r\nConnection: close\r\n\r\n"
+                    );
+                    stream.write_all(header.as_bytes()).expect("header");
+                    let chunk = vec![0xabu8; 65536];
+                    for _ in 0..(body_len / 65536) {
+                        if stream.write_all(&chunk).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        let url = format!("http://{addr}/");
+        let cid = B256::repeat_byte(0x4);
+        let err = fetch_remote(&url, &cid, 64).await.expect_err("lying body must be refused");
+        assert!(
+            matches!(err, Error::ShardStore(ShardError::TooLarge { .. })),
+            "unexpected: {err:?}"
+        );
+    }
+
+    #[cfg(feature = "da")]
+    #[tokio::test]
+    async fn remote_small_body_streams_fine() {
+        // The honest path through the same streaming code: 8 bytes claimed, 8 served.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in listener.incoming().take(2) {
+                let mut stream = stream.expect("accept");
+                let mut buf = vec![0u8; 4096];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                if buf[..n].starts_with(b"HEAD") {
+                    stream
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
+                        .expect("head");
+                } else {
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n\xab\xab\xab\xab\xab\xab\xab\xab",
+                        )
+                        .expect("body");
+                }
+            }
+        });
+        let url = format!("http://{addr}/");
+        let cid = B256::repeat_byte(0x5);
+        let back = fetch_remote(&url, &cid, 64).await.expect("honest body");
+        assert_eq!(back, vec![0xabu8; 8]);
     }
 
     #[cfg(not(feature = "da"))]
