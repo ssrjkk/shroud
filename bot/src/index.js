@@ -668,13 +668,15 @@ async function main() {
         } catch (err) {
           // A failing command must not kill the process: an ops bot that crashes on
           // one bad RPC read is worse than one that says "that failed".
-          return { text: `could not complete /${name}: ${err.message}`, markup: undefined };
+          // err.message is escaped: replies go out with parse_mode HTML and a raw
+          // "<" from an RPC/proxy error would make Telegram reject the send (400).
+          return { text: `could not complete /${name}: ${htmlEscape(err.message)}`, markup: undefined };
         }
       });
     } catch (err) {
       // A failing command must not kill the process: an ops bot that crashes on
       // one bad RPC read is worse than one that says "that failed".
-      return { text: `could not complete: ${err.message}`, markup: undefined };
+      return { text: `could not complete: ${htmlEscape(err.message)}`, markup: undefined };
     }
   }
 
@@ -843,6 +845,10 @@ async function main() {
       for (const ev of commits) {
         const key = `${ev.args.taskId}/${ev.args.epoch}/${ev.args.node}`;
         const prev = digests.get(key);
+        // Delete-before-set: re-setting an existing Map key does NOT refresh its
+        // insertion order, so without this the saveCursor slice evicts by first-seen
+        // instead of last-updated and a hot key can push out live entries.
+        digests.delete(key);
         digests.set(key, ev.args.traceDigest);
         if (prev && prev !== ev.args.traceDigest) {
           const args = mismatchArgs(ev, prev);
