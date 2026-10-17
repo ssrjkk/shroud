@@ -286,6 +286,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         // phase. Recovery there belongs to the buyer (`abort` needs no deadline).
         if (t.epochDeadline == 0) revert NoEpochOpened(taskId);
         if (block.timestamp < t.epochDeadline + t.params.disputeWindow) revert EpochStillLive(taskId, t.epochDeadline);
+        // H4 fix: A task in EpochSettled with t.locked == 0 is simply waiting for the buyer to
+        // open the next epoch — it is NOT stuck. emergencyUnwind should only run when an epoch
+        // is genuinely stuck (locked > 0). This prevents the owner from killing healthy tasks
+        // between epochs and leaving contributors with no payout.
+        if (t.status == TaskStatus.EpochSettled && t.locked == 0) revert TaskNotStuck(taskId);
         _unwind(taskId, _REASON_EMERGENCY_UNWIND);
     }
 
@@ -813,6 +818,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
             revert AlreadyTerminal(taskId, t.status);
         }
+        // No `WorkInProgress` guard here by design: abort during an open epoch is a
+        // supported path, and `UnwindLib.unwind` already retains a redeemable slice for a
+        // node holding a verified commit (`keep`) while refunding the rest. The case that
+        // must never abort — every epoch ran, so the task belongs to `settle` — is guarded
+        // inside `unwind` by `SettleReady` (`nextEpoch >= epochs`).
         _unwind(taskId, reason);
     }
 
@@ -873,13 +883,18 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /* ------------------------------------------------------------------ */
 
     /// @notice Set (or clear with 0) the bond every contributor must post with their shard.
+    /// @dev Bond requirement may only be set while the task is still `Opening` (before the
+    ///      first shard). Allowing changes during `Collecting` would let the buyer/update
+    ///      manager front-run a contributor's `submitContribution` with a higher bond and
+    ///      censor it. Set the bond before opening contributions; after the first shard it
+    ///      is frozen for the task.
     function setContributionBondRequirement(uint256 taskId, uint128 amount) external whenNotPaused {
         Task storage t = _tasks[taskId];
         if (t.status == TaskStatus.None) revert UnknownTask(taskId);
         if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager) {
             revert NotUpdateManagerOrOwner(taskId, msg.sender);
         }
-        if (t.isSealed) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Collecting);
+        if (t.status != TaskStatus.Opening) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Opening);
         if (amount > MAX_CONTRIBUTION_BOND) revert BondRequirementInvalid(taskId, amount);
         _bonds.required[taskId] = amount;
         emit ContributionBondRequirementSet(taskId, amount);
@@ -1068,7 +1083,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         return (DISPUTE_QUORUM, _disputes.count[taskId][_tasks[taskId].nextEpoch]);
     }
 
-    function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest) public view returns (bytes32) {
+    /// @notice STARK transcript bound to the node. H2 fix: `node` is a public input so a
+    ///         proof cannot be replayed under a different address.
+    function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest, address node) public view returns (bytes32) {
         return keccak256(
             abi.encode(
                 "SHROUD/PoC/v1",
@@ -1078,7 +1095,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
                 epoch,
                 _tasks[taskId].ctRoot,
                 _tasks[taskId].lastWeightsDigest,
-                traceDigest
+                traceDigest,
+                node
             )
         );
     }

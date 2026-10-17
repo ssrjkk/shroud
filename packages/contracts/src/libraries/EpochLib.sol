@@ -111,7 +111,17 @@ library CommitLib {
         if (proof == bytes32(0)) revert ICipherTask.ProofReferenceMissing(taskId, epoch, node);
 
         bytes32 transcript = keccak256(
-            abi.encode("SHROUD/PoC/v1", block.chainid, address(this), taskId, epoch, ctRoot, lastWeightsDigest, traceDigest)
+            abi.encode(
+                "SHROUD/PoC/v1",
+                block.chainid,
+                address(this),
+                taskId,
+                epoch,
+                ctRoot,
+                lastWeightsDigest,
+                traceDigest,
+                node // H2 fix: bind STARK to the node so a proof cannot be replayed under a different address
+            )
         );
         bytes memory publicInput =
             abi.encode(transcript, epoch, t.shards, traceDigest, ctRoot, lastWeightsDigest, block.chainid);
@@ -132,10 +142,11 @@ library CommitLib {
         c.verified = true;
 
         // First verified commit takes the winner seat and keeps it: ties resolve by commit
-        // order, not by address. Resolving to the lower address let anyone replay a proof seen
-        // in the mempool from a ground address and take the epoch without doing the work.
-        // Front-running the first commit would require predicting its trace digest, which the
-        // reporter cannot know before it is published; disagreements go through disputes.
+        // order, not by address. H2 fix: the transcript above now binds `node`, so a proof
+        // seen in the mempool cannot be replayed from a different address — the replay's
+        // public input differs and a real verifier rejects it. Front-running the first commit
+        // would require predicting its trace digest, which the reporter cannot know before
+        // it is published; disagreements go through disputes.
         address incumbent = winners[taskId][epoch];
         if (incumbent == address(0)) {
             winners[taskId][epoch] = node;
