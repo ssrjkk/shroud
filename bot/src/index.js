@@ -95,28 +95,47 @@ function log(level, config) {
  * (`txHash:logIndex`, capped), so a restart or a reorg rewind does not re-alert
  * on the same logs: at-least-once delivery with duplicate suppression, rather
  * than the previous at-most-once `save-before-send`.
+ *
+ * It also carries the last-seen digest per (task, epoch, node) (capped): the
+ * commit-mismatch detector compares each commit against the previous one for
+ * the same key, and without persistence a restart between the two commits
+ * would miss the mismatch — the single most useful signal in the system.
+ * Files written before digests existed load with an empty map.
  */
-async function loadCursor(startBlock, catchupBlocks) {
+export async function loadCursor(startBlock, catchupBlocks, file = CURSOR_FILE) {
   try {
-    const raw = JSON.parse(await readFile(CURSOR_FILE, "utf8"));
+    const raw = JSON.parse(await readFile(file, "utf8"));
     if (Number.isInteger(raw.cursor) && raw.cursor >= 0) {
       const seen = Array.isArray(raw.seen) ? raw.seen.filter((s) => typeof s === "string") : [];
-      return { cursor: raw.cursor, seen: new Set(seen) };
+      const digests = new Map();
+      if (raw.digests && typeof raw.digests === "object") {
+        for (const [k, v] of Object.entries(raw.digests)) {
+          if (typeof k === "string" && typeof v === "string") digests.set(k, v);
+        }
+      }
+      return { cursor: raw.cursor, seen: new Set(seen), digests };
     }
   } catch {
     // No cursor yet, or unreadable: fall through to a fresh window.
   }
-  return { cursor: Math.max(0, startBlock - catchupBlocks), seen: new Set() };
+  return { cursor: Math.max(0, startBlock - catchupBlocks), seen: new Set(), digests: new Map() };
 }
 
 /** Cap on remembered event identities: enough for weeks of alerts, small on disk. */
 export const MAX_SEEN_EVENTS = 2000;
 
-async function saveCursor(cursor, seen) {
+/** Cap on remembered commit digests: keys are short, values are 32-byte hashes. */
+export const MAX_SEEN_DIGESTS = 5000;
+
+export async function saveCursor(cursor, seen, digests = new Map(), file = CURSOR_FILE) {
   try {
-    await mkdir(dirname(CURSOR_FILE), { recursive: true });
+    await mkdir(dirname(file), { recursive: true });
     const arr = [...seen].slice(-MAX_SEEN_EVENTS);
-    await writeFile(CURSOR_FILE, JSON.stringify({ cursor, at: Date.now(), seen: arr }, null, 2));
+    const entries = [...digests.entries()].slice(-MAX_SEEN_DIGESTS);
+    await writeFile(
+      file,
+      JSON.stringify({ cursor, at: Date.now(), seen: arr, digests: Object.fromEntries(entries) }, null, 2)
+    );
   } catch (err) {
     // A cursor we cannot persist only costs us alert continuity on the next
     // start; it must not take the bot down.
@@ -208,6 +227,62 @@ export function commandFromVerdict(verdict, text) {
   const [rawName, ...args] = text.split(/\s+/);
   const name = rawName.split("@")[0].replace(/^\//, "").toLowerCase();
   return { name, args };
+}
+
+/**
+ * Bounded-concurrency dispatcher for poll-loop updates.
+ *
+ * Long polling used to handle updates strictly one at a time: one tarpit
+ * sleep (up to 3s) or one slow RPC (up to the 20s handler deadline) stalled
+ * every chat behind it, including keyboard presses that should feel instant.
+ * The dispatcher caps in-flight handlers (default 4) while isolating
+ * failures — a rejected job rejects its own `dispatch` promise and never
+ * touches the others. Replies for the same chat may arrive out of order;
+ * updates are independent status questions, so that is acceptable.
+ */
+export function createDispatcher({ maxInFlight = 4 } = {}) {
+  if (!Number.isInteger(maxInFlight) || maxInFlight < 1) {
+    throw new Error("dispatcher maxInFlight must be a positive integer");
+  }
+  const flying = new Set();
+  // Admission mutex: waiters proceed one at a time, each only after the
+  // previous waiter has taken its slot. Without it, N waiters woken by one
+  // settling job all observe the same free slot and overshoot the cap
+  // together (check-then-act race).
+  let admission = Promise.resolve();
+  // Settlement-only view of a job: waiters must not inherit its outcome — a
+  // rejected job would otherwise fail an innocent waiter sharing the race.
+  // The sentinel is a non-promise on purpose: resolving with `p` itself would
+  // re-adopt its rejection.
+  const settled = (p) => p.then(
+    () => null,
+    () => null
+  );
+  return {
+    get inFlight() {
+      return flying.size;
+    },
+    async dispatch(job) {
+      const prev = admission;
+      let release = () => {};
+      admission = new Promise((r) => {
+        release = r;
+      });
+      await prev;
+      try {
+        while (flying.size >= maxInFlight) await Promise.race([...flying].map(settled));
+      } finally {
+        release();
+      }
+      const p = (async () => job())();
+      flying.add(p);
+      try {
+        return await p;
+      } finally {
+        flying.delete(p);
+      }
+    },
+  };
 }
 
 /**
@@ -314,6 +389,9 @@ export function createHandlers(chain, config, ops = {}) {
       // Shed alerts are invisible by design (the queue drops newest-first overflow) —
       // surfacing the counter here is the only way an operator learns alerts were lost.
       const dropped = typeof ops.droppedSends === "function" ? ops.droppedSends() : 0;
+      // Same for a stalled queue: sends are serialised, so one hung Telegram call
+      // delays everything behind it. Past 10s the delay itself is the incident.
+      const queueWait = typeof ops.queueDelayMs === "function" ? ops.queueDelayMs() : 0;
       // Same for read failures: readers fail soft (null/[]), so without this line an
       // operator cannot tell "empty pool" from "RPC dead".
       const readError = typeof chain.lastReadError === "function" ? chain.lastReadError() : null;
@@ -322,6 +400,10 @@ export function createHandlers(chain, config, ops = {}) {
         // Error text comes from the RPC layer (proxies answer with HTML bodies);
         // it is content, never markup.
         text += `\n\n${"⚠️"} <b>chain reads failing:</b> ${htmlEscape(readError)}`;
+      } else if (queueWait > 10_000) {
+        text += `\n\n${"⚠️"} <b>slowest queued send waited ${Math.round(queueWait / 1000)}s</b> — ` +
+          `Telegram is answering slowly and alerts are delayed behind it. ` +
+          `Treat recent silence as backlog, not as calm.`;
       } else if (dropped > 0) {
         text += `\n\n${"⚠️"} <b>${dropped} alert(s) shed by the send queue</b> — ` +
           `the bot dropped outbound messages faster than Telegram drained them. ` +
@@ -551,7 +633,11 @@ async function main() {
   const handlers = createHandlers(
     chain,
     config,
-    { droppedSends: () => bot.droppedSends, store: watchStore }
+    {
+      droppedSends: () => bot.droppedSends,
+      queueDelayMs: () => bot.maxQueueWaitMs(),
+      store: watchStore,
+    }
   );
 
   // Анти-абьюз: квоты в единицах RPC-нагрузки (/pool стоит 15), флуд-детект, tarpit
@@ -669,6 +755,39 @@ async function main() {
     await bot.answerCallbackQuery(query.id);
   }
 
+  // At most a few updates in flight: commands are independent status
+  // questions, so strict ordering buys nothing and costs head-of-line stalls.
+  const dispatcher = createDispatcher({ maxInFlight: 4 });
+
+  async function handleUpdate(update) {
+    // Inline-keyboard presses share the poll loop with messages.
+    if (update.callback_query) {
+      await handleCallback(update.callback_query);
+      return;
+    }
+    const msg = update.message;
+    if (!msg?.text) return;
+
+    if (!isAuthorised(msg)) {
+      log("warn", config)(
+        `rejected message from chat ${msg.chat?.id} / user ${msg.from?.id}: not in allowlist`
+      );
+      // A refusal in a group is visible to everyone, which is itself a
+      // small disclosure of who is allowed. Reply only in private.
+      if (msg.chat?.type === "private") {
+        await bot
+          .sendMessage(msg.chat.id, "not authorised. Add your Telegram id to TELEGRAM_ALLOWED_IDS.", {})
+          .catch(() => {});
+      }
+      return;
+    }
+
+    const reply = await handleCommand(msg, msg.chat.id);
+    if (reply) {
+      await sendReply(bot, msg.chat.id, reply, config.html);
+    }
+  }
+
   async function pollCommands() {
     let offset = 0;
     for (;;) {
@@ -677,34 +796,12 @@ async function main() {
         offset = nextOffset;
 
         for (const update of updates) {
-          // Inline-keyboard presses share the poll loop with messages.
-          if (update.callback_query) {
-            await handleCallback(update.callback_query).catch((err) =>
-              log("error", config)("callback dispatch failed:", err.message)
-            );
-            continue;
-          }
-          const msg = update.message;
-          if (!msg?.text) continue;
-
-          if (!isAuthorised(msg)) {
-            log("warn", config)(
-              `rejected message from chat ${msg.chat?.id} / user ${msg.from?.id}: not in allowlist`
-            );
-            // A refusal in a group is visible to everyone, which is itself a
-            // small disclosure of who is allowed. Reply only in private.
-            if (msg.chat?.type === "private") {
-              await bot
-                .sendMessage(msg.chat.id, "not authorised. Add your Telegram id to TELEGRAM_ALLOWED_IDS.", {})
-                .catch(() => {});
-            }
-            continue;
-          }
-
-          const reply = await handleCommand(msg, msg.chat.id);
-          if (reply) {
-            await sendReply(bot, msg.chat.id, reply, config.html);
-          }
+          // Fire-and-forget under the cap: the offset already advanced, so a
+          // slow handler delays only its own reply, never the next update.
+          // Rejections are isolated per update (see createDispatcher).
+          dispatcher.dispatch(() => handleUpdate(update)).catch((err) => {
+            log("error", config)("update failed:", err.message);
+          });
         }
       } catch (err) {
         log("error", config)("command poll failed:", err.message);
@@ -719,7 +816,7 @@ async function main() {
   // filtering (`null` for global rotation alerts), `key` selects the per-chat
   // flag (`mm` | `disp` | `rot`), and `markup` carries the deep-link button.
 
-  async function scanOnce(cursor, seen) {
+  async function scanOnce(cursor, seen, digests = new Map()) {
     let head = await chain.blockNumber();
     if (head < cursor) {
       // Reorg below the cursor: block numbers now repeat with different contents.
@@ -732,11 +829,10 @@ async function main() {
 
     const alerts = [];
 
-    // Commits, so a same-epoch digest disagreement can be detected. The bot
-    // keeps the last-seen digest per (task, epoch, node) to spot a second,
-    // differing commit by the same node.
-    const seenDigest = scanOnce.seenDigest ?? new Map();
-    scanOnce.seenDigest = seenDigest;
+    // Commits, so a same-epoch digest disagreement can be detected. `digests`
+    // holds the last-seen digest per (task, epoch, node) and is persisted with
+    // the cursor: a static in-memory map here once missed every mismatch whose
+    // two commits straddled a restart.
 
     // Note: no global-flag gate here. Delivery is decided per chat in
     // pollAlerts (override wins, otherwise global): collecting always keeps
@@ -746,8 +842,8 @@ async function main() {
       const commits = dedupeEvents(await chain.commitEvents(cursor + 1, head), seen);
       for (const ev of commits) {
         const key = `${ev.args.taskId}/${ev.args.epoch}/${ev.args.node}`;
-        const prev = seenDigest.get(key);
-        seenDigest.set(key, ev.args.traceDigest);
+        const prev = digests.get(key);
+        digests.set(key, ev.args.traceDigest);
         if (prev && prev !== ev.args.traceDigest) {
           const args = mismatchArgs(ev, prev);
           alerts.push({
@@ -832,13 +928,15 @@ async function main() {
     const start = await loadCursor(await chain.blockNumber(), config.catchupBlocks);
     let cursor = start.cursor;
     const seen = start.seen;
-    log("info", config)(`alert scanner starting at block ${cursor} (${seen.size} events remembered)`);
+    const digests = start.digests;
+    log("info", config)(`alert scanner starting at block ${cursor} (${seen.size} events, ${digests.size} digests remembered)`);
 
     for (;;) {
       try {
-        // `seen` is mutated in place by the scan (every observed identity is remembered);
-        // persisting it after sending is what suppresses re-alerts across restarts.
-        const { cursor: next, alerts } = await scanOnce(cursor, seen);
+        // `seen` and `digests` are mutated in place by the scan (every observed
+        // identity and digest is remembered); persisting them after sending is
+        // what suppresses re-alerts across restarts.
+        const { cursor: next, alerts } = await scanOnce(cursor, seen, digests);
         cursor = next;
         // At-least-once: send first, persist after. A crash between the two re-alerts
         // (the seen-set was not saved yet); a crash before sending loses nothing, because
@@ -847,7 +945,7 @@ async function main() {
         for (const a of alerts) {
           await deliverAlert(a);
         }
-        await saveCursor(cursor, seen);
+        await saveCursor(cursor, seen, digests);
       } catch (err) {
         log("error", config)("alert scan failed:", err.message);
       }

@@ -296,6 +296,20 @@ test("status surfaces a failing chain read instead of showing an empty pool", as
   assert.ok(out.includes("task: missing response"), "source is named");
 });
 
+test("status warns when the send queue stalls instead of hiding the backlog", async () => {
+  const stub = {
+    chainId: async () => 31337,
+    blockNumber: async () => 100,
+    networkParams: async () => null,
+  };
+  const stalled = createHandlers(stub, {}, { queueDelayMs: () => 15_000 });
+  const out = replyText(await stalled.status());
+  assert.ok(out.includes("queued send waited 15s"), "stall is visible with its age");
+  // Fast queue, no line.
+  const { status } = createHandlers(stub, {}, { queueDelayMs: () => 0 });
+  assert.ok(!replyText(await status()).includes("queued send"));
+});
+
 test("renderTask says 'no task' rather than rendering an empty task", () => {
   const out = renderTask({ task: null, commits: [], winner: null, quorum: null }, "999");
   assert.ok(out.includes("no task with id"));

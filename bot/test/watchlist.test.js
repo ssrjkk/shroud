@@ -13,6 +13,7 @@ import path from "node:path";
 import { writeFile, readFile, readdir } from "node:fs/promises";
 import {
   MAX_WATCHED_PER_CHAT,
+  MAX_CHATS_WITH_STATE,
   ALERT_KEYS,
   emptyState,
   normaliseState,
@@ -58,6 +59,23 @@ test("alert overrides resolve against the global config", () => {
   assert.ok(!setAlertOverride(state, 1, "nope", true).ok);
   assert.ok(!setAlertOverride(state, 1, "mm", "yes").ok);
   assert.deepEqual([...ALERT_KEYS].sort(), ["disp", "mm", "rot"]);
+});
+
+test("removeWatch on an unknown chat reports, never creates state", () => {
+  const state = emptyState();
+  assert.ok(!removeWatch(state, 999, "42").removed);
+  assert.deepEqual(Object.keys(state.chats), [], "no entry as a side effect of a typo");
+});
+
+test("state refuses new chats past the cap instead of growing without bound", () => {
+  const state = emptyState();
+  for (let i = 1; i <= MAX_CHATS_WITH_STATE; i++) {
+    state.chats[String(i)] = { watched: [], alerts: {} };
+  }
+  assert.ok(!addWatch(state, "new", "42").added);
+  assert.ok(!setAlertOverride(state, "new", "mm", true).ok);
+  // Existing chats keep working under the cap.
+  assert.ok(addWatch(state, "1", "42").added);
 });
 
 test("passesWatchlist: empty means everything, otherwise only watched", () => {

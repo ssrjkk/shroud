@@ -102,6 +102,12 @@ export interface HttpShardStoreOptions {
    * `rand() * base * 2^(n-1)` — exponential backoff with full jitter, so a fleet
    * of nodes does not re-hit a recovering DA in lockstep. */
   retryBaseMs?: number;
+  /**
+   * Cap on memoized verified bytes (default 256 MiB). Lower it on
+   * memory-constrained nodes; the memo never holds more no matter how many
+   * distinct shards an epoch pulls.
+   */
+  verifiedCacheBytes?: number;
 }
 
 /**
@@ -128,7 +134,13 @@ export class HttpShardStore implements ShardStore {
   /** 64 MiB. A shard is FHE ciphertext for one contribution; anything larger is a mistake or an attack. */
   static readonly DEFAULT_MAX_OBJECT_BYTES = 64 * 1024 * 1024;
   static readonly DEFAULT_TIMEOUT_MS = 30_000;
-  /** Verified-bytes memo entries (FIFO). Content-addressed: a hit re-verified nothing. */
+  /**
+   * 256 MiB. The verified-bytes memo is bounded by bytes first: 256 entries of
+   * 64 MiB objects would otherwise pin 16 GiB, and one epoch of hostile-but-valid
+   * shards could exhaust the node (self-DoS through its own cache).
+   */
+  static readonly VERIFIED_CACHE_BYTES = 256 * 1024 * 1024;
+  /** Verified-bytes memo entries (FIFO, secondary to the byte budget). Content-addressed: a hit re-verified nothing. */
   static readonly VERIFIED_CACHE_ENTRIES = 256;
 
   private readonly baseUrl: string;
@@ -137,7 +149,9 @@ export class HttpShardStore implements ShardStore {
   private readonly timeoutMs: number;
   private readonly maxRetries: number;
   private readonly retryBaseMs: number;
+  private readonly verifiedCacheBytesMax: number;
   private readonly verifiedCache = new Map<string, Uint8Array>();
+  private verifiedCacheBytes = 0;
 
   constructor(baseUrl: string, opts: HttpShardStoreOptions = {}) {
     // A trailing slash would produce `//objects` and break the path. Stripped with
@@ -150,6 +164,7 @@ export class HttpShardStore implements ShardStore {
     this.timeoutMs = opts.timeoutMs ?? HttpShardStore.DEFAULT_TIMEOUT_MS;
     this.maxRetries = opts.maxRetries ?? 3;
     this.retryBaseMs = opts.retryBaseMs ?? 200;
+    this.verifiedCacheBytesMax = opts.verifiedCacheBytes ?? HttpShardStore.VERIFIED_CACHE_BYTES;
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -314,9 +329,10 @@ export class HttpShardStore implements ShardStore {
    * `expectedCtDigest` is the on-chain `ctDigest` (keccak256). The store's own addressing is
    * ignored for the integrity decision: the bytes are hashed locally and compared.
    *
-   * Verified bytes are memoized (bounded, FIFO): a re-executing node pulls the same shard
-   * for every epoch it checks, and a content-addressed object verified once against its
-   * digest cannot change under the same address. The cache never serves unverified bytes.
+   * Verified bytes are memoized (byte-bounded with an entry cap, FIFO): a re-executing
+   * node pulls the same shard for every epoch it checks, and a content-addressed object
+   * verified once against its digest cannot change under the same address. The cache
+   * never serves unverified bytes.
    */
   async getVerified(cid: string, expectedCtDigest: string): Promise<Uint8Array> {
     const key = `${cid}:${expectedCtDigest.toLowerCase()}`;
@@ -325,11 +341,32 @@ export class HttpShardStore implements ShardStore {
     const bytes = await this.get(cid);
     assertDigest(bytes, expectedCtDigest, cid);
     this.verifiedCache.set(key, Uint8Array.from(bytes));
-    if (this.verifiedCache.size > HttpShardStore.VERIFIED_CACHE_ENTRIES) {
-      const oldest = this.verifiedCache.keys().next();
-      if (!oldest.done) this.verifiedCache.delete(oldest.value);
-    }
+    this.verifiedCacheBytes += bytes.byteLength;
+    this.evictVerified();
     return bytes;
+  }
+
+  /**
+   * Drop oldest-first while over the byte budget or the entry cap.
+   *
+   * Eviction stops at one entry: a single object above the byte budget is
+   * still bounded by `maxObjectBytes`, and dropping it would turn every read
+   * into a refetch (cache thrash). The survivor is always the entry just
+   * stored (insertion order — newest last), so hot shards are not evicted by
+   * their own insert.
+   */
+  private evictVerified(): void {
+    while (
+      (this.verifiedCacheBytes > this.verifiedCacheBytesMax ||
+        this.verifiedCache.size > HttpShardStore.VERIFIED_CACHE_ENTRIES) &&
+      this.verifiedCache.size > 1
+    ) {
+      const oldest = this.verifiedCache.keys().next();
+      if (oldest.done) break;
+      const victim = this.verifiedCache.get(oldest.value);
+      this.verifiedCache.delete(oldest.value);
+      this.verifiedCacheBytes -= victim?.byteLength ?? 0;
+    }
   }
 
   /** Fetch a byte range, for pulls too large to hold in memory. The server must answer 206. */

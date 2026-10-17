@@ -46,20 +46,39 @@ export class TelegramBot {
   /** In-flight + queued sends. Bounded: an alert storm must not grow memory without limit. */
   #queued = 0;
   #maxQueued;
+  /** Enqueue timestamps parallel to #queued: the oldest bounds the queue's stall. */
+  #waitSince = [];
+  #timeoutMs;
   /** Alerts dropped by the queue cap since boot. Polled by /status operators, never reset. */
   droppedSends = 0;
   /** offsets of updates already handled, per chat id. */
   #seen = new Set();
 
-  constructor(token, { log = console, maxQueued = 100 } = {}) {
+  constructor(token, { log = console, maxQueued = 100, timeoutMs = 15_000 } = {}) {
     if (!token) throw new Error("TelegramBot needs a token");
     if (!Number.isInteger(maxQueued) || maxQueued < 1) {
       throw new Error("TelegramBot maxQueued must be a positive integer");
     }
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
+      throw new Error("TelegramBot timeoutMs must be a positive integer");
+    }
     this.#token = token;
     this.#base = `https://api.telegram.org/bot${token}`;
     this.#maxQueued = maxQueued;
+    this.#timeoutMs = timeoutMs;
     this.log = log;
+  }
+
+  /**
+   * Longest time any accepted send has waited unsent, in ms (0 when idle).
+   *
+   * Sends are serialised, so one stalled Telegram call delays everything
+   * behind it; the counter alone cannot show that. /status surfaces this when
+   * it passes the warning threshold, same as shed sends.
+   */
+  maxQueueWaitMs() {
+    if (!this.#waitSince.length) return 0;
+    return Date.now() - this.#waitSince[0];
   }
 
   async #call(method, payload = {}, { retries = 3 } = {}) {
@@ -67,13 +86,22 @@ export class TelegramBot {
 
     for (let attempt = 0; ; attempt++) {
       let response;
+      // A hung Telegram must not wedge the serialised write chain forever:
+      // abort this attempt and fail fast (no retry — retrying a stall just
+      // re-stalls the queue behind it).
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), this.#timeoutMs);
       try {
         response = await fetch(url, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(payload),
+          signal: ac.signal,
         });
       } catch (cause) {
+        if (cause?.name === "AbortError") {
+          throw new Error(`Telegram ${method}: timed out after ${this.#timeoutMs}ms`);
+        }
         // Network-level failure: DNS, offline, TLS. Retrying is safe here
         // because every method used by this bot is either a read or a send
         // that Telegram deduplicates by update id.
@@ -82,6 +110,8 @@ export class TelegramBot {
         }
         await sleep(500 * 2 ** attempt);
         continue;
+      } finally {
+        clearTimeout(timer);
       }
 
       let body;
@@ -141,11 +171,13 @@ export class TelegramBot {
       return Promise.resolve({ dropped: true });
     }
     this.#queued++;
+    this.#waitSince.push(Date.now());
     const next = this.#writeChain
       .catch(() => {})
       .then(() => this.sendMessage(chatId, text, extra))
       .finally(() => {
         this.#queued--;
+        this.#waitSince.shift();
       });
     this.#writeChain = next.catch(() => {});
     return next;

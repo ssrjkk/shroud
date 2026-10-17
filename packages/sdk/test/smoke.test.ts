@@ -611,6 +611,84 @@ test("HttpShardStore.getVerified memoizes verified bytes and isolates callers", 
   }
 });
 
+test("HttpShardStore.getVerified evicts oldest-first past the entry cap", async () => {
+  // 257 distinct shards against the default 256-entry cap: the first stored
+  // must refetch, the last must still hit. FIFO order is insertion order.
+  const original = globalThis.fetch;
+  try {
+    const n = HttpShardStore.VERIFIED_CACHE_ENTRIES + 1;
+    const payloads = Array.from({ length: n }, (_, i) => new TextEncoder().encode(`shard-${i}`));
+    const cids = payloads.map((_, i) => ethers.keccak256(new Uint8Array([i & 0xff, (i >> 8) & 0xff])));
+    const digests = payloads.map((p) => ethers.keccak256(p));
+    const byCid = new Map(cids.map((c, i) => [c.toLowerCase(), payloads[i]]));
+    let calls = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      calls++;
+      const cid = String(url).split("/").at(-1)!.toLowerCase();
+      return new Response(byCid.get(cid)!.slice(), { status: 200 });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid");
+    for (let i = 0; i < n; i++) await store.getVerified(cids[i], digests[i]);
+    assert.equal(calls, n);
+    await store.getVerified(cids[0], digests[0]); // evicted -> refetch
+    assert.equal(calls, n + 1);
+    await store.getVerified(cids[n - 1], digests[n - 1]); // still cached
+    assert.equal(calls, n + 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("HttpShardStore.getVerified is bounded by bytes, not entries", async () => {
+  // Two ~60-byte shards against a 100-byte budget: the first must refetch.
+  // Without the byte budget the default 256-entry cap would pin both (~16 GiB
+  // worst case at 64 MiB objects) and exhaust the node through its own cache.
+  const original = globalThis.fetch;
+  try {
+    const payloads = [new Uint8Array(60).fill(1), new Uint8Array(60).fill(2)];
+    const cids = [ethers.keccak256(new Uint8Array([10])), ethers.keccak256(new Uint8Array([11]))];
+    const digests = payloads.map((p) => ethers.keccak256(p));
+    const byCid = new Map(cids.map((c, i) => [c.toLowerCase(), payloads[i]]));
+    let calls = 0;
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      calls++;
+      return new Response(byCid.get(String(url).split("/").at(-1)!.toLowerCase())!.slice(), {
+        status: 200,
+      });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid", { verifiedCacheBytes: 100 });
+    await store.getVerified(cids[0], digests[0]);
+    await store.getVerified(cids[1], digests[1]);
+    assert.equal(calls, 2);
+    await store.getVerified(cids[0], digests[0]); // over budget -> refetch
+    assert.equal(calls, 3);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("HttpShardStore.getVerified keeps a lone entry above the byte budget", async () => {
+  // A single object over budget is still bounded by maxObjectBytes; evicting
+  // it would turn every read into a refetch (cache thrash).
+  const original = globalThis.fetch;
+  try {
+    const payload = new Uint8Array(60).fill(3);
+    const cid = ethers.keccak256(new Uint8Array([12]));
+    const digest = ethers.keccak256(payload);
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return new Response(payload.slice(), { status: 200 });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid", { verifiedCacheBytes: 10 });
+    await store.getVerified(cid, digest);
+    await store.getVerified(cid, digest);
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("getManyVerified pulls in order with bounded parallelism", async () => {
   const { MemoryShardStore, getManyVerified } = await import("../dist/index.js");
   const inner = new MemoryShardStore();

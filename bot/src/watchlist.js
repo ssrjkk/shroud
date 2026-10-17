@@ -24,6 +24,13 @@ export const WATCHLIST_FILE = resolve(ROOT, "state", "watchlist.json");
 /** Bound: a watchlist is a filter, not a database. */
 export const MAX_WATCHED_PER_CHAT = 200;
 
+/**
+ * Bound on chats holding state. Writers are allowlisted chats only, so this is
+ * unreachable in practice — it exists so one misbehaving integration cannot
+ * grow the state file without limit. Mirrors the ABUSE_MAX_CHATS default.
+ */
+export const MAX_CHATS_WITH_STATE = 10_000;
+
 /** Alert flag keys shared with keyboards.js (`a:<key>` toggle payloads). */
 export const ALERT_KEYS = ["mm", "disp", "rot"];
 
@@ -169,6 +176,9 @@ export function createFileStore(file = WATCHLIST_FILE, initial = emptyState()) {
  */
 export function addWatch(state, chatId, taskId) {
   if (!isTaskId(String(taskId))) return { added: false, reason: "task ids are decimal integers. Try /pool." };
+  if (!state.chats[String(chatId)] && Object.keys(state.chats).length >= MAX_CHATS_WITH_STATE) {
+    return { added: false, reason: "too many chats hold state; contact the operator." };
+  }
   const entry = chatEntry(state, chatId);
   const id = String(taskId);
   if (entry.watched.includes(id)) return { added: false, reason: `task #${id} is already watched.` };
@@ -180,9 +190,11 @@ export function addWatch(state, chatId, taskId) {
 }
 
 export function removeWatch(state, chatId, taskId) {
-  const entry = chatEntry(state, chatId);
+  // Read-only lookup on purpose: removing what was never watched must not
+  // create a chat entry as a side effect (unbounded state growth on typos).
+  const entry = state.chats[String(chatId)];
   const id = String(taskId);
-  const i = entry.watched.indexOf(id);
+  const i = Array.isArray(entry?.watched) ? entry.watched.indexOf(id) : -1;
   if (i === -1) return { removed: false, reason: `task #${id} is not watched.` };
   entry.watched.splice(i, 1);
   return { removed: true, reason: `stopped watching task #${id}.` };
@@ -196,6 +208,9 @@ export function setAlertOverride(state, chatId, key, value) {
   if (!ALERT_KEYS.includes(key)) return { ok: false, reason: `unknown alert ${JSON.stringify(String(key))}.` };
   if (value !== true && value !== false && value !== null) {
     return { ok: false, reason: "alert value must be on, off, or default." };
+  }
+  if (!state.chats[String(chatId)] && Object.keys(state.chats).length >= MAX_CHATS_WITH_STATE) {
+    return { ok: false, reason: "too many chats hold state; contact the operator." };
   }
   const entry = chatEntry(state, chatId);
   if (value === null) delete entry.alerts[key];

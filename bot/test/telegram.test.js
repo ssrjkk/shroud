@@ -14,8 +14,10 @@ test("constructor validates its options", () => {
   assert.throws(() => new TelegramBot(""), /needs a token/);
   assert.throws(() => new TelegramBot("t", { maxQueued: 0 }), /maxQueued/);
   assert.throws(() => new TelegramBot("t", { maxQueued: 1.5 }), /maxQueued/);
+  assert.throws(() => new TelegramBot("t", { timeoutMs: 0 }), /timeoutMs/);
   const bot = new TelegramBot("t", { log: silent });
   assert.equal(bot.droppedSends, 0);
+  assert.equal(bot.maxQueueWaitMs(), 0);
 });
 
 test("sendQueued bounds memory: over-cap alerts drop with a counter", async () => {
@@ -164,4 +166,37 @@ test("getUpdates subscribes to messages and callback queries", async () => {
   } finally {
     net.restore();
   }
+});
+
+test("a hung Telegram call fails fast instead of wedging the queue", async () => {
+  const orig = globalThis.fetch;
+  // Hanging network that honours abort, like a real socket: the bot's
+  // timeout fires through the signal, the stub does not need a timer.
+  globalThis.fetch = (_url, { signal } = {}) =>
+    new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () =>
+        reject(Object.assign(new Error("aborted"), { name: "AbortError" }))
+      );
+    });
+  try {
+    const bot = new TelegramBot("t", { log: silent, timeoutMs: 50 });
+    const started = Date.now();
+    await assert.rejects(() => bot.sendMessage(1, "hi"), /timed out after 50ms/);
+    assert.ok(Date.now() - started < 5000, "no retry spiral on a stall");
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
+test("maxQueueWaitMs tracks the oldest unsent", async () => {
+  const bot = new TelegramBot("t", { maxQueued: 5, log: silent });
+  assert.equal(bot.maxQueueWaitMs(), 0);
+  bot.sendMessage = () => new Promise(() => {}); // hang: queue fills deterministically
+  const p1 = bot.sendQueued(1, "a");
+  const p2 = bot.sendQueued(2, "b");
+  void p1;
+  void p2;
+  await new Promise((r) => setTimeout(r, 50));
+  const wait = bot.maxQueueWaitMs();
+  assert.ok(wait >= 20 && wait < 5000, `plausible stall age, got ${wait}`);
 });

@@ -9,7 +9,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { poolPage, POOL_PAGE_SIZE } from "../src/chain.js";
-import { parseCallback } from "../src/keyboards.js";
+import { parseCallback, callbackCost } from "../src/keyboards.js";
+import { parseCommand, loadAbuseConfig, COMMAND_COST } from "../src/abuse.mjs";
 import { createMemoryStore } from "../src/watchlist.js";
 import { createHandlers, routeCallback, replyText } from "../src/index.js";
 
@@ -128,4 +129,27 @@ test("watch commands validate before touching state", async () => {
   // No store, no crash.
   const bare = createHandlers(stubChain(0), {}, {});
   assert.ok(replyText(await bare.watch(["7"], { chatId: 1 })).includes("unavailable"));
+});
+
+/**
+ * Callback pricing parity: button presses are priced through the abuse guard
+ * via synthetic command texts (see CALLBACK_TEXT in index.js), while
+ * `callbackCost` documents the same mapping. Two price lists for one action
+ * drift silently — this pins them together across every opcode.
+ */
+test("callbackCost matches the abuse-guard price of the equivalent command", () => {
+  const cfg = loadAbuseConfig({});
+  const cases = [
+    ["p:2", "/pool"],
+    ["t:42", "/task 42"],
+    ["w:42", "/watch 42"],
+    ["u:42", "/watch 42"],
+    ["s", "/status"],
+    ["a:disp", "/alerts"],
+  ];
+  for (const [callback, text] of cases) {
+    const parsed = parseCallback(callback);
+    const guardPrice = COMMAND_COST[parseCommand(text, cfg).name];
+    assert.equal(callbackCost(parsed), guardPrice, `${callback} vs ${text}`);
+  }
 });
