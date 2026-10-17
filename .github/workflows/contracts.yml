@@ -23,6 +23,12 @@ jobs:
           cache: npm
           cache-dependency-path: packages/contracts/package-lock.json
       - run: npm ci
+      # Regression gate: the contracts tree pulls the full Hardhat dependency
+      # closure (undici, adm-zip, tmp, cookie, diff, serialize-javascript, uuid,
+      # busboy). Overrides in package.json pin the fixed transitive versions;
+      # this fails the build if a new high/critical advisory appears instead of
+      # waiting for the weekly Dependabot scan.
+      - run: npm audit --audit-level=high
       - run: npx hardhat compile
       # `npm test` runs `hardhat test` and then the `test-vectors/` parity spec in its own process.
       # Invoking `hardhat test` alone would skip the vectors: they live outside `paths.tests` so they
