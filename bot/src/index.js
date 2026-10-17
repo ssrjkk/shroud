@@ -389,13 +389,8 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
   const say = async (t) => toast(t);
   switch (parsed.op) {
     case "p": {
-      const count = await chain.taskCount();
-      const { ids, page: p, pages, total } = poolPage(count, Number(parsed.arg));
-      const items = await Promise.all(ids.map((id) => chain.task(id)));
-      return {
-        text: renderPool(items, total, { page: p, pages }),
-        markup: poolKeyboard(ids.map(String), p, pages),
-      };
+      const handlers = createHandlers(chain, config, { store });
+      return handlers.renderPoolPage(Number(parsed.arg));
     }
     case "t": {
       const handlers = createHandlers(chain, config, { store });

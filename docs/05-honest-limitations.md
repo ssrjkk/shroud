@@ -84,31 +84,46 @@ dispute commit-reveal, contribution bonds, segmented commits, settlement maturit
 gas snapshot, admin controls, byte-layout vectors — counts live in CI) and the node has unit tests
 including the state fold (counts live in CI), but "tested" ≠ "audited". Do not deploy with real value.
 
-## 7b. Dependency advisories are dev-tooling transitives blocked on upstream majors
+## 7b. Dependency advisories are dev-tooling transitives pinned by overrides
 
 Triaged 2026-10-16: 30 open Dependabot alerts, all in the Hardhat 2 dev toolchain
 (`undici`, `adm-zip`, `@fastify/busboy`, `tmp`, `serialize-javascript`, `uuid`,
 `diff`, `elliptic`, `cookie`; 1 older `pbkdf2` item already fixed). Production trees
-are clean — `npm audit --omit=dev` in `packages/sdk` reports zero, the bot ships only
-`ethers`, and contracts deploy bytecode, not `node_modules`. Fixing the 30 means a
-Hardhat major migration, so they stay open and documented instead of dismissed.
-Code scanning was not enabled — added as `codeql.yml` (javascript-typescript; Rust is
-covered by `clippy -D warnings`, Solidity by the Hardhat suite + fuzz). Secret
-scanning is clean (zero alerts).
+were and are clean — `npm audit --omit=dev` in `packages/sdk` reports zero, the bot ships only
+`ethers`, and contracts deploy bytecode, not `node_modules`. Code scanning runs as
+`codeql.yml` (javascript-typescript, zero open; Rust is covered by
+`clippy -D warnings`, Solidity by the Hardhat suite + fuzz). Secret scanning is
+clean (zero alerts).
+
+Resolved 2026-10-17: 29 of the 30 via flat `overrides` in
+`packages/contracts/package.json` (`cookie 0.7.0`, `tmp 0.2.7`,
+`undici 6.28.1`, `diff 8.0.3`, `serialize-javascript 7.0.5`, `uuid 11.1.1`,
+`adm-zip 0.6.1`, `@fastify/busboy 3.2.2`) — Dependabot shows them `fixed`, and
+`npm audit` reports 0 high/moderate. The remaining `elliptic<=6.6.1`
+(GHSA-848j-6mx2-7j84, low, no patched version) is dismissed as tolerable risk:
+dev-only via Hardhat 2, removable only by a Hardhat 3 migration that the pinned
+`@fhevm/hardhat-plugin` (`hardhat: ^2.0.0`, no Hardhat-3-compatible release)
+does not support. Full rationale lives in `SECURITY.md` ("Dependency security").
+
+A note on the method, because an earlier revision of this section forbade it:
+forcing newer transitives under Hardhat 2 was accepted only after verification —
+`hardhat compile` clean, the full Hardhat suite green, devnet deploy + E2E green,
+and the Rust `devnet-live` followers green, all in CI. The overrides use flat
+keys (`"undici": "6.28.1"`, not range keys), because range keys break `npm ci`
+on the npm 10 shipped with Node 22. The `contracts` CI job additionally gates on
+`npm audit --audit-level=high`, so a new high/critical advisory fails the build
+instead of waiting for the weekly Dependabot scan.
 
 `npm audit` / Dependabot report advisories against transitive dependencies of the Hardhat 2
 toolchain (`undici`, `adm-zip`, `@fastify/busboy`, `tmp`, `cookie`, `elliptic`, …). They are
 real CVEs but they live in the *test runner*, not in deployed code: no advisory dependency ships
 in any contract bytecode or in the SDK/runtime paths that touch funds.
 
-Fixing them within semver (`npm update`) is done whenever it resolves; the remainder require
-major bumps of the toolchain itself — Hardhat 2 → 3 (`hardhat`, `hardhat-ethers`,
-`hardhat-chai-matchers`, `typechain`) — which the pinned `@fhevm/hardhat-plugin` does not
-support (its latest line peers `hardhat: ^2.0.0`, and no Hardhat-3-compatible plugin release
-exists). So the advisories stay open until Zama ships one, at which point the Hardhat 3
-migration unblocks the whole family at once. Do not "fix" them with `overrides` pinning
-transitives outside their parents' ranges: forcing a newer `undici` under Hardhat 2 risks the
-test runner's HTTP layer in ways the suite cannot meaningfully cover.
+What remains open-ended: the `elliptic` dismissal above and the Hardhat 3 migration
+behind it. When Zama ships a Hardhat-3-compatible `@fhevm/hardhat-plugin`, migrate
+(`hardhat`, `hardhat-ethers`, `hardhat-chai-matchers`, `typechain`), drop the
+`overrides` that the new major absorbs, and un-dismiss the `elliptic` alert —
+a rescan closes it for real once the dependency is gone from the tree.
 
 ## 7a. The devnet deploys through `--network localhost` — nothing else works
 
