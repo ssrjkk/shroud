@@ -986,6 +986,17 @@
   {
     "inputs": [
       {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "TaskNotStuck",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
         "internalType": "address",
         "name": "token",
         "type": "address"
@@ -2968,6 +2979,11 @@
         "internalType": "bytes32",
         "name": "traceDigest",
         "type": "bytes32"
+      },
+      {
+        "internalType": "address",
+        "name": "node",
+        "type": "address"
       }
     ],
     "name": "proofTranscript",
