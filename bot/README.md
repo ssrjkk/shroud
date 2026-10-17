@@ -31,10 +31,40 @@ not to keep uploading.
 | command | what it answers |
 |---|---|
 | `/status` | chain, head, pinned FHE key hash, committee threshold, **pending rotation** |
-| `/pool` | the most recent tasks with status, budget and contributor count |
+| `/pool [page]` | the most recent tasks with status, budget and contributor count, 12 per page |
 | `/task <id>` | one task, plus that epoch's commits — and whether they disagree |
+| `/watch <id>` | narrow this chat's task alerts to a task (repeat per task) |
+| `/unwatch <id>` | stop watching a task |
+| `/watchlist` | tasks this chat watches — empty means everything |
+| `/alerts` | per-chat alert flags with tap-to-toggle buttons |
 | `/limits` | what this deployment does *not* protect against |
 | `/help` | the list above |
+
+Every reply carries inline buttons that do the same as the commands: pool
+pages (`‹ prev` / `next ›`, task shortcuts), task refresh / watch / neighbour
+navigation, status refresh, and alert toggles. Buttons edit the message
+in place; a press on a stale button (older bot version) answers with a hint
+instead of firing RPC. Button traffic is priced through the same per-chat
+abuse budget as typing (`/pool`-equivalent presses cost 15, `/task` 5,
+`/status` 4, local-only presses 1).
+
+## Watchlist and per-chat alerts
+
+`state/watchlist.json` holds, per chat id, the watched task ids (max 200)
+and alert-flag overrides. Writes are atomic (tmp file + rename); a corrupt
+file is moved aside to `watchlist.corrupt-<timestamp>.json` and replaced
+with an empty state, so one bad byte never bricks the bot.
+
+Semantics, deliberately conservative:
+
+- Empty watchlist (default) = every task-scoped alert, exactly as before.
+- Non-empty watchlist = commit-mismatch and dispute alerts only for watched
+  tasks. Key-rotation alerts are global and ignore the watchlist.
+- Per-chat flags (`/alerts`, toggles `mismatch` / `disputes` / `rotation`)
+  override the global `ALERT_*` `.env` flags when set, inherit them when unset.
+
+Task-scoped alerts carry a `view task #id` button; rotation alerts carry a
+`view status` button.
 
 ## Alerts
 
@@ -108,7 +138,7 @@ know.
 npm test
 ```
 
-54 tests, no bot token and no chain required. They cover the parts that fail
+88 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -129,6 +159,11 @@ quietly in production:
   shadowban escalation, handler deadlines, and the RPC timeout failing fast
 - bounded Telegram send queue (over-cap alerts shed newest-first with a counter,
   broadcasts never grow memory without limit)
+- inline keyboards: callback payloads parse total (garbage in, null out, never
+  a throw), every emitted payload fits the 64-byte cap, pool pages clamp,
+  watch/unwatch flip state with a toast, alert toggles resolve against globals
+- watchlist persistence: atomic tmp+rename writes, corrupt-file backup with an
+  empty start, empty-means-everything filtering
 
 ## Honest limits of the bot itself
 

@@ -146,18 +146,57 @@ export class TelegramBot {
   }
 
   /**
+   * Acknowledge a callback query, dismissing the client's loading spinner.
+   * `text` shows as a transient toast; kept short because Telegram truncates
+   * it at ~200 characters. Best-effort: a failed ack must not fail the action
+   * the button already triggered.
+   */
+  async answerCallbackQuery(callbackQueryId, text = "") {
+    try {
+      return await this.#call("answerCallbackQuery", {
+        callback_query_id: callbackQueryId,
+        ...(text ? { text: text.slice(0, 190) } : {}),
+      });
+    } catch (err) {
+      this.log.warn?.(`answerCallbackQuery failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * In-place edit of a message the bot sent (keyboard refreshes, toggles).
+   * Falls back to `null` when Telegram rejects the edit (message too old,
+   * content identical) so the caller can send a fresh message instead.
+   */
+  async editMessage(chatId, messageId, text, extra = {}) {
+    try {
+      return await this.#call("editMessageText", {
+        chat_id: chatId,
+        message_id: messageId,
+        text: text.length > 4096 ? `${text.slice(0, 4090)}\n…(truncated)` : text,
+        disable_web_page_preview: true,
+        ...extra,
+      });
+    } catch (err) {
+      this.log.warn?.(`editMessage ${chatId}:${messageId} failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Long-poll for updates, returning only ones we have not seen.
    *
    * Dedup is kept in memory on purpose: Telegram only guarantees `offset`
    * semantics within a single run, and the alternative — persisting every
    * update id to disk — is not worth it for a bot whose updates are
-   * ephemeral status questions.
+   * ephemeral status questions. `callback_query` is subscribed alongside
+   * `message` so inline-keyboard presses arrive on the same poll loop.
    */
   async getUpdates(offset, timeoutSeconds = 30) {
     const updates = await this.#call("getUpdates", {
       offset,
       timeout: timeoutSeconds,
-      allowed_updates: ["message", "command"],
+      allowed_updates: ["message", "callback_query"],
     });
     const fresh = updates.filter((u) => !this.#seen.has(u.update_id));
     for (const u of updates) this.#seen.add(u.update_id);

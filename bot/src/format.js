@@ -97,12 +97,16 @@ export function renderStatus(view, config) {
 }
 
 /** `items` are task views, newest first, already resolved. */
-export function renderPool(items, total) {
+export function renderPool(items, total, page = null) {
   if (!items.length) {
     return `${header("📋", "Task pool")}\n\nno tasks, or CipherTask is not configured.`;
   }
 
-  const lines = [header("📋", `Task pool (${total ?? items.length})`), ""];
+  const title =
+    page && page.pages > 1
+      ? `Task pool — page ${page.page}/${page.pages} (${total ?? items.length})`
+      : `Task pool (${total ?? items.length})`;
+  const lines = [header("📋", title), ""];
   for (const t of items) {
     if (!t) continue;
     const tone = STATUS_TONE[t.status] ?? "?";
@@ -317,17 +321,67 @@ export function renderHelp() {
     "",
     "<b>Read</b>",
     `${mono("/status")}  chain, key pin, pending rotation`,
-    `${mono("/pool")}  recent tasks`,
+    `${mono("/pool [page]")}  recent tasks, 12 per page`,
     `${mono("/task <id>")}  one task, with that epoch's commits`,
     `${mono("/limits")}  what this deployment does not protect against`,
     `${mono("/help")}  this list`,
+    "",
+    "<b>Watch</b>",
+    `${mono("/watch <id>")}  alert only on this task's disputes and mismatches`,
+    `${mono("/unwatch <id>")}  stop watching a task`,
+    `${mono("/watchlist")}  tasks this chat watches (empty means everything)`,
+    `${mono("/alerts")}  per-chat alert flags; tap to toggle`,
     "",
     "<b>Alerts</b> (enable in .env)",
     `${mono("ALERT_COMMIT_MISMATCH")}  same node, same epoch, two digests`,
     `${mono("ALERT_DISPUTES")}  disputes, rejections and settlements`,
     `${mono("ALERT_KEY_ROTATION")}  any network key change`,
     "",
+    "Buttons under every reply do the same as the commands — tap instead of typing.",
     "This bot is read-only. It holds no keys and cannot sign or send a transaction.",
+  ].join("\n");
+}
+
+/**
+ * The chat's watchlist. An empty list is the default "everything" filter, so
+ * it is rendered as such rather than as "nothing watched" (which reads like
+ * alerts are off when they are in fact at their widest).
+ */
+export function renderWatchlist(ids) {
+  if (!ids.length) {
+    return (
+      `${header("👁", "Watchlist")}\n\n` +
+      `watching <b>everything</b> — task-scoped alerts arrive for all tasks.\n\n` +
+      `${mono("/watch <id>")} to narrow to specific tasks.`
+    );
+  }
+  const lines = [header("👁", `Watchlist (${ids.length})`), ""];
+  for (const id of ids) lines.push(`  ${mono(`#${id}`)}  ${mono(`/task ${id}`)}`);
+  lines.push("");
+  lines.push(`${mono("/unwatch <id>")} to drop one, or watch nothing new to keep this filter.`);
+  return lines.join("\n");
+}
+
+/**
+ * Per-chat alert flags. `effective` is already resolved against the global
+ * config; `inherited` marks flags the chat never overrode, so "off because
+ * the operator turned it off globally" does not look like "off because you
+ * tapped it".
+ */
+export function renderAlerts(effective, inherited) {
+  const row = (key, label) => {
+    const on = effective[key];
+    const src = inherited[key] ? "global" : "this chat";
+    return `  ${on ? OK : BAD} ${label}  ${mono(src)}`;
+  };
+  return [
+    header("🔔", "Alerts for this chat"),
+    "",
+    row("mm", "commit mismatch"),
+    row("disp", "disputes"),
+    row("rot", "key rotation"),
+    "",
+    "Tap a button to toggle. Unset flags follow the global .env.",
   ].join("\n");
 }
 

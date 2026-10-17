@@ -552,6 +552,28 @@ export function poolIds(count, shown) {
   return ids;
 }
 
+/**
+ * One page of the pool window, newest first.
+ *
+ * Page 1 is the newest `perPage` tasks; later pages walk backwards. Pure like
+ * `poolIds` so the bounds are pinned by tests: a page past the end clamps to
+ * the last non-empty page, and an empty pool reports one page of nothing
+ * rather than page 0 of 0 (keyboards render `page/pages` unconditionally).
+ */
+export const POOL_PAGE_SIZE = 12;
+
+export function poolPage(count, page, perPage = POOL_PAGE_SIZE) {
+  const total = Math.max(0, Math.floor(Number(count) || 0));
+  const size = Math.max(1, Math.floor(Number(perPage) || POOL_PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(total / size));
+  const p = Math.min(Math.max(1, Math.floor(Number(page) || 1)), pages);
+  const ids = [];
+  for (let i = total - (p - 1) * size; i > Math.max(0, total - p * size); i--) {
+    ids.push(BigInt(i));
+  }
+  return { ids, page: p, pages, total };
+}
+
 /** Mirrors `ICipherTask.TaskStatus` so the bot never invents a status name. */
 export function taskStatusName(status) {
   return (

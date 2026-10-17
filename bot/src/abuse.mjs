@@ -22,6 +22,7 @@ export const COMMAND_COST = Object.freeze({
   task: 5,  // task + commits(по контрибьюторам) + winner + quorum
   status: 4, // chainId + blockNumber + networkParams + rotation
   limits: 1, help: 1,
+  watch: 1, unwatch: 1, watchlist: 1, alerts: 1,
 });
 const KNOWN_COMMANDS = Object.freeze(Object.keys(COMMAND_COST));
 

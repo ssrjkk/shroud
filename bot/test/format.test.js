@@ -22,7 +22,7 @@ import {
   renderHelp,
   htmlEscape,
 } from "../src/format.js";
-import { createHandlers, mismatchArgs } from "../src/index.js";
+import { createHandlers, mismatchArgs, replyText } from "../src/index.js";
 
 const ZERO32 = "0x" + "0".repeat(64);
 const ZERO20 = "0x" + "0".repeat(40);
@@ -206,7 +206,7 @@ test("pool handler reads newest-first and skips nothing", async () => {
     },
   };
   const { pool } = createHandlers(stub, {});
-  const out = await pool();
+  const out = replyText(await pool());
   assert.deepEqual(seen, [3n, 2n, 1n]);
   assert.ok(out.includes("Collecting"));
 });
@@ -228,7 +228,7 @@ test("pool reads fan out instead of crawling the chain one RPC at a time", async
     },
   };
   const { pool } = createHandlers(stub, {});
-  const out = await pool();
+  const out = replyText(await pool());
   assert.ok(maxInFlight > 1, `pool reads serialized (max ${maxInFlight} in flight)`);
   assert.ok(out.includes("Collecting"));
 });
@@ -255,7 +255,7 @@ test("task handler threads the running epoch through commits, winner and quorum"
     },
   };
   const { task } = createHandlers(stub, {});
-  const out = await task(["7"]);
+  const out = replyText(await task(["7"]));
   assert.deepEqual(calls, [
     ["task", 7n],
     ["commitsForEpoch", 7n, 4],
@@ -263,9 +263,9 @@ test("task handler threads the running epoch through commits, winner and quorum"
     ["disputeQuorum", 7n],
   ]);
   assert.ok(out.includes("0/3"), "quorum progress shown");
-  assert.ok((await task([])).includes("usage"));
-  assert.ok((await task(["abc"])).includes("decimal integers"));
-  assert.ok((await task(["9".repeat(21)])).includes("decimal integers"), "kilobyte ids rejected pre-RPC");
+  assert.ok(replyText(await task([])).includes("usage"));
+  assert.ok(replyText(await task(["abc"])).includes("decimal integers"));
+  assert.ok(replyText(await task(["9".repeat(21)])).includes("decimal integers"), "kilobyte ids rejected pre-RPC");
 });
 
 test("status surfaces shed alerts, and stays silent when none were shed", async () => {
@@ -275,9 +275,9 @@ test("status surfaces shed alerts, and stays silent when none were shed", async 
     networkParams: async () => null,
   };
   const { status } = createHandlers(stub, {});
-  assert.ok(!(await status()).includes("shed"), "no drops, no line");
+  assert.ok(!replyText(await status()).includes("shed"), "no drops, no line");
   const withDrops = createHandlers(stub, {}, { droppedSends: () => 7 });
-  const out = await withDrops.status();
+  const out = replyText(await withDrops.status());
   assert.ok(out.includes("7 alert(s) shed"), "operator learns about the loss");
 });
 
@@ -291,7 +291,7 @@ test("status surfaces a failing chain read instead of showing an empty pool", as
     lastReadError: () => "task: missing response for request",
   };
   const { status } = createHandlers(stub, {});
-  const out = await status();
+  const out = replyText(await status());
   assert.ok(out.includes("chain reads failing"), "outage is visible");
   assert.ok(out.includes("task: missing response"), "source is named");
 });
