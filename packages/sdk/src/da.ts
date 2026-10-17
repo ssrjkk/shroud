@@ -140,8 +140,11 @@ export class HttpShardStore implements ShardStore {
   private readonly verifiedCache = new Map<string, Uint8Array>();
 
   constructor(baseUrl: string, opts: HttpShardStoreOptions = {}) {
-    // A trailing slash would produce `//objects` and break the path.
-    this.baseUrl = baseUrl.replace(/\/+$/, "");
+    // A trailing slash would produce `//objects` and break the path. Stripped with
+    // a loop, not a regex: `/\/+$/` is polynomial on slash runs (CodeQL js/polynomial-redos).
+    let url = baseUrl;
+    while (url.endsWith("/")) url = url.slice(0, -1);
+    this.baseUrl = url;
     this.authToken = opts.authToken;
     this.maxObjectBytes = opts.maxObjectBytes ?? HttpShardStore.DEFAULT_MAX_OBJECT_BYTES;
     this.timeoutMs = opts.timeoutMs ?? HttpShardStore.DEFAULT_TIMEOUT_MS;
