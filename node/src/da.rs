@@ -265,13 +265,28 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
     // cap chunk by chunk. Buffering first and checking afterwards would let a
     // backend that understates the size make the node hold an unbounded body
     // just to reject it (the same shape the SDK's readCapped guards against).
-    let mut stream = result.into_stream();
+    read_capped(result.into_stream(), cid, max_bytes, url).await
+}
+
+/// Drain a byte stream enforcing the budget chunk by chunk.
+///
+/// Split out of `fetch_remote` so the cap logic is unit-testable without a
+/// network: the security property is that an understated size never lets the
+/// buffer grow past `max_bytes`, no matter what the metadata claimed.
+#[cfg(feature = "da")]
+async fn read_capped<S, E>(mut stream: S, cid: &B256, max_bytes: u64, url: &str) -> Result<Vec<u8>>
+where
+    S: futures::Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
+    E: std::fmt::Display,
+{
+    use futures::StreamExt;
+
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
+        let chunk = chunk
+            .map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
         // saturating: chunk lengths arrive over the network, and hostile
-        // headers must be errors, never panics.
+        // lengths must be errors, never panics.
         let grown = (bytes.len() as u64).saturating_add(chunk.len() as u64);
         if grown > max_bytes {
             return Err(Error::ShardStore(ShardError::TooLarge {
@@ -421,42 +436,30 @@ mod tests {
     #[cfg(feature = "da")]
     #[tokio::test]
     async fn remote_body_is_stream_capped_despite_lying_metadata() {
-        // A backend that understates HEAD and floods the GET body: the byte cap
-        // must fire while streaming, not after buffering 1 MiB to reject it.
-        // std sockets (not tokio::net) so no new runtime features are needed.
-        let body_len = 1usize << 20;
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            // Exactly the two requests one fetch makes: HEAD then GET.
-            for stream in listener.incoming().take(2) {
-                let mut stream = stream.expect("accept");
-                let mut buf = vec![0u8; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                if buf[..n].starts_with(b"HEAD") {
-                    stream
-                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
-                        .expect("head");
-                } else {
-                    let header = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {body_len}\r\nConnection: close\r\n\r\n"
-                    );
-                    stream.write_all(header.as_bytes()).expect("header");
-                    let chunk = vec![0xabu8; 65536];
-                    for _ in 0..(body_len / 65536) {
-                        if stream.write_all(&chunk).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-        let url = format!("http://{addr}/");
+        // The security property behind the streaming read: chunks are capped
+        // as they arrive, so a backend that understated HEAD can never push
+        // the buffer past max_bytes, no matter how much it sends. A synthetic
+        // stream (not a socket) keeps this hermetic: CI sandboxes may proxy
+        // or block even localhost HTTP.
+        use futures::stream;
         let cid = B256::repeat_byte(0x4);
-        let err = fetch_remote(&url, &cid, 64).await.expect_err("lying body must be refused");
+        let chunks: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+            Ok(bytes::Bytes::from_static(b"0123456789")),
+            Ok(bytes::Bytes::from_static(b"0123456789")),
+            Ok(bytes::Bytes::from_static(b"0123456789")),
+        ];
+        let err = read_capped(stream::iter(chunks), &cid, 25, "test://lying")
+            .await
+            .expect_err("third chunk breaks the cap");
         assert!(
-            matches!(err, Error::ShardStore(ShardError::TooLarge { .. })),
+            matches!(
+                err,
+                Error::ShardStore(ShardError::TooLarge {
+                    size: 30,
+                    max: 25,
+                    ..
+                })
+            ),
             "unexpected: {err:?}"
         );
     }
@@ -464,32 +467,35 @@ mod tests {
     #[cfg(feature = "da")]
     #[tokio::test]
     async fn remote_small_body_streams_fine() {
-        // The honest path through the same streaming code: 8 bytes claimed, 8 served.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let addr = listener.local_addr().expect("addr");
-        std::thread::spawn(move || {
-            use std::io::{Read, Write};
-            for stream in listener.incoming().take(2) {
-                let mut stream = stream.expect("accept");
-                let mut buf = vec![0u8; 4096];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                if buf[..n].starts_with(b"HEAD") {
-                    stream
-                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n")
-                        .expect("head");
-                } else {
-                    stream
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\n\xab\xab\xab\xab\xab\xab\xab\xab",
-                        )
-                        .expect("body");
-                }
-            }
-        });
-        let url = format!("http://{addr}/");
+        // The honest path through the same code: capped chunks assemble in order.
+        use futures::stream;
         let cid = B256::repeat_byte(0x5);
-        let back = fetch_remote(&url, &cid, 64).await.expect("honest body");
-        assert_eq!(back, vec![0xabu8; 8]);
+        let chunks: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+            Ok(bytes::Bytes::from_static(b"ab")),
+            Ok(bytes::Bytes::from_static(b"cd")),
+            Ok(bytes::Bytes::from_static(b"")),
+        ];
+        let back = read_capped(stream::iter(chunks), &cid, 64, "test://honest")
+            .await
+            .expect("honest body");
+        assert_eq!(back, b"abcd");
+    }
+
+    #[cfg(feature = "da")]
+    #[tokio::test]
+    async fn remote_stream_error_is_not_a_size_error() {
+        // A transport failure mid-body must surface as-is, not as TooLarge,
+        // so operators do not chase a byte budget for a network fault.
+        use futures::stream;
+        let cid = B256::repeat_byte(0x6);
+        let chunks: Vec<std::result::Result<bytes::Bytes, String>> = vec![
+            Ok(bytes::Bytes::from_static(b"ab")),
+            Err("connection reset".to_string()),
+        ];
+        let err = read_capped(stream::iter(chunks), &cid, 64, "test://flaky")
+            .await
+            .expect_err("transport failure");
+        assert!(matches!(err, Error::Other(_)), "unexpected: {err:?}");
     }
 
     #[cfg(not(feature = "da"))]
