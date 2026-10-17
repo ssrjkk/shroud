@@ -229,7 +229,9 @@ mod tests {
             (CHAIN_ID, U256::from(1), 0, ct, B256::repeat_byte(9), tr),
             (CHAIN_ID, U256::from(1), 0, ct, w, B256::repeat_byte(9)),
         ] {
-            let got = proof_transcript(chain_id, task, task_id, epoch, root, weights, trace, TEST_NODE);
+            let got = proof_transcript(
+                chain_id, task, task_id, epoch, root, weights, trace, TEST_NODE,
+            );
             assert_ne!(
                 got,
                 base(),
@@ -253,7 +255,9 @@ mod tests {
                 ct,
                 w,
                 tr,
-                "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".parse().expect("address")
+                "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .parse()
+                    .expect("address")
             ),
             "node must change the transcript"
         );

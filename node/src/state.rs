@@ -286,7 +286,10 @@ impl Work {
     /// Unlike commit/dispute work which is periodic and bounded, exit-money failures are
     /// permanent loss, so we retry forever rather than giving up after MAX_ATTEMPTS.
     pub fn is_exit_money(&self) -> bool {
-        matches!(self, Work::Redeem { .. } | Work::Reclaim { .. } | Work::Claim)
+        matches!(
+            self,
+            Work::Redeem { .. } | Work::Reclaim { .. } | Work::Claim
+        )
     }
 }
 
