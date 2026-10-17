@@ -505,7 +505,11 @@ impl FheEngine for ReferenceCpuEngine {
         let mut w: Vec<i64> = inputs
             .prev_weights
             .as_ref()
-            .expect("length checked")
+            .ok_or_else(|| {
+                Error::Fhe(FheError::Backend(
+                    "reference engine: prev_weights input is missing".into(),
+                ))
+            })?
             .signed();
         let mut grad = vec![0i128; f];
         let mut in_batch: u64 = 0;

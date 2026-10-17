@@ -43,7 +43,8 @@ use std::{
 };
 
 use alloy::primitives::{Address, B256, U256};
-use tokio::sync::broadcast;
+use futures_util::{StreamExt, TryStreamExt};
+use tokio::sync::{broadcast, Semaphore};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -54,7 +55,7 @@ use crate::{
     da,
     error::{ConfigError, Error, FheError, Result},
     fhe::{self, EpochInputs, ShardInput},
-    state::{NodeState, TaskStatus, Work},
+    state::{Leaf, NodeState, TaskStatus, Work},
 };
 
 /// How many times a nudge may fail before the worker stops retrying it.
@@ -62,9 +63,17 @@ use crate::{
 /// A failing step is usually either a transport problem, which is worth retrying, or a
 /// configuration problem, which will fail identically forever. Bounding the retries keeps the
 /// second class from spending gas on every poll while still riding out the first.
+///
+/// Exit-money operations (Redeem, Reclaim, Claim) use INFINITE retry via `u32::MAX`:
+/// losing a Redeem/Reclaim/Claim permanently loses funds — the cost of giving up is
+/// higher than retrying forever. These are detected via `Work::is_exit_money()`.
 const MAX_ATTEMPTS: u32 = 5;
 
-/// The verdict of a gate.
+/// Maximum number of channel IDs in the first-redeem debounce list.
+/// M10 fix: unbounded growth leaks memory on long-running nodes.
+/// Oldest entries are evicted when full; a prematurely evicted entry merely bypasses
+/// the delay for one nudge, which is safe (not a correctness issue).
+const MAX_DEBOUNCED: usize = 50_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gate {
     /// The contract would accept the call now.
@@ -141,10 +150,22 @@ impl Worker {
         let mut deferred: Vec<Deferred> = Vec::new();
         let mut tick = tokio::time::interval(self.cfg.chain.poll_interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut prune_counter: u8 = 0; // wraps naturally; every 256 ticks ≈ 4 min at 1s poll
 
         loop {
             tokio::select! {
-                _ = tick.tick() => {}
+                _ = tick.tick() => {
+                    // M11: prune stale entries every 256 ticks to bound memory. Each call removes
+                    // at most PRUNE_BATCH=64 entries, so the write-lock is held for O(64) not O(N).
+                    prune_counter = prune_counter.wrapping_add(1);
+                    if prune_counter == 0 {
+                        let tasks_removed = self.state.try_prune_tasks();
+                        let channels_removed = self.state.try_prune_channels();
+                        if tasks_removed > 0 || channels_removed > 0 {
+                            debug!(tasks_removed, channels_removed, "worker: pruned stale state");
+                        }
+                    }
+                }
                 changed = shutdown.changed() => {
                     if changed.is_err() || *shutdown.borrow() {
                         info!("worker: shutdown requested");
@@ -218,7 +239,15 @@ impl Worker {
                     }),
                     Err(e) => {
                         let attempts = attempts + 1;
-                        if attempts >= MAX_ATTEMPTS {
+                        // H6 fix: exit-money (Redeem/Reclaim/Claim) uses infinite retry.
+                        // Giving up on these permanently loses funds, which is worse than
+                        // retrying forever on a persistent RPC outage.
+                        let max_attempts = if work.is_exit_money() {
+                            u32::MAX // infinite retry
+                        } else {
+                            MAX_ATTEMPTS
+                        };
+                        if attempts >= max_attempts {
                             error!(work = ?work, attempts, error = %e, "worker: giving up");
                         } else {
                             error!(work = ?work, attempts, error = %e, "worker: step failed");
@@ -247,6 +276,12 @@ impl Worker {
         let mut seen = self.lock_debounced();
         if seen.contains(channel_id) {
             return None;
+        }
+        // M10 fix: cap the debounced list to prevent unbounded memory growth.
+        // Evict oldest entries when full. A prematurely evicted entry merely bypasses
+        // the delay for one nudge — safe, not a correctness issue.
+        while seen.len() >= MAX_DEBOUNCED {
+            seen.remove(0); // O(n) but n is bounded by MAX_DEBOUNCED=50000, acceptable
         }
         seen.push(*channel_id);
         Some(self.cfg.payment.redeem_delay)
@@ -578,36 +613,73 @@ impl Worker {
         let max = self.cfg.shard.max_ciphertext_bytes;
         let dir = self.cfg.shard.cache_dir.clone();
         let endpoint = self.cfg.shard.da_endpoint.clone();
-        let mut shards = Vec::with_capacity(fold.leaves.len());
-        let mut indexes: Vec<u32> = fold.leaves.keys().copied().collect();
-        indexes.sort_unstable();
-        for index in indexes {
-            let leaf = fold.leaves.get(&index).expect("keyed");
-            let contributor = self.client.contribution_of(task_id, index).await?;
-            let c = self.client.contribution(task_id, contributor).await?;
-            if !c.accepted {
-                return Err(Error::ShardStore(crate::error::ShardError::Malformed {
-                    offset: index as usize,
-                    reason: format!(
-                        "contribution of {contributor} at leaf {index} is not accepted"
-                    ),
-                }));
-            }
-            if c.ciphertext_cid != leaf.cid {
-                return Err(Error::Chain(format!(
-                    "task {task_id:#x}: leaf {index} is {:#x} on chain but {:#x} in the fold",
-                    c.ciphertext_cid, leaf.cid
-                )));
-            }
-            let bytes = da::fetch(&dir, &endpoint, &c.ciphertext_cid, max).await?;
-            da::verify_bytes(&c.ct_digest, &bytes)?;
-            shards.push(ShardInput {
-                leaf_index: index,
-                cid: c.ciphertext_cid,
-                ct_digest: c.ct_digest,
-                bytes,
-            });
-        }
+        // Snapshot (index, leaf) pairs up front: `Leaf` is Copy (~60 bytes), so the
+        // stream below owns everything it touches and no future borrows the fold.
+        // Borrowing `fold.leaves` inside the per-shard futures would tie their
+        // lifetimes to the closure environment owned by the stream itself, which the
+        // borrow checker cannot prove safe through `buffer_unordered`.
+        let mut leaves: Vec<(u32, Leaf)> = fold
+            .leaves
+            .iter()
+            .map(|(index, leaf)| (*index, *leaf))
+            .collect();
+        leaves.sort_unstable_by_key(|(index, _)| *index);
+
+        // H5 fix: fetch shards in parallel with bounded concurrency.
+        // Sequential fetch = 3 x N sequential RPCs/DA calls (contribution_of + contribution +
+        // da::fetch). At N=5000 contributors that is 15000 sequential round-trips.
+        // The bound caps open connections: a hostile TaskOnChain (which sets contributors=N)
+        // cannot force N concurrent TLS/RPC connections. Memory is bounded by construction
+        // too — at most `fetch_concurrency` fetches are in flight, each capped at
+        // `max_ciphertext_bytes` — so size `fetch_concurrency` against RAM.
+        let fetch_concurrency = self.cfg.shard.fetch_concurrency.max(1);
+        let sem = Arc::new(Semaphore::new(fetch_concurrency));
+
+        let shard_stream = futures_util::stream::iter(leaves.into_iter())
+            .map({
+                let sem = Arc::clone(&sem);
+                move |(index, leaf)| {
+                    let client = self.client.clone();
+                    let task_id = task_id;
+                    let dir = dir.clone();
+                    let endpoint = endpoint.clone();
+                    let max = max;
+                    async move {
+                        // The permit is the backpressure gate: it is held for the full
+                        // lifetime of the shard work (3 round-trips), so at most
+                        // `fetch_concurrency` shards are ever in flight at once.
+                        let _permit = sem.acquire().await.expect("semaphore is never closed");
+                        let contributor = client.contribution_of(task_id, index).await?;
+                        let c = client.contribution(task_id, contributor).await?;
+                        if !c.accepted {
+                            return Err(Error::ShardStore(crate::error::ShardError::Malformed {
+                                offset: index as usize,
+                                reason: format!(
+                                    "contribution of {contributor} at leaf {index} is not accepted"
+                                ),
+                            }));
+                        }
+                        if c.ciphertext_cid != leaf.cid {
+                            return Err(Error::Chain(format!(
+                                "task {task_id:#x}: leaf {index} is {:#x} on chain but {:#x} in the fold",
+                                c.ciphertext_cid, leaf.cid
+                            )));
+                        }
+                        let bytes = da::fetch(&dir, &endpoint, &c.ciphertext_cid, max).await?;
+                        da::verify_bytes(&c.ct_digest, &bytes)?;
+                        Ok(ShardInput {
+                            leaf_index: index,
+                            cid: c.ciphertext_cid,
+                            ct_digest: c.ct_digest,
+                            bytes,
+                        })
+                    }
+                }
+            })
+            .buffer_unordered(fetch_concurrency);
+
+        let mut shards: Vec<ShardInput> = shard_stream.try_collect().await?;
+        shards.sort_by_key(|s| s.leaf_index); // restore contract leaf order
         if task.last_weights_cid.is_zero() {
             return Err(Error::Fhe(FheError::Backend(
                 "openEpoch pinned no seed weights; the engine cannot start from nothing".into(),
