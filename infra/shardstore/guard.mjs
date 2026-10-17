@@ -182,7 +182,11 @@ export class SlidingWindowLimiter {
     }
     while (arr.length > 0 && arr[0] <= now - this.#windowMs) arr.shift();
     if (arr.length + cost > this.#limit) {
-      return { allowed: false, remaining: 0, retryAfterMs: Math.max(1, arr[0] + this.#windowMs - now) };
+      // Fresh key (or fully-expired window) with cost > limit: arr is empty and arr[0]
+      // is undefined — without the guard below retryAfterMs is NaN and the caller
+      // emits a garbage Retry-After header while denying a client that can never pass.
+      const oldestHit = arr.length > 0 ? arr[0] : now;
+      return { allowed: false, remaining: 0, retryAfterMs: Math.max(1, oldestHit + this.#windowMs - now) };
     }
     for (let i = 0; i < cost; i++) arr.push(now);
     return { allowed: true, remaining: Math.max(0, this.#limit - arr.length), retryAfterMs: 0 };
@@ -311,7 +315,15 @@ export class RiskEngine {
   noteInterval(subject, action, at = this.#now()) {
     const key = `${subject}\n${action}`;
     let arr = this.#intervals.get(key);
-    if (!arr) { arr = []; this.#intervals.set(key, arr); }
+    if (!arr) {
+      // Bounded like #scores: with a spoofable subject source (XFF behind TRUST_PROXY) an
+      // unbounded interval map is a memory leak. Same cap, stalest-first eviction.
+      if (this.#intervals.size >= this.#cfg.riskMaxSubjects) {
+        const oldest = this.#intervals.keys().next();
+        if (!oldest.done) this.#intervals.delete(oldest.value);
+      }
+      arr = []; this.#intervals.set(key, arr);
+    }
     const prev = arr.length ? arr[arr.length - 1] : null;
     arr.push(at);
     const keep = this.#cfg.riskMinIntervals + 1;
@@ -365,18 +377,35 @@ export function honeypotPut(payload) {
 /* ------------------------------------------------------------------ */
 
 export class IdempotencyStore {
-  #done = new Map(); // key -> { result, expiresAt } (insertion order = LRU)
+  #done = new Map(); // key -> { result, bodyHash, expiresAt } (insertion order = LRU)
   #flights = new Map(); // key -> Promise (вычисляется прямо сейчас)
   #ttlMs; #maxEntries; #now;
   constructor({ ttlMs, maxEntries, now = () => Date.now() }) {
     this.#ttlMs = ttlMs; this.#maxEntries = maxEntries; this.#now = now;
   }
+  /** Store (result, bodyHash, expiresAt) for a key. bodyHash enables replay verification. */
+  #put(key, result, bodyHash) {
+    if (this.#done.size >= this.#maxEntries) {
+      const oldest = this.#done.keys().next();
+      if (!oldest.done) this.#done.delete(oldest.value);
+    }
+    const entry = { result, bodyHash: bodyHash ?? null, expiresAt: this.#now() + this.#ttlMs };
+    this.#done.set(key, entry);
+  }
+  /** Return the cached body-hash for a key, or null if not found/expired. */
+  getBodyHash(key) {
+    const hit = this.#done.get(key);
+    if (!hit || hit.expiresAt <= this.#now()) { this.#done.delete(key); return null; }
+    return hit.bodyHash;
+  }
   /**
    * Выполнить fn() не более одного раза на ключ: параллельные вызовы с тем же ключом
    * ждут тот же Promise (singleflight), повтор после завершения — из кэша до TTL.
    * Именно это закрывает гонку "два запроса в одну миллисекунду дважды списывают".
+   *
+   * bodyHash: if provided, stored alongside the result so replay can verify the body matched.
    */
-  async run(key, fn) {
+  async run(key, fn, bodyHash = null) {
     const now = this.#now();
     const hit = this.#done.get(key);
     if (hit) {
@@ -388,10 +417,21 @@ export class IdempotencyStore {
     }
     let flight = this.#flights.get(key);
     if (!flight) {
+      // Bound in-flight singleflight entries: distinct keys with slow bodies would otherwise
+      // grow #flights without limit. Past the cap the call runs untracked (correct, just not
+      // deduplicated) instead of evicting somebody else's in-flight work.
+      if (this.#flights.size >= this.#maxEntries) {
+        const result = await fn();
+        return { result, replayed: false };
+      }
       flight = (async () => {
         try {
           const result = await fn();
-          this.#put(key, result);
+          // Adopt the worker's own bodyHash when the caller did not pass one: doPut
+          // returns { status, body, bodyHash }, and dropping it here is what made
+          // getBodyHash always null — same-key/different-body replays then looked
+          // identical to legitimate replays and got a silent 201 instead of 422.
+          this.#put(key, result, bodyHash ?? result?.bodyHash ?? null);
           return { result, replayed: false };
         } finally {
           this.#flights.delete(key);
@@ -401,14 +441,9 @@ export class IdempotencyStore {
     }
     return flight;
   }
-  #put(key, result) {
-    this.#done.delete(key);
-    this.#done.set(key, { result, expiresAt: this.#now() + this.#ttlMs });
-    while (this.#done.size > this.#maxEntries) {
-      const oldest = this.#done.keys().next();
-      if (oldest.done) break;
-      this.#done.delete(oldest.value);
-    }
+  /** Drop one cached result (e.g. after DELETE so a stale replay cannot resurrect a ghost). */
+  forget(key) {
+    return this.#done.delete(key);
   }
   sweep(now = this.#now()) {
     let n = 0;

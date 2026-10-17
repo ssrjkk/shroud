@@ -22,7 +22,7 @@
  *
  * Run: `node server.mjs`
  *   (PORT=8080, DATA_DIR=./data, MAX_OBJECT_BYTES=67108864, MAX_OBJECTS=4096,
- *    SHUTDOWN_TIMEOUT_MS=10000, DLQ_DIR=<DATA_DIR>/dlq, TRUST_PROXY=0, GUARD_* — см. guard.mjs)
+ *    MAX_TOTAL_BYTES=1073741824, SHUTDOWN_TIMEOUT_MS=10000, DLQ_DIR=<DATA_DIR>/dlq, TRUST_PROXY=0, GUARD_* — см. guard.mjs)
  */
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -44,7 +44,26 @@ const PORT = Number(process.env.PORT ?? 8080);
 const HOST = process.env.HOST ?? "127.0.0.1";
 const DATA_DIR = process.env.DATA_DIR || null;
 const MAX_OBJECT_BYTES = Number(process.env.MAX_OBJECT_BYTES ?? 64 * 1024 * 1024);
+if (!Number.isSafeInteger(MAX_OBJECT_BYTES) || MAX_OBJECT_BYTES < 1) {
+  console.error("shardstore: MAX_OBJECT_BYTES must be a positive integer number of bytes");
+  process.exit(1);
+}
 const MAX_OBJECTS = Number(process.env.MAX_OBJECTS ?? 4096);
+if (!Number.isSafeInteger(MAX_OBJECTS) || MAX_OBJECTS < 1) {
+  console.error("shardstore: MAX_OBJECTS must be a positive integer");
+  process.exit(1);
+}
+/**
+ * Cap on all catalogued bytes (count cap is secondary). 4096 objects × 64 MiB
+ * would otherwise pin up to 256 GiB of RAM — and `rebuildIndex` would load it
+ * all at startup. One GiB holds ~16k average shards with headroom; per-object
+ * and in-flight caps still apply underneath.
+ */
+const MAX_TOTAL_BYTES = Number(process.env.MAX_TOTAL_BYTES ?? 1024 * 1024 * 1024);
+if (!Number.isFinite(MAX_TOTAL_BYTES) || MAX_TOTAL_BYTES < 1) {
+  console.error("shardstore: MAX_TOTAL_BYTES must be a positive number of bytes");
+  process.exit(1);
+}
 const AUTH_TOKEN = process.env.AUTH_TOKEN || null;
 const TLS_CERT = process.env.TLS_CERT || null;
 const TLS_KEY = process.env.TLS_KEY || null;
@@ -70,6 +89,8 @@ const FILE_RE = /^[0-9a-f]{64}$/;
 
 /** Insertion-ordered catalogue: хвост — самый свежий, голова вытесняется первой. */
 const objects = new Map();
+/** Bytes currently catalogued (parallel to `objects`; single source of truth for the budget). */
+let objectsBytes = 0;
 
 const metrics = new Metrics();
 const audit = new AuditLog({ service: "shardstore", metrics });
@@ -117,6 +138,79 @@ function send(res, code, body, type = "application/json", extraHeaders = {}) {
 
 function retryAfter(ms) {
   return { "retry-after": String(Math.max(1, Math.ceil(ms / 1000))) };
+}
+
+/**
+ * Consume-and-discard a request body unless already complete. Two paths answer
+ * without running the body read — an idempotent replay and a singleflight
+ * follower sharing the leader's in-flight PUT — and replying with the body
+ * still on the socket desyncs the keep-alive connection behind it (the unread
+ * bytes parse as the next request). Never rejects; the socket timeout bounds
+ * slow senders.
+ */
+function drainRequest(req) {
+  // `req.complete` alone is NOT enough to skip: a fully-arrived but unread body still
+  // sits in the buffer, and leaving it there desynchronizes the next pipelined request
+  // (it would parse leftover body bytes as HTTP). Skip only when the stream already
+  // ended, or when it is complete with an empty buffer — which means the bytes were
+  // consumed elsewhere and waiting for another 'end' would hang forever.
+  if (req.readableEnded) return Promise.resolve();
+  if (req.complete && req.readableLength === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    req.on("data", () => {});
+    req.on("end", resolve);
+    req.on("error", () => resolve());
+    req.on("aborted", () => resolve());
+    // `aborted` deprecated/never fires on some Node versions; `close` always does.
+    req.on("close", () => resolve());
+    req.resume();
+  });
+}
+
+/**
+ * Drain the body while hashing it (keccak256 over raw bytes). Used on the idempotent-replay
+ * path: the cached result is only valid for the same bytes. Returns the hex digest, or null
+ * when the body could not be fully consumed (aborted socket, or over the byte cap — caller
+ * must then NOT trust a replay-or-mismatch verdict and falls back to draining).
+ */
+function drainAndHash(req, cap) {
+  // Same skip rule as drainRequest, but resolving null (unverifiable) instead of just
+  // returning: when the body was already consumed (singleflight share) there is nothing
+  // to hash, and when it is over the cap the hash is unknowable. The caller must then
+  // NOT treat the replay as verified — it falls back to a plain replay or re-execution.
+  if (req.readableEnded) return Promise.resolve(null);
+  if (req.complete && req.readableLength === 0) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const chunks = [];
+    let size = 0;
+    let overCap = false;
+    let failed = false;
+    req.on("data", (c) => {
+      if (overCap || failed) return;
+      size += c.length;
+      if (size > cap) {
+        // Oversized replay body: keep draining (discard) so keep-alive survives, but the
+        // hash is unknowable — signal unverifiable rather than buffering an attack.
+        overCap = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (failed || overCap) return resolve(null);
+      try {
+        resolve(keccak(Buffer.concat(chunks)));
+      } catch {
+        resolve(null);
+      }
+    });
+    req.on("error", () => { failed = true; resolve(null); });
+    req.on("aborted", () => { failed = true; resolve(null); });
+    // `aborted` deprecated/never fires on some Node versions; `close` always does.
+    req.on("close", () => resolve(null));
+    req.resume();
+  });
 }
 
 /** IP клиента. X-Forwarded-For — только при явном TRUST_PROXY=1, иначе это спуфинг. */
@@ -168,10 +262,24 @@ async function persistAtomic(cid, payload) {
 }
 
 /** Best-effort сброс в DLQ для ручного разбора/повтора. Никогда не бросает. */
+const MAX_DLQ_FILES = Number(process.env.MAX_DLQ_FILES ?? 100);
 async function dlqWrite(cid, payload, reason) {
   if (!DLQ_DIR) return false;
   try {
     await mkdir(DLQ_DIR, { recursive: true });
+    // Cap: every persist failure writes a full payload copy, so an unbounded DLQ turns a full
+    // disk into a faster-full disk. Oldest files are NOT rotated away automatically (evidence),
+    // new writes are shed with a warning instead.
+    try {
+      const existing = await readdir(DLQ_DIR);
+      if (existing.length >= (Number.isSafeInteger(MAX_DLQ_FILES) ? MAX_DLQ_FILES : 100)) {
+        audit.warn("DLQ_FULL", { cid, reason });
+        metrics.incr("persist:dlq-shed");
+        return false;
+      }
+    } catch {
+      // Cannot list: try the write anyway, it may still succeed.
+    }
     await writeFile(join(DLQ_DIR, `${cid.slice(2)}.${Date.now()}.failed`), payload);
     audit.critical("DLQ_WRITE", { cid, reason });
     return true;
@@ -181,13 +289,18 @@ async function dlqWrite(cid, payload, reason) {
   }
 }
 
-/** Drop the least-recently-used entries until the catalogue fits the cap, disk copies included. */
+/** Drop the least-recently-used entries until the catalogue fits the count AND
+ * byte caps, disk copies included. Stops at one entry: a lone object above the
+ * byte budget is still bounded by MAX_OBJECT_BYTES, and evicting it would turn
+ * every read into a miss (the same thrash guard the SDK cache uses). */
 async function enforceCapacity() {
-  while (objects.size > MAX_OBJECTS) {
+  while ((objects.size > MAX_OBJECTS || objectsBytes > MAX_TOTAL_BYTES) && objects.size > 1) {
     const oldest = objects.keys().next();
     if (oldest.done) return;
     const cid = oldest.value;
+    const victim = objects.get(cid);
     objects.delete(cid);
+    objectsBytes = Math.max(0, objectsBytes - (victim?.length ?? 0));
     if (DATA_DIR) {
       try {
         await unlink(storePath(cid));
@@ -199,8 +312,10 @@ async function enforceCapacity() {
 }
 
 /**
- * Rebuild the catalogue from files, newest first, не более MAX_OBJECTS файлов:
- * пик памяти ограничен, а не "все файлы диска".
+ * Rebuild the catalogue from files, newest first, within the count AND byte
+ * caps: peak memory is bounded, not "all files on disk". Selected newest-first,
+ * inserted oldest-first so the live eviction order (head = oldest) holds from
+ * boot. A lone survivor may exceed the byte budget — same rule as live PUTs.
  */
 async function rebuildIndex() {
   if (!DATA_DIR) return;
@@ -215,17 +330,40 @@ async function rebuildIndex() {
     if (!FILE_RE.test(name)) continue;
     try {
       const info = await stat(join(DATA_DIR, name));
-      if (info.isFile() && info.size <= MAX_OBJECT_BYTES) entries.push({ name, mtime: info.mtimeMs });
+      if (info.isFile() && info.size <= MAX_OBJECT_BYTES) entries.push({ name, mtime: info.mtimeMs, size: info.size });
     } catch {
       // Vanished between listing and stat: not ours to serve.
     }
   }
   entries.sort((a, b) => b.mtime - a.mtime);
-  for (const { name } of entries.slice(0, MAX_OBJECTS)) {
+  const selected = [];
+  let selectedBytes = 0;
+  for (const e of entries) {
+    if (selected.length >= MAX_OBJECTS) break;
+    if (selected.length > 0 && selectedBytes + e.size > MAX_TOTAL_BYTES) continue;
+    selected.push(e);
+    selectedBytes += e.size;
+  }
+  objectsBytes = 0;
+  const selectedNames = new Set(selected.map((e) => e.name));
+  for (let i = selected.length - 1; i >= 0; i--) {
     try {
-      objects.set(`0x${name}`, await readFile(join(DATA_DIR, name)));
+      const data = await readFile(join(DATA_DIR, selected[i].name));
+      objects.set(`0x${selected[i].name}`, data);
+      objectsBytes += data.length;
     } catch {
       // Unreadable now: skip rather than serve half an object later.
+    }
+  }
+  // Orphans: files that fit neither the count nor the byte budget would otherwise sit on disk
+  // forever, invisible to the catalogue but eating the volume. Best-effort delete.
+  for (const e of entries) {
+    if (selectedNames.has(e.name)) continue;
+    try {
+      await unlink(join(DATA_DIR, e.name));
+      metrics.incr("rebuild:orphan-removed");
+    } catch {
+      // Already gone or unwritable: memory catalogue stays authoritative.
     }
   }
 }
@@ -237,6 +375,9 @@ async function routeHealth(req, res) {
   return send(res, 200, {
     ok: true,
     objects: objects.size,
+    objectsBytes,
+    maxObjects: MAX_OBJECTS,
+    maxTotalBytes: MAX_TOTAL_BYTES,
     degraded,
     uptimeSec: Math.floor(process.uptime()),
     inflightBytes,
@@ -337,20 +478,26 @@ async function routePut(req, res, url, ip) {
       req.on("aborted", () => { if (!aborted) { aborted = true; reject(new Error("client aborted")); } });
     }).finally(release);
 
+    // Compute bodyHash alongside the CID: both are derived from the same payload.
+    const cid = keccak(payload);
+    const bodyHash = cid; // same keccak computation, stored for replay verification
+
     if (shadowed) {
       const hp = honeypotPut(payload);
       audit.security("SHADOWBAN_PUT", { ip, bytes: payload.length, cid: hp.body.cid });
       metrics.incr("shadowban:put");
-      return { status: hp.status, body: hp.body };
+      return { status: hp.status, body: hp.body, bodyHash };
     }
 
-    const cid = keccak(payload);
     if (flood.note(ip, cid)) {
       const r = risk.add(ip, RiskSignal.DUP_PAYLOAD);
       audit.security("DUP_PAYLOAD", { ip, cid, riskLevel: r.level });
     }
+    // LRU-touch with byte accounting: a re-PUT replaces, never double-counts.
+    const prev = objects.get(cid);
     objects.delete(cid);
     objects.set(cid, payload);
+    objectsBytes += payload.length - (prev?.length ?? 0);
     if (DATA_DIR) {
       // Fail-open persist: диск лёг — memory-only + degraded + DLQ, сервис жив.
       // exec с fallback не бросает: успех → "ok", открытый контур → "degraded".
@@ -368,21 +515,71 @@ async function routePut(req, res, url, ip) {
       }
     }
     await enforceCapacity();
-    return { status: 201, body: { cid, digest: cid } };
+    return { status: 201, body: { cid, digest: cid }, bodyHash };
   };
 
   try {
     let out;
     if (idemKey) {
       const key = `put:${ip}:${idemKey}`;
+      // NOTE: we do NOT call drainAndHash here before idempotency.run.
+      // doPut reads the body and computes bodyHash, which is stored in the cache.
+      // On replay (r.replayed), we use the stored bodyHash to verify.
       const r = await idempotency.run(key, doPut);
       if (r.replayed) {
-        metrics.incr("idempotency:replay");
-        audit.info("IDEMPOTENT_REPLAY", { ip, key: `${ip}:***` });
+        // Stale-cache check FIRST, before touching the body: if the cached 201 names
+        // an object that is gone (deleted after caching), forget and re-execute so
+        // doPut reads the intact body itself. Draining first would leave doPut with
+        // an empty stream that never ends — the request then hangs until the handler
+        // timeout answers 503.
+        const replayCid = typeof r.result?.body?.cid === "string" ? r.result.body.cid : null;
+        if (replayCid && r.result.status === 201 && !objects.has(replayCid)) {
+          idempotency.forget(key);
+          metrics.incr("idempotency:stale-replay-reexecuted");
+          audit.info("IDEMPOTENT_STALE_REEXEC", { ip, key: `${ip}:***` });
+          out = await doPut();
+        } else {
+          // Live replay: the cached result is only valid for the same bytes. Drain the
+          // body to hash it and compare against the stored bodyHash from the original
+          // request — this detects the same idempotency key reused with different bytes.
+          const storedHash = idempotency.getBodyHash(key);
+          const currentHash = await drainAndHash(req, MAX_OBJECT_BYTES);
+          if (storedHash !== null && currentHash !== null && storedHash.toLowerCase() !== currentHash.toLowerCase()) {
+            metrics.incr("idempotency:mismatch");
+            audit.security("IDEMPOTENCY_MISMATCH", { ip, key: `${ip}:***` });
+            return send(res, 422, { error: "idempotency key was already used with different bytes" });
+          }
+          metrics.incr("idempotency:replay");
+          audit.info("IDEMPOTENT_REPLAY", { ip, key: `${ip}:***` });
+          out = r.result;
+          // Even on replay we must consume the body so the connection stays usable.
+          await drainRequest(req);
+        }
+      } else {
+        // First call (or cache miss): doPut ran and the cache adopted its bodyHash.
+        // Singleflight subtlety: when our call shared another request's in-flight
+        // execution, the winner consumed ITS body while ours sits unread in our
+        // socket. Verify ours against the winner's hash before accepting the shared
+        // result — otherwise a concurrent same-key/different-body PUT silently gets
+        // a cid it cannot commit (must be 422, same as the replay path). When we won
+        // the race our body is already consumed, the hash comes back null, and the
+        // check is skipped. Either way the body ends consumed (drained here, or by
+        // doPut) so the connection stays usable.
+        const sharedHash = r.result?.bodyHash ?? null;
+        const ourHash = await drainAndHash(req, MAX_OBJECT_BYTES);
+        if (sharedHash !== null && ourHash !== null && sharedHash.toLowerCase() !== ourHash.toLowerCase()) {
+          metrics.incr("idempotency:mismatch");
+          audit.security("IDEMPOTENCY_MISMATCH", { ip, key: `${ip}:***` });
+          return send(res, 422, { error: "idempotency key was already used with different bytes" });
+        }
+        out = r.result;
       }
-      out = r.result;
     } else {
       out = await doPut();
+      // doPut consumed the body; a replay or a shared singleflight result did
+      // not. Drain whatever is left so the connection stays usable even on
+      // runtimes/proxies that do not discard unread bodies themselves.
+      await drainRequest(req);
     }
     metrics.incr(`route:put:${out.status}`);
     return send(res, out.status, out.body);
@@ -420,7 +617,13 @@ async function routeDelete(req, res, url, ip) {
     return send(res, 401, { error: "unauthorised" });
   }
   if (!objects.has(cid)) return send(res, 404, { error: "not found" });
+  const removed = objects.get(cid);
   objects.delete(cid);
+  // Byte accounting is parallel to the catalogue: a delete that forgets it leaks the budget
+  // until the next restart (premature evictions + a lying healthz).
+  objectsBytes = Math.max(0, objectsBytes - (removed?.length ?? 0));
+  // NOTE: a stale idempotency replay for this cid is handled on the PUT path — a replayed
+  // 201 whose object is gone is re-executed instead of served from cache (see routePut).
   if (DATA_DIR) {
     try {
       await unlink(storePath(cid));
@@ -631,14 +834,14 @@ async function handle(req, res) {
   }
 }
 
-function shutdown(signal) {
+function shutdown(signal, code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   audit.critical("SHUTDOWN_BEGIN", { signal });
   server.close(() => {
     audit.critical("SHUTDOWN_DRAINED", {});
     stopSweeper();
-    process.exit(0);
+    process.exit(code);
   });
   // Дедлайн: зависшие соединения рвём, иначе SIGTERM висит вечно.
   setTimeout(() => {
@@ -647,16 +850,22 @@ function shutdown(signal) {
       try { s.destroy(); } catch { /* уже мёртв */ }
     }
     stopSweeper();
-    process.exit(0);
+    process.exit(code);
   }, SHUTDOWN_TIMEOUT_MS).unref();
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT", 0));
+process.on("SIGTERM", () => shutdown("SIGTERM", 0));
 process.on("uncaughtException", (e) => {
-  // Последний рубеж: логируем и гасим по протоколу, а не падаем с dump посреди PUT.
+  // Крах — не graceful shutdown: не-нулевой код, иначе оркестратор решит, что всё штатно.
   audit.critical("UNCAUGHT", { error: e.message });
-  shutdown("uncaughtException");
+  shutdown("uncaughtException", 1);
+});
+process.on("unhandledRejection", (reason) => {
+  // Async-обработчики вызваны как void handle(): вылетевший реджект иначе умирает молча.
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  audit.critical("UNHANDLED_REJECTION", { error: msg });
+  shutdown("unhandledRejection", 1);
 });
 
 await rebuildIndex();
