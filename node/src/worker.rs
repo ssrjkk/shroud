@@ -618,8 +618,11 @@ impl Worker {
         // Borrowing `fold.leaves` inside the per-shard futures would tie their
         // lifetimes to the closure environment owned by the stream itself, which the
         // borrow checker cannot prove safe through `buffer_unordered`.
-        let mut leaves: Vec<(u32, Leaf)> =
-            fold.leaves.iter().map(|(index, leaf)| (*index, *leaf)).collect();
+        let mut leaves: Vec<(u32, Leaf)> = fold
+            .leaves
+            .iter()
+            .map(|(index, leaf)| (*index, *leaf))
+            .collect();
         leaves.sort_unstable_by_key(|(index, _)| *index);
 
         // H5 fix: fetch shards in parallel with bounded concurrency.
