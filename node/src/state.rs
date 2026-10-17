@@ -280,6 +280,16 @@ pub enum Work {
     ReleaseBond { task_id: U256 },
 }
 
+impl Work {
+    /// True for operations that move money OUT of the protocol to the operator (exit-money).
+    /// These use infinite retry: losing a Redeem/Reclaim/Claim permanently loses the funds.
+    /// Unlike commit/dispute work which is periodic and bounded, exit-money failures are
+    /// permanent loss, so we retry forever rather than giving up after MAX_ATTEMPTS.
+    pub fn is_exit_money(&self) -> bool {
+        matches!(self, Work::Redeem { .. } | Work::Reclaim { .. } | Work::Claim)
+    }
+}
+
 /// Inner state, guarded by one lock.
 #[derive(Debug, Default)]
 struct Inner {
@@ -913,6 +923,67 @@ impl NodeState {
             .filter(|c| c.node == node)
             .cloned()
             .collect()
+    }
+
+    /// Prune fully settled tasks and fully collected channels from the in-memory state.
+    ///
+    /// M11 fix: `tasks` and `channels` are `HashMap`s that grow without bound on a long-running
+    /// node. A node that has been online for a year and settled 10 000 tasks accumulates
+    /// 10 000 `TaskState` entries — all obsolete, consuming RAM and slowing BTree iteration
+    /// over the subset of "live" tasks.
+    ///
+    /// Pruning is conservative: a task is only evicted when it is *certain* no further work
+    /// is needed. The `settled` flag is set by the watcher only after `TaskSettled` is
+    /// emitted *and* the escrow distribution is complete; an epoch that is still open
+    /// cannot set `settled = true`. A task that has reached `TaskSettled` without setting
+    /// `settled` represents a logic bug in the watcher, not normal operation, and is left
+    /// for manual inspection.
+    ///
+    /// Channel pruning uses `closed && exhausted()`: `closed` is set after the
+    /// close/reclaim transaction confirms, and `exhausted()` means every authorised token
+    /// was redeemed. A channel that is open, or closed with a remaining balance, is never
+    /// pruned.
+    ///
+    /// `try_prune_*` acquires a write lock, which is held for the full iteration. Bounded
+    /// to `PRUNE_BATCH` entries per call so that even under the lock the node can still make
+    /// progress on nudges (the tick loop retries on `Gate::Wait`, never blocks).
+    const PRUNE_BATCH: usize = 64;
+    pub fn try_prune_tasks(&self) -> usize {
+        let mut g = self.write();
+        let before = g.tasks.len();
+        // We cannot use `drain_filter` (unstable); collect keys then remove.
+        // `settled` is set by the watcher only after `TaskSettled` + full distribution.
+        let to_remove: Vec<U256> = g
+            .tasks
+            .iter()
+            .filter(|(_, t)| t.settled)
+            .map(|(id, _)| *id)
+            .take(Self::PRUNE_BATCH)
+            .collect();
+        for id in &to_remove {
+            g.tasks.remove(id);
+        }
+        before - g.tasks.len()
+    }
+
+    pub fn try_prune_channels(&self) -> usize {
+        let mut g = self.write();
+        let before = g.channels.len();
+        // A channel is only evicted when it is closed AND fully drawn: `closed` is set
+        // after the close/reclaim transaction confirms, and `exhausted()` means every
+        // authorised token was redeemed, so no redeem or reclaim nudge can need it again.
+        // Anything still open, or closed with a remaining balance, is left alone.
+        let to_remove: Vec<U256> = g
+            .channels
+            .iter()
+            .filter(|(_, c)| c.closed && c.exhausted())
+            .map(|(id, _)| *id)
+            .take(Self::PRUNE_BATCH)
+            .collect();
+        for id in &to_remove {
+            g.channels.remove(id);
+        }
+        before - g.channels.len()
     }
 
     pub fn is_tainted(&self) -> bool {
