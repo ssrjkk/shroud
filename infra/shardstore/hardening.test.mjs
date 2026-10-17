@@ -6,9 +6,15 @@
  *  (б) penalty box: серия 401 → блок с растущим Retry-After;
  *  (в) shadowban: HIGH-субъект с валидным токеном получает правдоподобный 201,
  *      но объект НЕ записан (GET → 404) — изоляция без оракула для атакующего;
- *  (г) идемпотентность: повтор PUT с тем же Idempotency-Key → тот же ответ без
- *      повторной записи (401 без ключа vs 201 с ключом не проверяем — проверяем replay);
- *  (д) graceful shutdown: SIGTERM → процесс завершается кодом 0, данные целы.
+ *  (г) идемпотентность: повтор PUT с тем же Idempotency-Key и тем же телом →
+ *      тот же ответ без повторной записи; тот же ключ с другим телом → 422;
+ *  (д) graceful shutdown: SIGTERM → процесс завершается кодом 0, данные целы;
+ *  (е) replay дренирует тело: пайплайнинг на одном сокете не рассинхронизируется,
+ *      повтор с другим телом → 422;
+ *  (е2) повтор после DELETE не воскрешает призрака: stale-replay переисполняется;
+ *  (е3) DELETE уменьшает objectsBytes;
+ *  (ж) байт-бюджет каталога: вытеснение oldest-first по сумме, одиночный объект
+ *      сверх бюджета остаётся (без thrash).
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -205,13 +211,13 @@ describe("hardening", () => {
       });
       assert.equal(first.status, 201);
       const j1 = await first.json();
-      // Тот же ключ, другое тело: сервер обязан вернуть ПЕРВЫЙ результат, не писать второе.
+      // Тот же ключ, другое тело: 422 — молча вернуть чужой cid значит отдать клиенту
+      // шард, который он не сможет закоммитить (ctDigest не сойдётся).
       const second = await fetch(`${base4}/objects`, {
         method: "PUT", headers: { ...authed(), "Idempotency-Key": key }, body: Buffer.from("different-bytes"),
       });
-      assert.equal(second.status, 201);
-      const j2 = await second.json();
-      assert.deepEqual(j2, j1);
+      assert.equal(second.status, 422);
+      assert.match(await second.text(), /different bytes/);
       // Мусорный ключ — 400, а не запись.
       const bad = await fetch(`${base4}/objects`, {
         method: "PUT", headers: { ...authed(), "Idempotency-Key": "bad key!!" }, body,
@@ -267,6 +273,174 @@ describe("hardening", () => {
     } finally {
       c6.kill("SIGKILL");
       rmSync(dir5, { recursive: true, force: true });
+    }
+  });
+
+  it("(е) replay дренирует тело: пайплайнинг на одном сокете не рассинхронизируется", async () => {
+    // fetch-клиент мог бы открыть новое соединение и скрыть баг, поэтому сырой
+    // сокет: три запроса подряд без ожидания ответов. Без drain непрочитанное
+    // тело второго PUT парсится как следующий запрос и третий ответ — мусор.
+    const port6 = 18087;
+    const dir6 = mkdtempSync(join(tmpdir(), "shardstore-pipe-"));
+    const c6 = spawnServer({
+      PORT: String(port6), DATA_DIR: dir6, AUTH_TOKEN: TOKEN, GUARD_WRITE_BURST: "1000",
+    });
+    const { default: net } = await import("node:net");
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`http://127.0.0.1:${port6}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("pipe server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const key = `pipe-key-${Date.now()}`;
+      const a = Buffer.alloc(16, 0x41);
+      const b = Buffer.alloc(16, 0x42);
+      const put = (body) =>
+        `PUT /objects HTTP/1.1\r\nhost: x\r\nauthorization: Bearer ${TOKEN}\r\n` +
+        `idempotency-key: ${key}\r\ncontent-length: ${body.length}\r\nconnection: keep-alive\r\n\r\n`;
+      const responses = await new Promise((resolve, reject) => {
+        const sock = net.connect(port6, "127.0.0.1", () => {
+          // Второй PUT несёт ДРУГОЕ тело под тем же ключом: это 422, а не тихий replay
+          // чужого cid — иначе клиент закоммитит непиннящийся шард. Главное: соединение
+          // не рассинхронизируется и третий ответ — корректный GET.
+          sock.write(put(a) + a);
+          sock.write(put(b) + b);
+          sock.write(`GET /objects/${cidOf(a)} HTTP/1.1\r\nhost: x\r\nconnection: close\r\n\r\n`);
+        });
+        const chunks = [];
+        sock.on("data", (c) => chunks.push(c));
+        sock.on("end", () => resolve(Buffer.concat(chunks).toString("latin1")));
+        sock.on("error", reject);
+        setTimeout(() => reject(new Error("pipelined responses timed out")), 10_000).unref();
+      });
+      const parsed = [...responses.matchAll(/HTTP\/1\.1 (\d{3})/g)].map((m) => m[1]);
+      assert.deepEqual(parsed, ["201", "422", "200"], `statuses must survive pipelining, got ${parsed}`);
+      const bodies = [...responses.matchAll(/\{[^}]*\}/g)].map((m) => m[0]);
+      const first = JSON.parse(bodies[0]);
+      assert.equal(first.cid, cidOf(a));
+      assert.match(bodies[1], /different bytes/);
+    } finally {
+      c6.kill("SIGKILL");
+      rmSync(dir6, { recursive: true, force: true });
+    }
+  });
+
+  it("(е2) повтор с тем же телом — replay 201, повтор после DELETE — новая запись", async () => {
+    const port8 = 18089;
+    const dir8 = mkdtempSync(join(tmpdir(), "shardstore-replay-"));
+    const c8 = spawnServer({
+      PORT: String(port8), DATA_DIR: dir8, AUTH_TOKEN: TOKEN, GUARD_WRITE_BURST: "1000",
+    });
+    const base8 = `http://127.0.0.1:${port8}`;
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`${base8}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("replay server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const key = `replay-key-${Date.now()}`;
+      const body = Buffer.alloc(16, 0x43);
+      const headers = { ...authed(), "idempotency-key": key };
+      const p1 = await fetch(`${base8}/objects`, { method: "PUT", headers, body });
+      assert.equal(p1.status, 201);
+      const cid = (await p1.json()).cid;
+      // Тот же ключ + то же тело → replay, тот же cid.
+      const p2 = await fetch(`${base8}/objects`, { method: "PUT", headers, body });
+      assert.equal(p2.status, 201);
+      assert.equal((await p2.json()).cid, cid);
+      // DELETE, затем тот же ключ + то же тело → НЕ stale-replay призрака, а новая запись.
+      assert.equal((await fetch(`${base8}/objects/${cid}`, { method: "DELETE", headers: authed() })).status, 200);
+      assert.equal((await fetch(`${base8}/objects/${cid}`)).status, 404);
+      const p3 = await fetch(`${base8}/objects`, { method: "PUT", headers, body });
+      assert.equal(p3.status, 201);
+      assert.equal((await p3.json()).cid, cid);
+      assert.equal((await fetch(`${base8}/objects/${cid}`)).status, 200);
+    } finally {
+      c8.kill("SIGKILL");
+      rmSync(dir8, { recursive: true, force: true });
+    }
+  });
+
+  it("(е3) DELETE уменьшает objectsBytes: бюджет не течёт", async () => {
+    const port9 = 18090;
+    const dir9 = mkdtempSync(join(tmpdir(), "shardstore-delbytes-"));
+    const c9 = spawnServer({
+      PORT: String(port9), DATA_DIR: dir9, AUTH_TOKEN: TOKEN, GUARD_WRITE_BURST: "1000",
+    });
+    const base9 = `http://127.0.0.1:${port9}`;
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`${base9}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("delbytes server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const p = await fetch(`${base9}/objects`, { method: "PUT", headers: authed(), body: Buffer.alloc(16, 7) });
+      assert.equal(p.status, 201);
+      const cid = (await p.json()).cid;
+      assert.equal((await (await fetch(`${base9}/healthz`)).json()).objectsBytes, 16);
+      assert.equal((await fetch(`${base9}/objects/${cid}`, { method: "DELETE", headers: authed() })).status, 200);
+      const health = await (await fetch(`${base9}/healthz`)).json();
+      assert.equal(health.objects, 0);
+      assert.equal(health.objectsBytes, 0);
+    } finally {
+      c9.kill("SIGKILL");
+      rmSync(dir9, { recursive: true, force: true });
+    }
+  });
+
+  it("(ж) байт-бюджет вытесняет oldest-first, одиночку сверх бюджета держит", async () => {
+    const port7 = 18088;
+    const dir7 = mkdtempSync(join(tmpdir(), "shardstore-bytes-"));
+    const c7 = spawnServer({
+      PORT: String(port7), DATA_DIR: dir7, AUTH_TOKEN: TOKEN,
+      MAX_TOTAL_BYTES: "40", GUARD_WRITE_BURST: "1000",
+    });
+    const base7 = `http://127.0.0.1:${port7}`;
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`${base7}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("bytes server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      const mk = (fill) => Buffer.alloc(16, fill);
+      const cids = [];
+      for (const fill of [1, 2, 3]) {
+        const put = await fetch(`${base7}/objects`, { method: "PUT", headers: authed(), body: mk(fill) });
+        assert.equal(put.status, 201);
+        cids.push((await put.json()).cid);
+      }
+      // 3×16 = 48 > 40: первый вытеснен, остальные на месте.
+      assert.equal((await fetch(`${base7}/objects/${cids[0]}`)).status, 404);
+      assert.equal((await fetch(`${base7}/objects/${cids[1]}`)).status, 200);
+      assert.equal((await fetch(`${base7}/objects/${cids[2]}`)).status, 200);
+      const health = await (await fetch(`${base7}/healthz`)).json();
+      assert.equal(health.objects, 2);
+      assert.equal(health.objectsBytes, 32);
+      // Одиночный объект сверх бюджета остаётся: иначе каждое чтение — промах.
+      const big = Buffer.alloc(64, 9);
+      const putBig = await fetch(`${base7}/objects`, { method: "PUT", headers: authed(), body: big });
+      assert.equal(putBig.status, 201);
+      const bigCid = (await putBig.json()).cid;
+      assert.equal((await fetch(`${base7}/objects/${bigCid}`)).status, 200);
+    } finally {
+      c7.kill("SIGKILL");
+      rmSync(dir7, { recursive: true, force: true });
     }
   });
 });
