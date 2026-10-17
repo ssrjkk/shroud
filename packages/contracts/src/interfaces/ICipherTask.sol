@@ -207,6 +207,9 @@ interface ICipherTask {
 
     error UnknownTask(uint256 taskId);
     error AlreadyTerminal(uint256 taskId, TaskStatus status);
+    /// H4 fix: `emergencyUnwind` must not kill a healthy task that is simply waiting for the
+    /// buyer to open the next epoch (`EpochSettled` with nothing locked).
+    error TaskNotStuck(uint256 taskId);
     error EpochStillLive(uint256 taskId, uint64 deadline);
     error NotUpdateManagerOrOwner(uint256 taskId, address caller);
     error NodeNotRegistered(uint256 taskId, address node);
@@ -379,7 +382,9 @@ interface ICipherTask {
     function ctRootOf(uint256 taskId) external view returns (bytes32);
     function nodePoolOf(uint256 taskId) external view returns (uint128);
     function rewardChannelWindow() external view returns (uint64);
-    function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest) external view returns (bytes32);
+    /// @notice STARK transcript bound to the node. H2 fix: `node` is a public input so a
+    ///         proof cannot be replayed under a different address.
+    function proofTranscript(uint256 taskId, uint32 epoch, bytes32 traceDigest, address node) external view returns (bytes32);
     function settleUserPool(uint256 taskId) external view returns (uint128);
 
     /// @dev A channel's slice is authorised by this contract, so a node redeems with an

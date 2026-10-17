@@ -20,6 +20,12 @@ import {ICipherTask} from "../interfaces/ICipherTask.sol";
 ///      the reveal, and binding the reporter address stops one commitment being replayed by
 ///      another identity.
 library DisputeLib {
+    /// @notice Maximum reporters recorded (and paid) per task/epoch.
+    /// @dev Reporters must hold a verified commit, so the array is already bounded by
+    ///      `MAX_NODES = 200`. A 64-reporter cap keeps `payReporters` and channel sweeps
+    ///      far below the block gas limit. `DISPUTE_QUORUM` is 3; 64 is generous headroom.
+    uint32 internal constant MAX_REPORTERS_PER_EPOCH = 64;
+
     /// @notice Dispute state for every task/epoch. Owned by the host, passed by pointer.
     struct State {
         mapping(uint256 => mapping(uint32 => mapping(address => bytes32))) commitment;
@@ -127,6 +133,12 @@ library DisputeLib {
 
         s.recorded[taskId][epoch][reporter] = true;
         s.count[taskId][epoch] += 1;
+        // Bound the reporters array at the source: without a cap, a task with hundreds of
+        // reporters makes `payReporters` and channel sweeps exceed the block gas limit and
+        // locks the task. Quorum is 3; the 65th reporter is not needed for security.
+        if (s.reporters[taskId][epoch].length >= MAX_REPORTERS_PER_EPOCH) {
+            revert ICipherTask.CapReached(taskId, MAX_REPORTERS_PER_EPOCH);
+        }
         s.reporters[taskId][epoch].push(reporter);
         emit DisputeReported(taskId, epoch, reporter, digest);
     }

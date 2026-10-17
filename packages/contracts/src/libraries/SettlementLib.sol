@@ -34,6 +34,12 @@ import {TaskParamsLib} from "./TaskParamsLib.sol";
 ///      `t.budget`, the frozen pool and the weights recorded at submission, so any caller can execute
 ///      a page and every caller computes the same numbers.
 library SettlementLib {
+    /// @notice Maximum number of reporters that can be paid in one batch.
+    /// @dev Prevents a Gas DoS attack where a task with thousands of reporters causes the
+    ///      `payReporters` loop to exceed the block gas limit and lock the task. DISPUTE_QUORUM
+    ///      is 3, so 64 is a generous headroom above any legitimate quorum.
+    uint256 internal constant MAX_REPORTERS = 64;
+
     /// @notice Settlement progress for one task. Every field is keyed by `taskId`.
     /// @dev The host declares exactly one member of this type, so the slot block the library
     ///      reaches through the storage pointer is the block the host actually owns.
@@ -214,11 +220,16 @@ library SettlementLib {
     ) external {
         uint256 n = reporters.length;
         if (n == 0 || lock == 0) return;
+        // Cap to MAX_REPORTERS: a task with thousands of reporters would otherwise cause this
+        // loop to exceed the block gas limit and lock the task permanently. DISPUTE_QUORUM is 3,
+        // so 64 is generous headroom. Excess reporters beyond the cap receive nothing — this is
+        // safe because the bounty is tiny relative to the gas cost of collecting it.
+        if (n > MAX_REPORTERS) n = MAX_REPORTERS;
         uint128 bounty = (uint128(lock) * reexecutionBps) / TaskParamsLib.BPS;
         if (bounty == 0) return;
-        uint128 each = bounty / uint128(uint256(n));
+        uint128 each = bounty / uint128(n);
         if (each == 0) return;
-        uint128 total = each * uint128(uint256(n));
+        uint128 total = each * uint128(n);
         for (uint256 i = 0; i < n; ++i) {
             openReporterChannel(vault, taskId, epoch, reporters[i], each, unlockAt, authorizedSlice);
         }
