@@ -68,9 +68,19 @@ library BondLib {
     }
 
     /// @notice Slash a contributor's bond to `treasury` and mark the contribution slashed.
+    /// @dev The slashed weight leaves the settlement denominator with the share: without
+    ///      this, a slashed Sybil's weight would keep diluting honest contributors while its
+    ///      forfeited share pooled into dust for the highest-address contributor — an
+    ///      address the attacker picks — letting a slashed weight earn through the back
+    ///      door. Decrementing here keeps honest payouts exactly pro-rata with dust
+    ///      reduced to rounding. Underflow is impossible: weight is added once at
+    ///      submission and this branch runs at most once per contribution (the bond is
+    ///      zeroed, so a second slash reverts before reaching it), and only for
+    ///      accepted contributions whose weight was actually added.
     function slash(
         State storage s,
         mapping(uint256 => mapping(address => ICipherTask.Contribution)) storage contributions,
+        mapping(uint256 => uint256) storage totalWeight,
         IERC20 token,
         address treasury,
         uint256 taskId,
@@ -81,6 +91,7 @@ library BondLib {
         s.posted[taskId][contributor] = 0;
         if (contributions[taskId][contributor].accepted) {
             contributions[taskId][contributor].slashed = true;
+            totalWeight[taskId] -= contributions[taskId][contributor].weightQ16;
         }
         (bool ok, bytes memory ret) = address(token).call(abi.encodeCall(IERC20.transfer, (treasury, bond)));
         if (!ok || (ret.length != 0 && !abi.decode(ret, (bool)))) {

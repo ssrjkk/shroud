@@ -59,12 +59,17 @@ contract ProofVerifier is IProofVerifier {
     }
 
     /// @notice Verify a single-segment STARK.
-    /// @dev Binds the proof to (protocolDomain, this contract, epoch, nShards, traceDigest)
-    ///      by requiring the caller's transcript hash to be part of the public input that the
-    ///      verifier already saw. The transcript hash itself is computed off-chain by
-    ///      CipherTask and passed in `publicInput`; the important contract-level binding is
-    ///      that `epoch` and `traceDigest` are *not* attacker-supplied — they come from the
-    ///      task's committed state and are re-derived here.
+    /// @dev `protocolDomain` is deployment identity metadata, NOT an enforced proof
+    ///      binding (yet): it is pinned at construction so indexers and a future
+    ///      production verifier can distinguish deployments, but nothing on-chain
+    ///      compares it today — the transcript the verifier actually checks carries no
+    ///      domain field. Binding it into the public inputs is future work alongside
+    ///      the real STARK backend (Phase 3); until then this comment exists so nobody
+    ///      mistakes the stored value for a check.
+    ///      What IS enforced here: the caller's transcript hash is part of the public
+    ///      input the verifier already saw, and `epoch` and `traceDigest` are *not*
+    ///      attacker-supplied — they come from the task's committed state and are
+    ///      re-derived here.
     function verifyProof(bytes calldata publicInput, bytes calldata proof) external view returns (bool) {
         if (paused) revert Paused();
         if (proof.length > MAX_PROOF_BYTES) revert ProofTooLarge(proof.length, MAX_PROOF_BYTES);

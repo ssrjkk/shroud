@@ -704,10 +704,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      committed to paying — the amounts come from the frozen escrow and the recorded weights,
     ///      not from the caller.
     ///
-    ///      Ordering matters for correctness: `userPool` and `totalWeight` are recomputed from
-    ///      `t.budget` and `_totalWeight`, both of which are immutable once the contribution window
-    ///      closes, so every page computes identical per-contributor amounts and no contributor is
-    ///      paid twice or underpaid by paging.
+    ///      Ordering matters for correctness: `userPool` is frozen by the first page and
+    ///      `totalWeight` moves only downward on pre-settlement slashes — and slashing is
+    ///      forbidden once settlement starts (`SettlementBegun`) — so the denominator is
+    ///      constant across pages: every page computes identical per-contributor amounts
+    ///      and no contributor is paid twice or underpaid by paging.
     function settleFrom(uint256 taskId, uint256 cursor) external whenNotPaused nonReentrant {
         _settleFrom(taskId, cursor);
     }
@@ -938,7 +939,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
             revert AlreadyTerminal(taskId, t.status);
         }
-        BondLib.slash(_bonds, _contributions, _escrowToken, treasury, taskId, contributor);
+        BondLib.slash(_bonds, _contributions, _totalWeight, _escrowToken, treasury, taskId, contributor);
     }
 
     /// @notice Bond required of new contributions to `taskId` (0 = none).
