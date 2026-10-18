@@ -15,7 +15,7 @@ contract DividendInvariants is Test {
     /// H3 as an invariant: splitting one dataset across two addresses earns exactly
     /// the sum of the parts — no split advantage, no split penalty, at any liveness.
     function testSplitNeutral(uint32 a, uint32 b, uint256 liveness) external {
-        liveness = bound(liveness, 1, Dividend.Q16());
+        liveness = bound(liveness, 1, Dividend.Q16);
         uint256 sum = uint256(a) + uint256(b);
         if (sum > type(uint32).max) return; // out of the rows domain, not a counterexample
         assertEq(
@@ -38,8 +38,8 @@ contract DividendInvariants is Test {
         uint64 windowEnd = createdAt + span;
         submittedAt = uint64(bound(submittedAt, 0, createdAt + 60 days));
         uint256 l = Dividend.liveness(createdAt, windowEnd, submittedAt);
-        assertGe(l, Dividend.Q16() / 4);
-        assertLe(l, Dividend.Q16());
+        assertGe(l, Dividend.Q16 / 4);
+        assertLe(l, Dividend.Q16);
     }
 
     /// Pro-rata legs never overpay the pool, and total dust stays under one unit
