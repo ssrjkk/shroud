@@ -70,7 +70,10 @@ jobs:
       - name: check external links with lychee
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --verbose --no-progress --accept 200..=299,429 './web/**/*.html' './README.md' './docs/**/*.md'
+          # `^/shroud/$` is the Pages `<base href>` (deployment config, not a file):
+          # unresolvable locally by construction, excluded exactly (anchored regex so
+          # real https://…/shroud/… links are still checked).
+          args: --verbose --no-progress --exclude '^/shroud/$' --accept 200..=299,429 './web/**/*.html' './README.md' './docs/**/*.md'
           fail: true
       - uses: actions/upload-pages-artifact@v3
         with:
