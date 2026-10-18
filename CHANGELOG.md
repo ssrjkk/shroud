@@ -6,6 +6,33 @@ first tagged release.
 
 ## Unreleased
 
+### Contracts/SDK: VRF-committee ABI drift fixed, CI hole closed
+
+- `packages/sdk` was failing its own gate: 2 of 60 smoke tests red
+  ("CipherTask/PaymentVault ABI matches the compiled artifact"). The SDK's
+  embedded ABIs predated PR #38 and missed the whole VRF dispute committee
+  (`NotCommitteeMember`, `committeeSeed`, `committeeSize`, `isCommitteeEligible`).
+  Nothing extraneous — a pure lag. Re-ran the repo's own
+  `scripts/export-abi.cjs` (+150/−1 lines across the two JSONs, the single
+  deletion is the JSON tail) and the suite is green again.
+- Why CI didn't catch it: `sdk.yml` only watched `packages/sdk/**`, while the
+  drift came from `packages/contracts/src/**` in #38 — and `contracts.yml`
+  never runs the SDK suite. `sdk.yml` paths now include
+  `packages/contracts/src/**`, so a Solidity change with a stale `src/abi/`
+  snapshot fails there even when the SDK itself is untouched.
+- Verified around the fix: contracts `hardhat test` 136 passing + vectors 2
+  passing, bot 117/117, `cargo fmt --check` clean (compile itself still needs
+  the full toolchain per `docs/05-honest-limitations.md` §8), both touched
+  workflows parse as YAML.
+
+### Site: pool shares labelled as the devnet example, not constants
+
+- `8000 / 1500 / 500` were shown as protocol constants (home `03 / PRO`,
+  protocol `pro.stxp`), but `TaskParamsLib.requireShares` only enforces that
+  the three per-task shares sum to BPS — the numbers are the devnet-script and
+  docs example. Both strings now say so in RU and EN; the formulas keep the
+  concrete numbers, now introduced as the example.
+
 ### Site: honest lab guards and a copy fallback that always answers
 
 - The lab's "calculate payouts" bench reported success on empty state:
