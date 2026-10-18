@@ -30,6 +30,15 @@ first tagged release.
   resolving in both languages, and keys that nothing references — markup or JS.
   It caught one leftover (`idx.more`) from the section that moved to
   `security.html`, which was removed.
+- New `web/tests/nav.mjs` (same two places): every page present in the menu,
+  identical menu order on all seven pages, exactly one `active` item pointing
+  at its own page, live `#anchors`, skip link present, every page reachable
+  from the home. With seven hand-copied menus this was the regression most
+  likely to happen; the test was itself verified against five deliberate
+  breakages (missing menu item, lost `active`, extra page, dead anchor,
+  unreachable page) and caught all five.
+- Section ids are numbered without gaps now, so `#sec-3` is the third section
+  of the page on every page.
 
 ### Site: one page per topic (home stops being a single scroll)
 

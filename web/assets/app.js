@@ -167,9 +167,8 @@
       }
       tocEl.innerHTML = "";
       tocLinks = [];
-      secs.forEach(function (sec, i) {
+      secs.filter(function (sec) { return !!sec.querySelector(".sect-head"); }).forEach(function (sec, i) {
         var head = sec.querySelector(".sect-head");
-        if (!head) return;
         if (!sec.id) sec.id = "sec-" + (i + 1);
         var num = head.querySelector(".sect-num"), title = head.querySelector(".sect-title");
         var a = document.createElement("a");
