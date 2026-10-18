@@ -168,7 +168,10 @@ pub fn proof_transcript(
     node: [u8; 20],
 ) -> [u8; 32] {
     fn word_u256(v: u128) -> [u8; 32] {
-        v.to_be_bytes()
+        // `u128::to_be_bytes` is 16 bytes; ABI words are 32 (left-padded).
+        let mut w = [0u8; 32];
+        w[16..32].copy_from_slice(&v.to_be_bytes());
+        w
     }
     let mut buf: Vec<u8> = Vec::with_capacity(352);
     // Head word 0: offset of the dynamic `string` = 9 * 32 = 288.
