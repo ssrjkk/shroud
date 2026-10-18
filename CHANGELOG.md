@@ -6,6 +6,17 @@ first tagged release.
 
 ## Unreleased
 
+### Site: menu announces the current page, theme tooltip follows the language
+
+- The active menu item now carries `aria-current="page"`. The `active` class
+  was visible to sighted users but silent to screen readers; `nav.mjs` rule 3
+  asserts it sits on exactly one link per page and points at that page
+  (verified against a copy with the attribute removed — fails as expected).
+- The theme button's tooltip was hardcoded English (`title="Theme"`) on Russian
+  pages while its `aria-label` translated fine. `app.js` now sets the title
+  from the same `theme.toggle` key on load and on every language switch
+  (RU "Переключить тему" / EN "Toggle theme", verified live).
+
 ### Site: the reading-mode switch is now reachable
 
 - The site has advertised newcomer / pro modes from the start, but the buttons

@@ -8,7 +8,8 @@
 //   1. Полный набор страниц: любая новая web/*.html обязана попасть в меню
 //      (404.html — служебная, в меню её нет, но она должна существовать).
 //   2. Меню одинаково на всех страницах, один и тот же порядок.
-//   3. Ровно один class="active" на страницу, и он указывает на неё же.
+//   3. Ровно один class="active" на страницу, он указывает на неё же и несёт
+//      aria-current="page" — иначе скринридер текущую страницу не объявляет.
 //   4. Все внутристраничные якоря (#id) существуют в своём документе.
 //   5. Каждая страница достижима с главной по обычным ссылкам.
 //   6. Переключатель режима new/pro есть ровно на тех страницах, где есть
@@ -69,13 +70,18 @@ for (const p of inMenu) {
 if (menuOk) console.log(`2. меню совпадает на ${inMenu.length} страницах: ${reference.join(" · ")}`);
 
 // --- 3. ровно один активный пункт, и он про эту страницу --------------------
+// Скринридер объявляет текущую страницу только через aria-current: без него
+// класс active виден глазами, но молчит в доступности.
 for (const p of inMenu) {
   const block = html[p].match(/<nav class="nav" data-nav>([\s\S]*?)<\/nav>/)[1];
   const active = [...block.matchAll(/<a href="\.\/([^"#]+\.html)"[^>]*class="active"/g)].map((m) => m[1]);
   if (active.length !== 1) fail(`${p}: активных пунктов ${active.length} (${active.join(", ") || "нет"}), ожидался 1`);
   else if (active[0] !== p) fail(`${p}: активен ${active[0]}, а страница — ${p}`);
+  const withCurrent = [...block.matchAll(/<a href="\.\/([^"#]+\.html)"[^>]*aria-current="page"/g)].map((m) => m[1]);
+  if (withCurrent.length !== 1) fail(`${p}: aria-current="page" стоит на ${withCurrent.length} ссылках (${withCurrent.join(", ") || "нет"})`);
+  else if (withCurrent[0] !== p) fail(`${p}: aria-current="page" на ${withCurrent[0]}, а страница — ${p}`);
 }
-console.log(`3. активный пункт ровно один и совпадает со страницей (${inMenu.length} проверено)`);
+console.log(`3. активный пункт ровно один, совпадает со страницей и несёт aria-current (${inMenu.length} проверено)`);
 
 // --- 4. внутристраничные якоря ----------------------------------------------
 let anchors = 0;

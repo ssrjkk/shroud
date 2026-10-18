@@ -59,12 +59,19 @@
     document.querySelectorAll("[data-theme-btn]").forEach(function (b) {
       b.addEventListener("click", function () { applyTheme(b.getAttribute("data-theme-btn")); });
     });
+    function syncThemeTitles() {
+      // title-тултип кнопки темы: aria-label переводит i18n.js, а title — нет
+      document.querySelectorAll("[data-theme-toggle]").forEach(function (b) {
+        b.title = tr("theme.toggle");
+      });
+    }
     document.querySelectorAll("[data-theme-toggle]").forEach(function (b) {
       b.addEventListener("click", function () {
         var cur = document.documentElement.getAttribute("data-theme") === "paper" ? "paper" : "ink";
         applyTheme(cur === "paper" ? "ink" : "paper");
       });
     });
+    syncThemeTitles();
     document.querySelectorAll("[data-lang]").forEach(function (b) {
       b.addEventListener("click", function () {
         if (window.I18N) window.I18N.setLang(b.getAttribute("data-lang"));
@@ -247,6 +254,7 @@
       if (tocEl) tocEl.setAttribute("aria-label", tr("ui.toc"));
       toTop.title = tr("ui.top");
       toTop.setAttribute("aria-label", tr("ui.top"));
+      syncThemeTitles();
       onScroll();
     });
     document.querySelectorAll("[data-mode-btn]").forEach(function (b) {
