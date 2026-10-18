@@ -61,6 +61,17 @@ jobs:
           EOF
       - name: check site math matches golden vectors
         run: node web/tests/equiv.mjs
+      - name: forbid default-branch links
+        run: |
+          if grep -rnE 'github\.com/ssrjkk/shroud/(tree|blob)/main/' web/ docs/ README.md CONTRIBUTING.md; then
+            echo "Found forbidden /main/ branch links; use /HEAD/ instead."
+            exit 1
+          fi
+      - name: check external links with lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --verbose --no-progress --accept 200..=299,429 './web/**/*.html' './README.md' './docs/**/*.md'
+          fail: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
