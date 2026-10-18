@@ -180,7 +180,13 @@ impl InboundThrottle {
                 },
             );
         }
-        let bucket = self.buckets.get_mut(&ip).expect("just inserted");
+        let bucket = match self.buckets.get_mut(&ip) {
+            Some(b) => b,
+            // Unreachable under `&mut self` (the insert above just ran), but a future
+            // evict/sweep refactor must not turn into a per-packet panic on the mesh
+            // hot path: fail closed with a retry instead.
+            None => return Err(Duration::from_millis(100)),
+        };
         let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * self.rps).min(self.burst);
         bucket.updated = now;

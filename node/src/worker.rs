@@ -656,7 +656,12 @@ impl Worker {
                         // The permit is the backpressure gate: it is held for the full
                         // lifetime of the shard work (3 round-trips), so at most
                         // `fetch_concurrency` shards are ever in flight at once.
-                        let _permit = sem.acquire().await.expect("semaphore is never closed");
+                        // A closed semaphore means the worker is shutting down, not
+                        // a crash: surface it as an error so the epoch fails loudly
+                        // instead of panicking the task.
+                        let _permit = sem.acquire().await.map_err(|_| {
+                            Error::Chain("shard fetch semaphore closed during shutdown".into())
+                        })?;
                         let contributor = client.contribution_of(task_id, index).await?;
                         let c = client.contribution(task_id, contributor).await?;
                         if !c.accepted {

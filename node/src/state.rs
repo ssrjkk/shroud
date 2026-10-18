@@ -637,7 +637,12 @@ impl NodeState {
                 }
                 // Our proof just became disputable material: if the epoch's claim is not ours,
                 // the contract will accept a report of our own digest.
-                let e = t.epochs.get(epoch).expect("epoch exists");
+                // The commit borrow above (`c`) ends at `our_digest`: NLL drops it there,
+                // so this second lookup is borrow-safe. A missing epoch (reorg race /
+                // evicted state) is not a crash — there is simply nothing to dispute.
+                let Some(e) = t.epochs.get(epoch) else {
+                    return work;
+                };
                 if let Some(claimed) = e.claimed_digest() {
                     if claimed != our_digest {
                         work.push(Work::FileDispute {

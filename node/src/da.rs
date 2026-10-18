@@ -161,6 +161,19 @@ impl Endpoint {
     }
 }
 
+/// Schemes `fetch`/`store` can actually serve. Single source of truth for what
+/// `shard.da_endpoint` may name: `Endpoint::parse` sends everything else down the
+/// remote path, and the remote builders only know `s3://`, `gs://`/`gcs://` and
+/// HTTP(S) — a typo like `s33://bucket` would otherwise pass config validation
+/// and fail minutes later at the first shard fetch instead of at startup.
+pub fn is_supported_endpoint(url: &str) -> bool {
+    [
+        "file://", "file:", "s3://", "gs://", "gcs://", "http://", "https://",
+    ]
+    .iter()
+    .any(|prefix| url.starts_with(prefix))
+}
+
 /// Fetch an object: local cache first, remote backend on a miss (which then populates
 /// the cache, so the mesh can serve it to peers).
 pub async fn fetch(
@@ -434,6 +447,42 @@ mod tests {
             Endpoint::parse("https://da.example/shards"),
             Endpoint::Remote(_)
         ));
+    }
+
+    #[test]
+    fn only_servable_schemes_pass_validation() {
+        // Every scheme the remote builders understand, plus the local file form.
+        for ok in [
+            "file://./data/da",
+            "file:./data/da",
+            "s3://bucket/prefix",
+            "s3://bucket",
+            "gs://bucket/prefix",
+            "gcs://bucket/prefix",
+            "https://da.example/shards",
+            "http://127.0.0.1:8080/shards",
+        ] {
+            assert!(
+                is_supported_endpoint(ok),
+                "{ok:?} must validate: the fetch path serves it"
+            );
+        }
+        // Typos and exotic schemes: `parse` would route these to the remote path,
+        // where the HTTP builder fails at the first fetch instead of at startup.
+        for bad in [
+            "",
+            "s33://bucket",
+            "ftp://example/shards",
+            "FILE://./data/da",
+            "S3://bucket",
+            "notaurl",
+            "./data/da",
+        ] {
+            assert!(
+                !is_supported_endpoint(bad),
+                "{bad:?} must not validate: nothing serves it"
+            );
+        }
     }
 
     #[cfg(feature = "da")]

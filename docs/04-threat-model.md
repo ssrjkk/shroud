@@ -458,20 +458,20 @@ Contributors whose shards are censored lose `liveness` credit and their reward s
 `maxContributors`/`windowEnd` bounds cap the damage. Full censorship resistance needs
 fair-ordering L3s (e.g. based encrypted sequencing) — post-MVP.
 
-### F-08 — `s_pub` substitution (ADV5) — **NOT mitigated by default (pin published, checked only if asked)**
+### F-08 — `s_pub` substitution (ADV5) — **Mitigated at boot by default, not mid-epoch**
 *Corrected, and this one matters:* this finding was marked **Mitigated** on the strength of
 "the SDK refuses to encrypt with params whose hash mismatches; compute nodes refuse to start".
-**Neither check exists by default.**
+**Neither check existed by default — both do now, at boot.**
 
 What is real: `NetworkParams` does publish and pin the parameters correctly. `initialize` is
 one-shot, and `proposeRotation` → `approveRotation` → `executeRotation` enforces a ≥ 7-day
 timelock plus a distinct approver, with the key version forced to increment and the hash forced
 to change. That part is genuinely well built, and it means a key swap is *visible after the fact*.
 
-What is missing: nothing consumes it by default. The SDK only refuses to encrypt when the caller
-passes `networkParams` + `fhePublicKeyHash`; without them the check is skipped, not failed. The
-node only checks when `enforce_key_pin = true`, which is off unless an operator turns it on — and
-even then the check happens once, at startup.
+What is missing: continuous checking. The SDK only refuses to encrypt when the caller
+passes `networkParams` + `fhePublicKeyHash`; without them the check is skipped, not failed.
+The node checks at startup whenever `enforce_key_pin = true`, which is now the default —
+a node without pins refuses to boot — but the check still happens once, at startup.
 
 Consequence: a malicious sequencer substituting `s_pub` is **not** detected by anything that is
 on by default. It is not an availability failure, which is what this finding used to claim —

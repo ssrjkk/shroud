@@ -491,11 +491,18 @@ impl Watcher {
             // Sort by (block, log_index): the fold must be deterministic regardless of the
             // order the RPC returns. A commit and its settlement in the same block applied in
             // the wrong order would re-open an epoch that is already paid.
-            let mut ordered: Vec<Log> = logs.into_iter().collect();
+            // Pending logs (no block_number) never match a from/to-block `eth_getLogs`
+            // window, but a misbehaving RPC may still return them: folding one as block 0
+            // would apply it before genesis and break commit-then-settle ordering, so it
+            // is dropped instead of defaulted to zero.
+            let mut ordered: Vec<Log> = logs
+                .into_iter()
+                .filter(|l| l.block_number.is_some() && l.log_index.is_some())
+                .collect();
             ordered.sort_by_key(|l| {
                 (
-                    l.block_number.unwrap_or_default(),
-                    l.log_index.unwrap_or_default(),
+                    l.block_number.unwrap_or(u64::MAX),
+                    l.log_index.unwrap_or(u64::MAX),
                 )
             });
 

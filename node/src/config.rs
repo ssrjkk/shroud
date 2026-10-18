@@ -14,6 +14,7 @@ use figment::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::da::is_supported_endpoint;
 use crate::error::{ConfigError, Result};
 
 /// Compute node.
@@ -143,11 +144,11 @@ pub struct NodeConfig {
     /// Refuse to execute an epoch whose seed weights are not a decodable
     /// `shroud/weights/v1` file, instead of falling back to genesis zeros.
     ///
-    /// Off by default: the fallback is a deliberate consensus choice (every node running
-    /// this code agrees on zeros and binds the chain pin in the trace, so a node that
-    /// understands the buyer's convention can still dispute). Turn it on when the
-    /// deployment's buyers always publish SDK-encoded seed files and silent convention
-    /// drift must be loud instead of executable.
+    /// On by default: the fallback is executable consensus drift — every node running
+    /// this code agrees on zeros, but a buyer pinning a foreign convention silently
+    /// trains a different model than the digest claims. Turn it off only where the
+    /// deployment knowingly serves non-file pins (devnet mocks); production tasks
+    /// always publish SDK-encoded seed files.
     pub strict_weights: bool,
     /// Only watch this task. `None` watches everything. Set from `--task-filter`.
     pub task_filter: Option<B256>,
@@ -325,12 +326,14 @@ impl Default for Config {
                 bls_pub_key: None,
                 min_epoch_window: Duration::from_secs(300),
                 data_dir: PathBuf::from("./data"),
-                // Off by default: turning it on without `fhe.public_key_hash` +
-                // `contracts.network_params` makes the node refuse to start (see `validate`),
-                // and the devnet config sets neither. The SDK-side pin check stays the alert
-                // that is on out of the box; this is the opt-in node-side twin.
-                enforce_key_pin: false,
-                strict_weights: false,
+                // On by default: a node that would train under a substituted key or from
+                // zeroed weights must refuse to start, not fork digests quietly. Both checks
+                // need explicit configuration to pass validation (fhe.public_key_hash +
+                // contracts.network_params for the pin), so a fresh config fails closed
+                // with an actionable error instead of running blind. Development and mock
+                // setups opt out explicitly per-field; see the devnet TOML in rust.yml.
+                enforce_key_pin: true,
+                strict_weights: true,
                 task_filter: None,
             },
             fhe: FheConfig {
@@ -421,6 +424,73 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<()> {
+        if self.chain.rpc_url.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                field: "chain.rpc_url",
+                reason: "must not be empty; the node cannot follow a chain it cannot call".into(),
+            }
+            .into());
+        }
+        if self.shard.da_endpoint.trim().is_empty() {
+            return Err(ConfigError::Invalid {
+                field: "shard.da_endpoint",
+                reason: "must not be empty; the worker cannot fetch shards without a store".into(),
+            }
+            .into());
+        }
+        // `Endpoint::parse` routes everything non-`file:` to the remote path, where a
+        // typo (`s33://`) fails at the first fetch, minutes after startup. Reject it
+        // here instead, against the same allow-list the fetch path serves.
+        if self.shard.da_endpoint != self.shard.da_endpoint.trim() {
+            return Err(ConfigError::Invalid {
+                field: "shard.da_endpoint",
+                reason: "must not have leading or trailing whitespace; it is matched by prefix"
+                    .into(),
+            }
+            .into());
+        }
+        if !is_supported_endpoint(&self.shard.da_endpoint) {
+            return Err(ConfigError::Invalid {
+                field: "shard.da_endpoint",
+                reason: "must start with file://, s3://, gs://, gcs://, http:// or https://".into(),
+            }
+            .into());
+        }
+        if self.shard.max_ciphertext_bytes == 0 {
+            return Err(ConfigError::Invalid {
+                field: "shard.max_ciphertext_bytes",
+                reason: "must be >= 1; at zero the worker fetches nothing".into(),
+            }
+            .into());
+        }
+        if self.stark.max_proof_bytes == 0 {
+            return Err(ConfigError::Invalid {
+                field: "stark.max_proof_bytes",
+                reason: "must be >= 1; at zero every proof is over-budget".into(),
+            }
+            .into());
+        }
+        if self.payment.redeem_gas_limit == 0 {
+            return Err(ConfigError::Invalid {
+                field: "payment.redeem_gas_limit",
+                reason: "must be >= 1; at zero every auto-redeem reverts".into(),
+            }
+            .into());
+        }
+        if self.chain.poll_interval.is_zero() {
+            return Err(ConfigError::Invalid {
+                field: "chain.poll_interval",
+                reason: "must be > 0; at zero the watcher busy-loops the RPC".into(),
+            }
+            .into());
+        }
+        if self.mesh.announce_interval.is_zero() {
+            return Err(ConfigError::Invalid {
+                field: "mesh.announce_interval",
+                reason: "must be > 0; at zero the mesh busy-loops announcements".into(),
+            }
+            .into());
+        }
         if self.contracts.cipher_task == Address::ZERO {
             return Err(ConfigError::Missing("contracts.cipher_task").into());
         }
@@ -1158,5 +1228,67 @@ mod tests {
         assert_eq!(cfg.node.bls_pub_key, None);
         cfg.validate()
             .expect("a node without a BLS key may still start");
+    }
+
+    #[test]
+    fn empty_endpoints_and_zero_budgets_are_rejected_at_load() {
+        // Each of these is a config that parses fine but makes the node useless:
+        // no chain to follow, no store to fetch from, nothing it may fetch/prove/
+        // redeem, or a busy-loop poll/announce. Fail closed with the field's name.
+        let cases: [(&str, fn(&mut Config)); 9] = [
+            ("chain.rpc_url", |c: &mut Config| {
+                c.chain.rpc_url = "   ".into();
+            }),
+            ("shard.da_endpoint", |c: &mut Config| {
+                c.shard.da_endpoint.clear();
+            }),
+            ("shard.da_endpoint scheme", |c: &mut Config| {
+                c.shard.da_endpoint = "s33://bucket".into();
+            }),
+            ("shard.da_endpoint whitespace", |c: &mut Config| {
+                c.shard.da_endpoint = " file://./data/da".into();
+            }),
+            ("shard.max_ciphertext_bytes", |c: &mut Config| {
+                c.shard.max_ciphertext_bytes = 0;
+            }),
+            ("stark.max_proof_bytes", |c: &mut Config| {
+                c.stark.max_proof_bytes = 0;
+            }),
+            ("payment.redeem_gas_limit", |c: &mut Config| {
+                c.payment.redeem_gas_limit = 0;
+            }),
+            ("chain.poll_interval", |c: &mut Config| {
+                c.chain.poll_interval = Duration::ZERO;
+            }),
+            ("mesh.announce_interval", |c: &mut Config| {
+                c.mesh.announce_interval = Duration::ZERO;
+            }),
+        ];
+        for (field, mutate) in cases {
+            let mut cfg = base();
+            mutate(&mut cfg);
+            let err = cfg
+                .validate()
+                .expect_err(&format!("{field} must be rejected"));
+            assert!(
+                matches!(err, Error::Config(ConfigError::Invalid { .. })),
+                "got {err:?} for {field}"
+            );
+        }
+        // The untouched base config still passes: the new checks accept every default.
+        base().validate().expect("defaults must validate");
+        // And every scheme the fetch path serves passes validation too.
+        for ok in [
+            "file://./data/da",
+            "s3://bucket/prefix",
+            "gs://bucket",
+            "gcs://bucket/prefix",
+            "https://da.example/shards",
+        ] {
+            let mut cfg = base();
+            cfg.shard.da_endpoint = ok.into();
+            cfg.validate()
+                .expect(&format!("{ok} is served and must validate"));
+        }
     }
 }

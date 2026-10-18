@@ -13,6 +13,12 @@
 //! * **Mirror the struct field names verbatim.** `Task.isSealed` is `isSealed`, not `sealed`, so
 //!   a reordering or rename in Solidity shows up as a field that is never read rather than a
 //!   plausible-looking wrong value.
+//!
+//! The `too_many_arguments` allow is file-level on purpose: contract functions take as
+//! many parameters as the ABI says, and an outer `#[allow]` on the `sol!` invocation
+//! is ignored (clippy: `unused attribute`), so the generated bindings can only be
+//! covered from the module scope. Hand-written helpers below stay small, so the
+//! allow is vacuous for everything but the macro output.
 #![allow(clippy::too_many_arguments)]
 
 use alloy::sol;

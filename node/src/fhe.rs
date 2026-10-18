@@ -527,9 +527,15 @@ mod tfhe_backend {
             if &bytes[..magic.len()] != magic {
                 return Err(malformed(0, format!("bad {what} magic")));
             }
-            let r32 = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().expect("sliced"));
-            let features = r32(magic.len());
-            let rows = r32(magic.len() + 4);
+            let r32 = |o: usize| -> Result<u32, Error> {
+                let bytes4: [u8; 4] = bytes
+                    .get(o..o + 4)
+                    .and_then(|s| <[u8; 4]>::try_from(s).ok())
+                    .ok_or_else(|| malformed(o, format!("{what} truncated at offset {o}")))?;
+                Ok(u32::from_le_bytes(bytes4))
+            };
+            let features = r32(magic.len())?;
+            let rows = r32(magic.len() + 4)?;
             if features != expected_features {
                 return Err(Error::Fhe(FheError::ShapeMismatch {
                     got_rows: rows as usize,
@@ -550,7 +556,7 @@ mod tfhe_backend {
                 if pos + 4 > bytes.len() {
                     return Err(malformed(pos, "truncated ciphertext length".into()));
                 }
-                let len = r32(pos) as usize;
+                let len = r32(pos)? as usize;
                 pos += 4;
                 if pos + len > bytes.len() {
                     return Err(malformed(pos, "truncated ciphertext bytes".into()));

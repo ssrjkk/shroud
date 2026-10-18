@@ -10,6 +10,8 @@
 
 /// Generated from `proto/mesh.proto` by `build.rs`.
 pub mod proto {
+    // Blanket allow is deliberate: this is prost/tonic output, so a targeted allow
+    // would rot on the next codegen upgrade and the lints cannot be fixed at the source.
     #![allow(clippy::all)]
     #![allow(missing_docs)]
     tonic::include_proto!("shroud.mesh.v1");
