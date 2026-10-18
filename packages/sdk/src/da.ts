@@ -292,7 +292,15 @@ export class HttpShardStore implements ShardStore {
    */
   private async readCapped(res: Response, cap: number, what: string): Promise<Uint8Array> {
     const body = res.body;
-    if (!body) return new Uint8Array(await res.arrayBuffer());
+    if (!body) {
+      // No stream: undici can return null body for certain responses. Fall back to
+      // arrayBuffer but check the size first to honour the cap (OOM prevention).
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > cap) {
+        throw new Error(`${what} is over the ${cap} byte cap (arrayBuffer fallback read ${buf.byteLength} bytes)`);
+      }
+      return new Uint8Array(buf);
+    }
     const reader = body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;

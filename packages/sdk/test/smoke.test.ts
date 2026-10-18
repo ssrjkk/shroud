@@ -1313,6 +1313,9 @@ test("uploadAndMonetize omits the shape proof as empty bytes when none is requir
           if (data.startsWith(sel("contributionBondRequired"))) {
             return iface.encodeFunctionResult("contributionBondRequired", [0n]);
           }
+          // TOCTOU dry-run: the SDK simulates submitContribution before sending it.
+          // Empty returndata is a successful simulation of a state-changing call.
+          if (data.startsWith(sel("submitContribution"))) return "0x";
           throw new Error(`stub: unexpected eth_call ${data.slice(0, 10)}`);
         }
         case "eth_sendRawTransaction":
@@ -1389,6 +1392,7 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
   const iface = new ethers.Interface(sdkAbi("CipherTask"));
   const erc20 = new ethers.Interface([
     "function approve(address spender, uint256 amount) returns (bool)",
+    "function increaseAllowance(address spender, uint256 addedValue) returns (bool)",
     "function allowance(address owner, address spender) view returns (uint256)",
     "function balanceOf(address account) view returns (uint256)",
   ]);
@@ -1452,6 +1456,9 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
             if (data.startsWith(sel("escrowToken"))) {
               return iface.encodeFunctionResult("escrowToken", [token]);
             }
+            // TOCTOU dry-run: the SDK simulates submitContribution before sending it.
+            // Empty returndata is a successful simulation of a state-changing call.
+            if (data.startsWith(sel("submitContribution"))) return "0x";
           }
           if (to === token.toLowerCase()) {
             if (data.startsWith(erc20.getFunction("balanceOf")!.selector)) {
@@ -1521,11 +1528,14 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
       allowUnencrypted: true,
     });
     // Approve first (exact requirement, spender = the task), submit second.
+    // The SDK prefers increaseAllowance (USDT-style tokens revert non-zero-to-nonzero
+    // approve), falling back to approve only for tokens without the method.
     assert.equal(sent.length, 2);
     const approval = erc20.parseTransaction({ data: sent[0].data });
     assert.equal(sent[0].to, token.toLowerCase());
+    assert.equal(approval?.name, "increaseAllowance");
     assert.equal(approval?.args.spender.toLowerCase(), cipherTask.toLowerCase());
-    assert.equal(approval?.args.amount, 1_000_000n);
+    assert.equal(approval?.args.addedValue, 1_000_000n);
     const submission = iface.parseTransaction({ data: sent[1].data });
     assert.equal(sent[1].to, cipherTask.toLowerCase());
     assert.equal(submission?.name, "submitContribution");
