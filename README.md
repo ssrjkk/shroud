@@ -203,8 +203,10 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 
 ### Next
 
-- [ ] **Proving (Phase 3):** zkVM guest circuit over the 8-field transcript; recursive
-  aggregation so on-chain verification is literally true; CPU/GPU benchmarks.
+- [ ] **Proving (Phase 3):** portable compute core extracted (`node/crates/shroud-core`:
+  fixed-point SGD, weight/shard formats, ctRoot/transcript/trace layouts; dependency-free
+  except `sha3`, wasm32-checked in CI) so a zkVM guest can import it; guest circuit over
+  the 8-field transcript, recursive aggregation and CPU/GPU benchmarks still pending.
 - [ ] **Cryptoeconomics (Phase 4):** stake-weighted re-executor
   assignment (+ slashing both ways), fhEVM Gateway threshold re-encryption, Foundry
   native invariants.

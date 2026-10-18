@@ -7,14 +7,26 @@
 //! tests against values captured from a real hardhat deployment of these contracts, not against a
 //! hand-computed hash.
 
-use alloy::primitives::{keccak256, Address, B256, U256};
+use alloy::primitives::{Address, B256, U256};
 
-/// Domain tag of the proof transcript, as the first `abi.encode` argument.
-const TRANSCRIPT_MAGIC: &[u8] = b"SHROUD/PoC/v1"; // 13 bytes
+/// Re-exported so there is exactly one definition of the domain tag.
+pub use shroud_core::transcript::TRANSCRIPT_MAGIC;
+
+fn b2a(b: &B256) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(b.as_slice());
+    out
+}
+
+fn a2a(a: &Address) -> [u8; 20] {
+    let mut out = [0u8; 20];
+    out.copy_from_slice(a.as_slice());
+    out
+}
 
 /// The seed of the `ctRoot` accumulation chain: `_EMPTY_ROOT` in `CipherTask`.
 pub fn empty_root() -> B256 {
-    keccak256(b"SHROUD/CTROOT/v1")
+    B256::from(shroud_core::transcript::empty_root())
 }
 
 /// One step of the `ctRoot` chain.
@@ -23,22 +35,19 @@ pub fn empty_root() -> B256 {
 /// 32 + 4 + 32 = 68 packed bytes, with the `uint32` in its own 4 bytes — *not* padded to a word,
 /// which is the difference between this and a struct hash.
 pub fn ct_root_step(prev: B256, leaf_index: u32, ciphertext_cid: B256) -> B256 {
-    let mut buf = [0u8; 68];
-    buf[0..32].copy_from_slice(prev.as_slice());
-    buf[32..36].copy_from_slice(&leaf_index.to_be_bytes());
-    buf[36..68].copy_from_slice(ciphertext_cid.as_slice());
-    keccak256(buf)
+    B256::from(shroud_core::transcript::ct_root_step(
+        b2a(&prev),
+        leaf_index,
+        b2a(&ciphertext_cid),
+    ))
 }
 
 /// Fold a whole contribution set into the root the contract compares against.
 ///
 /// Leaves are appended in submission order, so `leaf_index` is positional: `0..n`.
 pub fn ct_root(ciphertext_cids: &[B256]) -> B256 {
-    let mut root = empty_root();
-    for (index, cid) in ciphertext_cids.iter().enumerate() {
-        root = ct_root_step(root, index as u32, *cid);
-    }
-    root
+    let cids: Vec<[u8; 32]> = ciphertext_cids.iter().map(b2a).collect();
+    B256::from(shroud_core::transcript::ct_root(&cids))
 }
 
 /// The commitment `commitDispute` takes: `keccak256(abi.encode(digest, salt, reporter))`.
@@ -47,12 +56,11 @@ pub fn ct_root(ciphertext_cids: &[B256]) -> B256 {
 /// encoding is a fixed 96 bytes with no offsets. Binding the reporter stops one commitment
 /// being replayed by another identity; binding the salt stops a bare digest from matching.
 pub fn dispute_commitment(digest: B256, salt: B256, reporter: Address) -> B256 {
-    let mut buf = [0u8; 96];
-    buf[0..32].copy_from_slice(digest.as_slice());
-    buf[32..64].copy_from_slice(salt.as_slice());
-    buf[64..76].copy_from_slice(&[0u8; 12]);
-    buf[76..96].copy_from_slice(reporter.as_slice());
-    keccak256(buf)
+    B256::from(shroud_core::transcript::dispute_commitment(
+        b2a(&digest),
+        b2a(&salt),
+        a2a(&reporter),
+    ))
 }
 
 /// Deterministic dispute salt for `(operator, task, epoch)`.
@@ -63,14 +71,11 @@ pub fn dispute_commitment(digest: B256, salt: B256, reporter: Address) -> B256 {
 /// space that matters is the 256-bit digest, not the salt. Uniqueness per reporter comes
 /// from the reporter binding inside the commitment itself.
 pub fn dispute_salt(operator: Address, task_id: U256, epoch: u32) -> B256 {
-    let mut buf = [0u8; 96];
-    buf[0..12].copy_from_slice(&[0u8; 12]);
-    buf[12..32].copy_from_slice(operator.as_slice());
-    buf[32..64].copy_from_slice(&task_id.to_be_bytes::<32>());
-    let mut epoch_word = [0u8; 32];
-    epoch_word[28..32].copy_from_slice(&epoch.to_be_bytes());
-    buf[64..96].copy_from_slice(&epoch_word);
-    keccak256(buf)
+    B256::from(shroud_core::transcript::dispute_salt(
+        a2a(&operator),
+        task_id.to_be_bytes::<32>(),
+        epoch,
+    ))
 }
 
 /// The transcript a proof of compute is bound to:
@@ -97,28 +102,16 @@ pub fn proof_transcript(
     trace_digest: B256,
     node: Address, // H2 fix: bind proof to node
 ) -> B256 {
-    let mut buf: Vec<u8> = Vec::with_capacity(352);
-    // Head word 0: offset of the dynamic `string` = 9 * 32 = 288.
-    buf.extend_from_slice(&U256::from(9 * 32).to_be_bytes::<32>());
-    buf.extend_from_slice(&U256::from(chain_id).to_be_bytes::<32>());
-    let mut addr_word = [0u8; 32];
-    addr_word[12..32].copy_from_slice(cipher_task.as_slice());
-    buf.extend_from_slice(&addr_word);
-    buf.extend_from_slice(&task_id.to_be_bytes::<32>());
-    buf.extend_from_slice(&U256::from(epoch).to_be_bytes::<32>());
-    buf.extend_from_slice(ct_root.as_slice());
-    buf.extend_from_slice(last_weights_digest.as_slice());
-    buf.extend_from_slice(trace_digest.as_slice());
-    // H2 fix: node address padded to 32 bytes.
-    let mut node_word = [0u8; 32];
-    node_word[12..32].copy_from_slice(node.as_slice());
-    buf.extend_from_slice(&node_word);
-    // Tail: length, then the data padded into one word.
-    buf.extend_from_slice(&U256::from(TRANSCRIPT_MAGIC.len()).to_be_bytes::<32>());
-    let mut string_word = [0u8; 32];
-    string_word[..TRANSCRIPT_MAGIC.len()].copy_from_slice(TRANSCRIPT_MAGIC);
-    buf.extend_from_slice(&string_word);
-    keccak256(&buf)
+    B256::from(shroud_core::transcript::proof_transcript(
+        chain_id,
+        a2a(&cipher_task),
+        task_id.to_be_bytes::<32>(),
+        epoch,
+        b2a(&ct_root),
+        b2a(&last_weights_digest),
+        b2a(&trace_digest),
+        a2a(&node),
+    ))
 }
 
 #[cfg(test)]
