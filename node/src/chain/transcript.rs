@@ -86,6 +86,7 @@ pub fn dispute_salt(operator: Address, task_id: U256, epoch: u32) -> B256 {
 /// (offset + 8 args), followed by the string's length word and its data right-padded to
 /// 32 bytes. `TRANSCRIPT_MAGIC` is 13 bytes, so the total is `9 * 32 + 32 + 32 = 352`
 /// bytes and the offset is `288`.
+#[allow(clippy::too_many_arguments)] // arity is the spec: one param per ABI head word
 pub fn proof_transcript(
     chain_id: u64,
     cipher_task: Address,
