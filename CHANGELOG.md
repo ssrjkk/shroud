@@ -6,6 +6,21 @@ first tagged release.
 
 ## Unreleased
 
+### Site: honest lab guards and a copy fallback that always answers
+
+- The lab's "calculate payouts" bench reported success on empty state:
+  `doSettle()` is a pure function of the budget and had no guards, so clicking
+  it first thing printed "matches CipherTask._settle" over zeroes. It now
+  refuses with the existing `lab.m.noepoch` message until at least one epoch
+  ran — same for `doProof()`, whose old `prevLanes.length` check could never
+  fire (lanes are zero-initialised, never empty). Both verified live: refusal
+  on empty state, success after `runAll`, refusal again after epoch reset.
+- The copy button could leave the user with no feedback at all: if
+  `clipboard.writeText` neither resolves nor rejects (a hanging permission),
+  the label never flipped. It now races the promise against a 1.5s timer that
+  falls back to the textarea + `execCommand` path. Verified with an async
+  probe: label flips to the confirmation and restores itself.
+
 ### Site: menu announces the current page, theme tooltip follows the language
 
 - The active menu item now carries `aria-current="page"`. The `active` class

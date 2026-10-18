@@ -114,13 +114,22 @@
           btn.textContent = label;
           setTimeout(function () { btn.textContent = prev; }, 1200);
         }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(done, function () {});
-        } else {
+        function legacyCopy() {
+          // запасной путь: небезопасный контекст (нет navigator.clipboard)
+          // или зависший permission — пользователь всё равно видит отклик
           var ta = document.createElement("textarea");
           ta.value = text; document.body.appendChild(ta); ta.select();
           try { document.execCommand("copy"); done(); } catch (e) {}
           document.body.removeChild(ta);
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          var settled = false;
+          navigator.clipboard.writeText(text).then(
+            function () { settled = true; done(); },
+            function () { settled = true; legacyCopy(); });
+          setTimeout(function () { if (!settled) { settled = true; legacyCopy(); } }, 1500);
+        } else {
+          legacyCopy();
         }
       });
     });

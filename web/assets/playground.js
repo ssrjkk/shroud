@@ -286,7 +286,7 @@
 
   function doProof() {
     if (!S.cid) throw new Error(t("lab.m.nocid"));
-    if (!S.prevLanes.length) throw new Error(t("lab.m.noepoch"));
+    if (!S.epoch) throw new Error(t("lab.m.noepoch"));
     readTaskInputs();
     var h = hyper();
     var taskHex = "0x" + C.hex(C.keccak256Bytes(asciiBytes("demo-task-" + S.taskId))).slice(0, 64);
@@ -307,6 +307,7 @@
   }
 
   function doSettle() {
+    if (!S.epoch) throw new Error(t("lab.m.noepoch"));
     readTaskInputs();
     var c = Math.floor(S.budget * 0.8), nd = Math.floor(S.budget * 0.15), tm = S.budget - c - nd;
     var perEpoch = nd / S.epochs;
