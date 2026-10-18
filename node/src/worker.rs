@@ -761,7 +761,7 @@ impl Worker {
                     "seed weights are not a shroud/weights/v1 file; executing from genesis \
                      zeros and binding the chain pin in the trace"
                 );
-                fhe::Weights::zeros(task.features)
+                fhe::Weights::zeros(task.features).map_err(Error::from)
             }
         }
     }

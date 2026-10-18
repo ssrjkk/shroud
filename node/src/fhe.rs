@@ -243,7 +243,7 @@ impl ReferenceCpuEngine {
         }
     }
 
-    fn decoded(&self, inputs: &EpochInputs) -> Result<Vec<ShardRows>> {
+    fn decoded(&self, inputs: &EpochInputs) -> shroud_core::Result<Vec<ShardRows>> {
         let mut leaves: Vec<&ShardInput> = inputs.shards.iter().collect();
         leaves.sort_by_key(|s| s.leaf_index);
         leaves
@@ -931,7 +931,9 @@ mod tests {
         let mut tfhe_like = Vec::new();
         tfhe_like.extend_from_slice(TFHE_SHARD_MAGIC);
         tfhe_like.extend_from_slice(&[0u8; 16]);
-        let err = decode_noop_shard(&tfhe_like, 2, 10_000).expect_err("must refuse");
+        let err = decode_noop_shard(&tfhe_like, 2, 10_000)
+            .map_err(Error::from)
+            .expect_err("must refuse");
         assert!(matches!(err, Error::Fhe(FheError::Backend(_))), "{err:?}");
     }
 
@@ -943,7 +945,7 @@ mod tests {
         assert!(decode_noop_shard(&bytes, 2, 10_000).is_err());
         bytes = noop_bytes(3, &[1.0, 2.0, 3.0]);
         assert!(matches!(
-            decode_noop_shard(&bytes, 2, 10_000),
+            decode_noop_shard(&bytes, 2, 10_000).map_err(Error::from),
             Err(Error::Fhe(FheError::ShapeMismatch { .. }))
         ));
     }
