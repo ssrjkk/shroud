@@ -36,6 +36,20 @@ jobs:
       - run: npm test
       - run: npx tsc --noEmit
 
+  foundry:
+    name: foundry math invariants
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/contracts
+    steps:
+      - uses: actions/checkout@v7
+      - uses: foundry-rs/foundry-toolchain@v1
+      # forge-std is installed at job time (not committed): no submodule churn,
+      # and the lockstep with CI's forge version avoids stale-std drift.
+      - run: forge install --no-commit foundry-rs/forge-std
+      - run: forge test
+
   devnet:
     name: deploy to a standalone node + lifecycle smoke
     runs-on: ubuntu-24.04

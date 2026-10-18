@@ -1,0 +1,10 @@
+[profile.default]
+src = "src"
+out = "forge-out"
+libs = ["node_modules", "lib"]
+# Hardhat owns test/*.ts; forge owns this dir so the two runners never fight
+# over the same files.
+test = "test/foundry"
+auto_detect_solc = true
+# Fuzz depth: math invariants are exact (no division), so 512 runs stay fast.
+fuzz = { runs = 512 }

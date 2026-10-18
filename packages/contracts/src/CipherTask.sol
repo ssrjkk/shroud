@@ -594,7 +594,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external whenNotPaused {
         DisputeLib.reveal(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
-            taskId, epoch, msg.sender, reexecutedDigest, salt
+            taskId, epoch, msg.sender, reexecutedDigest, salt, _nodeCount[taskId]
         );
     }
 
@@ -603,7 +603,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      disagrees with a lying claimant. Reaching quorum rejects the epoch.
     ///
     ///      A report is only counted from an address that *itself* holds a verified commit for
-    ///      that epoch whose `traceDigest` is the digest it reports. Without that requirement a
+    ///      that epoch whose `traceDigest` is the digest it reports, AND that was drawn into
+    ///      the epoch's dispute committee (`isCommitteeEligible`). Without that requirement a
     ///      dispute costs nothing but two transactions — `registerNode` is permissionless —
     ///      while `_payReporters` pays `reexecutionBps` of the epoch lock out of the
     ///      buyer's escrow to whoever reports. Re-execution now has to produce a proof that
@@ -615,7 +616,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external whenNotPaused {
         DisputeLib.report(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
-            taskId, epoch, msg.sender, reexecutedDigest
+            taskId, epoch, msg.sender, reexecutedDigest, _nodeCount[taskId]
         );
     }
 
@@ -1081,6 +1082,30 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have) {
         return (DISPUTE_QUORUM, _disputes.count[taskId][_tasks[taskId].nextEpoch]);
+    }
+
+    /// @notice Expected dispute-committee seats per epoch (see `DisputeLib`).
+    /// @dev Single definition lives in the library; this getter keeps clients
+    ///      (tests, SDK, node) pinned to it without duplicating the number.
+    function committeeSize() external pure returns (uint256) {
+        return DisputeLib.COMMITTEE_SIZE;
+    }
+
+    /// @notice Sortition seed for an epoch's dispute committee (zero before the first report).
+    function committeeSeed(uint256 taskId, uint32 epoch) external view returns (bytes32) {
+        return _disputes.seed[taskId][epoch];
+    }
+
+    /// @notice Whether `reporter` may dispute in this epoch: drawn members of the
+    ///         committee fixed by the epoch seed. False before the first report (no
+    ///         seed yet) and for registries the lottery did not pick.
+    function isCommitteeEligible(uint256 taskId, uint32 epoch, address reporter)
+        external
+        view
+        returns (bool)
+    {
+        return
+            DisputeLib.isEligibleSeed(_disputes.seed[taskId][epoch], _nodeCount[taskId], reporter);
     }
 
     /// @notice STARK transcript bound to the node. H2 fix: `node` is a public input so a
