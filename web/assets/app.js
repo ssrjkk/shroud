@@ -141,8 +141,10 @@
     var tocEl = null, tocLinks = [], spyObs = null;
     function placeToc() {
       if (!tocEl) return;
+      // липкая полоса прилипает к нижнему краю шапки: ей нужна её высота,
+      // а не позиция на экране (шапка стоит под топбаром)
       var m = document.querySelector(".masthead");
-      tocEl.style.top = ((m ? m.offsetHeight : 58) + 6) + "px";
+      tocEl.style.top = (m ? m.offsetHeight : 58) + "px";
     }
     function spy() {
       if (!tocLinks.length || !("IntersectionObserver" in window)) return;
@@ -157,12 +159,14 @@
     }
     function buildToc() {
       var secs = visibleSections();
-      if (secs.length < 2) { if (tocEl && tocEl.parentNode) tocEl.parentNode.removeChild(tocEl); tocEl = null; tocLinks = []; return; }
+      // полоса окупает занятые ~45px только когда разделов достаточно
+      if (secs.length < 3) { if (tocEl && tocEl.parentNode) tocEl.parentNode.removeChild(tocEl); tocEl = null; tocLinks = []; return; }
       if (!tocEl) {
         tocEl = document.createElement("nav");
         tocEl.className = "toc";
         tocEl.setAttribute("aria-label", tr("ui.toc"));
-        document.body.appendChild(tocEl);
+        var mast = document.querySelector(".masthead");
+        (mast && mast.parentNode ? mast.parentNode : document.body).insertBefore(tocEl, mast ? mast.nextSibling : null);
         placeToc();
       }
       tocEl.innerHTML = "";

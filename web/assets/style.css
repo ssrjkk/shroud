@@ -355,8 +355,8 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .totop:hover{border-color:var(--acc);color:var(--acc)}
 
 /* оглавление страницы: липкая полоса под шапкой, узкие экраны — без неё */
-.toc{position:fixed;left:50%;transform:translateX(-50%);top:64px;z-index:38;
-  width:min(1120px,calc(100% - 40px));display:flex;flex-wrap:wrap;gap:2px;
+.toc{position:sticky;top:0;z-index:39;width:min(1120px,calc(100% - 40px));
+  margin:0 auto;display:flex;flex-wrap:wrap;gap:2px;
   padding:5px;background:var(--bg2);border:1px solid var(--line)}
 .toc a{padding:5px 10px;color:var(--dim);text-decoration:none;font-family:var(--mono);
   font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px;

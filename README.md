@@ -21,9 +21,9 @@ the protocol, the honest security posture, and a lab that runs the pipeline in y
 | [Home](https://ssrjkk.github.io/shroud/) · [Pipeline](https://ssrjkk.github.io/shroud/pipeline.html) · [Practice](https://ssrjkk.github.io/shroud/use.html) · [Lab](https://ssrjkk.github.io/shroud/playground.html) · [Protocol](https://ssrjkk.github.io/shroud/protocol.html) · [Security](https://ssrjkk.github.io/shroud/security.html) · [License](https://ssrjkk.github.io/shroud/license.html) |
 |---|
 
-| ![Home — pipeline, guarantees, repo map](docs/shots/home.png) | ![Lab — the protocol running in the browser](docs/shots/lab.png) |
+| ![Home — the hub: where to go, repo, constants](docs/shots/home.png) | ![Lab — the protocol running in the browser](docs/shots/lab.png) |
 |---|---|
-| ![Protocol — full spec, params, roles](docs/shots/protocol.png) | ![Mobile layout](docs/shots/mobile.png) |
+| ![Protocol — full spec, params, roles, section bar](docs/shots/protocol.png) | ![Mobile layout](docs/shots/mobile.png) |
 
 The site is fully static (`web/`, no build step): bilingual RU/EN, ink/paper themes,
 newcomer/pro audience modes. The home page is a hub — pipeline, practice, lab,

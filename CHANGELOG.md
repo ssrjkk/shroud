@@ -14,11 +14,16 @@ first tagged release.
   the status ticker now actually scrolls (seamless, pauses on hover); cards lift
   and light up their border on hover/focus; menu underlines grow from the left.
 - **Small tools**: an auto-built section bar under the masthead with a scroll-spy
-  (pages with 2+ sections: home, practice, security, protocol) — every section
+  (pages with 3+ sections: home, security, protocol) — every section
   also gets a stable `id`, so `#sec-3` style deep links work and respect the
   existing `scroll-margin-top`; a copy button on every `pre.code` block (labels
   follow the language, hidden on touch devices where hover does not exist); a
   2px scroll-progress line and a "back to top" button.
+- The section bar is `sticky` and sits in the flow right after the masthead
+  rather than being `fixed`. Fixed positioning put it *under* the header: the
+  header does not start at the top of the viewport (`.topbar` is above it) and
+  it covers the bar with its own background, which left an empty frame on
+  screen. Found by rendering the site and looking at the result.
 - `prefers-reduced-motion` is honoured in both directions: CSS kills the motion,
   and JS skips ticker duplication and reveal observers entirely.
 - Progress and "back to top" write styles straight from the scroll handler (no
@@ -39,6 +44,10 @@ first tagged release.
   unreachable page) and caught all five.
 - Section ids are numbered without gaps now, so `#sec-3` is the third section
   of the page on every page.
+- `docs/shots/*.png` re-rendered from the current site: `home.png` showed the
+  pre-split single-page home, `mobile.png` and `protocol.png` still had the
+  five-item menu. Captured with headless Chrome at the same sizes as before
+  (1440×960, 1440×2600, 1440×2400, 500×1000).
 
 ### Site: one page per topic (home stops being a single scroll)
 
