@@ -33,10 +33,10 @@
 
 use std::sync::Arc;
 
-use alloy::primitives::{keccak256, Address, B256, U256};
+use alloy::primitives::{Address, B256, U256};
 
 use crate::config::FheConfig;
-use crate::error::{Error, FheError, Result, ShardError};
+use crate::error::{Error, FheError, Result};
 
 /// Envelope magics, re-exported from the portable core so there is exactly one
 /// definition of each: `shroud/noop/v1` development shards, `shroud/weights/v1`
@@ -59,10 +59,6 @@ const DIVERGENCE_LOSS_CAP: f64 = 1e12;
 /// `shroud_core::weights`). Lanes are `i32` two's complement stored in `u32`
 /// words; `lanes.len()` always equals `features`; the last lane is the bias.
 pub use shroud_core::weights::Weights;
-
-/// Row-value quantisation, re-exported from the portable core (single definition).
-/// Crate-visible only: guests and the lab use `shroud_core::fixed` directly.
-pub(crate) use shroud_core::fixed::quantize;
 
 /// Decoded development shard and its decoder, re-exported from the portable core
 /// (single definition — see `shroud_core::shard`).
@@ -874,6 +870,11 @@ impl FheEngine for UnsupportedEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Explicit (not via the glob above): the top level no longer imports these —
+    // every value-use lives in tests, so they live here. Mirrors tfhe_backend.
+    use alloy::primitives::keccak256;
+    use shroud_core::fixed::quantize;
 
     /// Build a `shroud/noop/v1` payload exactly like the SDK's `NoopEncryptor`.
     fn noop_bytes(features: u32, rows: &[f64]) -> Vec<u8> {
