@@ -44,7 +44,15 @@ jobs:
         working-directory: packages/contracts
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: packages/contracts/package-lock.json
       - uses: foundry-rs/foundry-toolchain@v1
+      # node_modules first: forge compiles the whole src/ tree, and the fhEVM
+      # imports (@fhevm/solidity, encrypted-types) resolve through it.
+      - run: npm ci
       # forge-std is installed at job time (not committed): no submodule churn,
       # and the lockstep with CI's forge version avoids stale-std drift.
       - run: forge install --no-commit foundry-rs/forge-std
