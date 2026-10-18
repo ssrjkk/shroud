@@ -25,3 +25,6 @@ pub mod sgd;
 pub mod shard;
 pub mod transcript;
 pub mod weights;
+
+/// Re-exported at the crate root: the one type every consumer matches on.
+pub use error::{CoreError, Result};
