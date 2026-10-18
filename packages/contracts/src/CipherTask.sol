@@ -594,7 +594,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external whenNotPaused {
         DisputeLib.reveal(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
-            taskId, epoch, msg.sender, reexecutedDigest, salt, _nodeCount[taskId]
+            taskId, epoch, msg.sender, reexecutedDigest, salt,
+            vault.taskBondTotal(taskId), vault.nodeBond(taskId, msg.sender)
         );
     }
 
@@ -616,7 +617,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external whenNotPaused {
         DisputeLib.report(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
-            taskId, epoch, msg.sender, reexecutedDigest, _nodeCount[taskId]
+            taskId, epoch, msg.sender, reexecutedDigest,
+            vault.taskBondTotal(taskId), vault.nodeBond(taskId, msg.sender)
         );
     }
 
@@ -1098,15 +1100,19 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     /// @notice Whether `reporter` may dispute in this epoch: drawn members of the
-    ///         committee fixed by the epoch seed. False before the first report (no
-    ///         seed yet) and for registries the lottery did not pick.
+    ///         committee fixed by the epoch seed, weighted by posted bond. False before
+    ///         the first report (no seed yet) and for stake the lottery did not pick.
     function isCommitteeEligible(uint256 taskId, uint32 epoch, address reporter)
         external
         view
         returns (bool)
     {
-        return
-            DisputeLib.isEligibleSeed(_disputes.seed[taskId][epoch], _nodeCount[taskId], reporter);
+        return DisputeLib.isEligibleSeed(
+            _disputes.seed[taskId][epoch],
+            vault.taskBondTotal(taskId),
+            vault.nodeBond(taskId, reporter),
+            reporter
+        );
     }
 
     /// @notice STARK transcript bound to the node. H2 fix: `node` is a public input so a

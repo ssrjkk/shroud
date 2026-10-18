@@ -755,6 +755,28 @@ describe("CipherTask", () => {
       if (!ineligibleSeen) console.log("committee test: all 9 challengers were drawn (rare)");
     });
 
+    it("a topped-up whale is always drawn", async () => {
+      const fx = await deployFixture();
+      const { task, vault, token, buyer, node, node2 } = fx;
+      const id = await sealed(fx, { epochs: 1, nodes: [node, node2] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      // 2 x 10M = 20M total; topping node2 up by 5M makes 7 x 15M >= 25M, so the
+      // whale passes the lottery under every possible seed — deterministically.
+      const topUp = 5_000_000n;
+      await token.mint(node2.address, topUp);
+      await vault.connect(node2).topUpNodeBond(id, topUp);
+      expect(await vault.taskBondTotal(id)).to.equal(25_000_000n);
+      const claimDigest = bytes32Of(900);
+      const chalDigest = bytes32Of(901);
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), claimDigest);
+      await task.connect(node2).commitEpoch(id, 0, proofRef(2), bytes32Of(302), bytes32Of(402), bytes32Of(502), chalDigest);
+      // The whale's own report fixes the seed and counts on the first try.
+      await task.connect(node2).reportDispute(id, 0, chalDigest);
+      const [, have] = await task.disputeQuorum(id);
+      expect(have).to.equal(1n);
+      expect(await task.committeeSeed(id, 0)).to.not.equal(ethers.ZeroHash);
+    });
+
     it("a mismatched reveal burns nothing and leaves the reporter un-bricked", async () => {
       const fx = await deployFixture();
       const { task, vault, buyer, node, node2 } = fx;

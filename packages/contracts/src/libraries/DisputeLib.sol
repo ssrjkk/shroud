@@ -27,14 +27,17 @@ library DisputeLib {
     uint32 internal constant MAX_REPORTERS_PER_EPOCH = 64;
 
     /// @notice Expected dispute-committee seats per epoch. The lottery below draws
-    ///         each registered node independently with probability
-    ///         `COMMITTEE_SIZE / nodeCount` (capped at 1), so small tasks behave
-    ///         exactly as before (everyone eligible) while large tasks stop counting
-    ///         arbitrary Sybil identities toward quorum.
-    /// @dev Bonds are flat (`REGISTRATION_BOND`), so weights are uniform today; the
-    ///      day bonds vary, the eligibility formula is the single place to change.
-    ///      Kept above `DISPUTE_QUORUM` (3): a healthy committee always has several
-    ///      eligible members, and `MAX_REPORTERS_PER_EPOCH` (64) still bounds payout.
+    ///         each registered node with probability `COMMITTEE_SIZE * weight / total`,
+    ///         where `weight` is the node's posted bond and `total` the task's bond
+    ///         sum — stake-weighted sortition. With flat bonds this reduces exactly to
+    ///         `COMMITTEE_SIZE / nodeCount` (uniform draw), so small tasks behave as
+    ///         before (everyone eligible) while large tasks stop counting arbitrary
+    ///         Sybil identities toward quorum.
+    /// @dev `COMMITTEE_SIZE * weight` cannot overflow in practice (`weight` is a uint128
+    ///      bond position, so the product stays far below 2^256) and Solidity 0.8 would
+    ///      revert rather than wrap in any case. Kept above `DISPUTE_QUORUM` (3): a
+    ///      healthy committee always has several eligible members, and
+    ///      `MAX_REPORTERS_PER_EPOCH` (64) still bounds payout.
     uint256 internal constant COMMITTEE_SIZE = 7;
 
     /// @notice Dispute state for every task/epoch. Owned by the host, passed by pointer.
@@ -91,7 +94,8 @@ library DisputeLib {
         address reporter,
         bytes32 digest,
         bytes32 salt,
-        uint32 nodeCount
+        uint256 committeeTotal,
+        uint256 reporterWeight
     ) external {
         bytes32 c = s.commitment[taskId][epoch][reporter];
         if (c == bytes32(0)) revert ICipherTask.CommitmentMismatch(taskId, epoch, reporter);
@@ -105,7 +109,7 @@ library DisputeLib {
             revert ICipherTask.CommitmentMismatch(taskId, epoch, reporter);
         }
         delete s.commitment[taskId][epoch][reporter];
-        record(s, registered, t, commits, claimed, taskId, epoch, reporter, digest, nodeCount);
+        record(s, registered, t, commits, claimed, taskId, epoch, reporter, digest, committeeTotal, reporterWeight);
     }
 
     /// @notice Bare report path (backward compatible). Reverts while the reporter has an open
@@ -120,26 +124,26 @@ library DisputeLib {
         uint32 epoch,
         address reporter,
         bytes32 digest,
-        uint32 nodeCount
+        uint256 committeeTotal,
+        uint256 reporterWeight
     ) external {
         if (s.commitment[taskId][epoch][reporter] != bytes32(0)) {
             revert ICipherTask.CommitmentPending(taskId, epoch, reporter);
         }
-        record(s, registered, t, commits, claimed, taskId, epoch, reporter, digest, nodeCount);
+        record(s, registered, t, commits, claimed, taskId, epoch, reporter, digest, committeeTotal, reporterWeight);
     }
 
     /// @dev Pure eligibility predicate, separated so the host can expose it as a view
-    ///      without mutating state. `seed == 0` (no report yet) or `nodeCount == 0`
-    ///      (unreachable: reporters are registered) means not eligible.
-    function isEligibleSeed(bytes32 seed, uint32 nodeCount, address reporter)
+    ///      without mutating state. Unset seed, empty registry total, or zero weight
+    ///      means not eligible. `COMMITTEE_SIZE * weight >= total` (small registries,
+    ///      whales) is an automatic pass — the lottery covers everyone.
+    function isEligibleSeed(bytes32 seed, uint256 totalWeight, uint256 weight, address reporter)
         internal
         pure
         returns (bool)
     {
-        if (seed == bytes32(0) || nodeCount == 0) return false;
-        uint256 threshold = COMMITTEE_SIZE;
-        if (threshold > nodeCount) threshold = nodeCount;
-        return uint256(keccak256(abi.encode(seed, reporter))) % nodeCount < threshold;
+        if (seed == bytes32(0) || totalWeight == 0 || weight == 0) return false;
+        return uint256(keccak256(abi.encode(seed, reporter))) % totalWeight < COMMITTEE_SIZE * weight;
     }
 
     /// @dev Sortition gate for `record`: fixes the epoch seed on first use, then admits
@@ -149,14 +153,15 @@ library DisputeLib {
         uint256 taskId,
         uint32 epoch,
         address reporter,
-        uint32 nodeCount
+        uint256 totalWeight,
+        uint256 weight
     ) internal returns (bool) {
         bytes32 seed = s.seed[taskId][epoch];
         if (seed == bytes32(0)) {
             seed = keccak256(abi.encode(block.prevrandao, taskId, epoch));
             s.seed[taskId][epoch] = seed;
         }
-        return isEligibleSeed(seed, nodeCount, reporter);
+        return isEligibleSeed(seed, totalWeight, weight, reporter);
     }
 
     /// @dev The shared counting logic. A report is only counted from an address holding its own
@@ -173,7 +178,8 @@ library DisputeLib {
         uint32 epoch,
         address reporter,
         bytes32 digest,
-        uint32 nodeCount
+        uint256 committeeTotal,
+        uint256 reporterWeight
     ) private {
         if (!registered[taskId][reporter]) revert ICipherTask.NodeNotRegistered(taskId, reporter);
         if (t.status != ICipherTask.TaskStatus.EpochCommitting) {
@@ -181,7 +187,7 @@ library DisputeLib {
         }
         if (s.recorded[taskId][epoch][reporter]) revert ICipherTask.DuplicateCommit(taskId, epoch, reporter);
         if (digest == claimed[taskId][epoch]) revert ICipherTask.DisputeAgreesWithClaim(taskId, epoch, reporter);
-        if (!isEligible(s, taskId, epoch, reporter, nodeCount)) {
+        if (!isEligible(s, taskId, epoch, reporter, committeeTotal, reporterWeight)) {
             revert ICipherTask.NotCommitteeMember(taskId, epoch, reporter);
         }
 
