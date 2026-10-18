@@ -74,12 +74,19 @@ pub fn dispute_salt(operator: Address, task_id: U256, epoch: u32) -> B256 {
 }
 
 /// The transcript a proof of compute is bound to:
-/// `CipherTask::proofTranscript(taskId, epoch, traceDigest)`.
+/// `CipherTask::proofTranscript(taskId, epoch, traceDigest, node)`.
 ///
-/// `abi.encode` of a `string` plus seven static arguments lays out as eight head words — the
-/// string's head being its offset from the start of the encoding — followed by the string's
-/// length word and its data right-padded to 32 bytes. `TRANSCRIPT_MAGIC` is 13 bytes, so the
-/// total is `8 * 32 + 32 + 32 = 320` bytes and the offset is `256`.
+/// H2 fix: the `node` parameter is the 8th static argument. This cryptographically binds
+/// each STARK proof to the node that produced it, so a proof cannot be replayed under a
+/// different node's identity. Previously the proof was replayable because only the digest
+/// was in the transcript — any node could adopt another node's trace digest and win the
+/// tie-break without doing the compute.
+///
+/// `abi.encode` of a `string` plus eight static arguments lays out as nine head words
+/// (offset + 8 args), followed by the string's length word and its data right-padded to
+/// 32 bytes. `TRANSCRIPT_MAGIC` is 13 bytes, so the total is `9 * 32 + 32 + 32 = 352`
+/// bytes and the offset is `288`.
+#[allow(clippy::too_many_arguments)] // arity is the spec: one param per ABI head word
 pub fn proof_transcript(
     chain_id: u64,
     cipher_task: Address,
@@ -88,10 +95,11 @@ pub fn proof_transcript(
     ct_root: B256,
     last_weights_digest: B256,
     trace_digest: B256,
+    node: Address, // H2 fix: bind proof to node
 ) -> B256 {
-    let mut buf: Vec<u8> = Vec::with_capacity(320);
-    // Head word 0: offset of the dynamic `string`.
-    buf.extend_from_slice(&U256::from(8 * 32).to_be_bytes::<32>());
+    let mut buf: Vec<u8> = Vec::with_capacity(352);
+    // Head word 0: offset of the dynamic `string` = 9 * 32 = 288.
+    buf.extend_from_slice(&U256::from(9 * 32).to_be_bytes::<32>());
     buf.extend_from_slice(&U256::from(chain_id).to_be_bytes::<32>());
     let mut addr_word = [0u8; 32];
     addr_word[12..32].copy_from_slice(cipher_task.as_slice());
@@ -101,6 +109,10 @@ pub fn proof_transcript(
     buf.extend_from_slice(ct_root.as_slice());
     buf.extend_from_slice(last_weights_digest.as_slice());
     buf.extend_from_slice(trace_digest.as_slice());
+    // H2 fix: node address padded to 32 bytes.
+    let mut node_word = [0u8; 32];
+    node_word[12..32].copy_from_slice(node.as_slice());
+    buf.extend_from_slice(&node_word);
     // Tail: length, then the data padded into one word.
     buf.extend_from_slice(&U256::from(TRANSCRIPT_MAGIC.len()).to_be_bytes::<32>());
     let mut string_word = [0u8; 32];
@@ -112,6 +124,7 @@ pub fn proof_transcript(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::address;
 
     fn b256(s: &str) -> B256 {
         s.parse().expect("32-byte hex")
@@ -172,10 +185,17 @@ mod tests {
         assert_eq!(ct_root(&[]), empty_root());
     }
 
+    // H2 fix: node parameter added to proof_transcript.
+    // Used only in tests; production call sites are updated separately in EpochLib.sol.
+    // Pinned to the Hardhat default signer used as `node` in `test-vectors/vectors.spec.ts`,
+    // so this test and the chain vectors agree byte for byte.
+    const TEST_NODE: Address = address!("0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc");
+
     #[test]
     fn the_transcript_matches_the_contract_view() {
-        // `task.proofTranscript(1, 0, traceDigest)` after the third contribution and an
-        // `openEpoch` whose `weightsDigest` is the one below.
+        // `task.proofTranscript(1, 0, traceDigest, TEST_NODE)` after the third contribution.
+        // Pinned against the `test-vectors/vectors.spec.ts` deployment (TRANSCRIPT.expected):
+        // both sides bind the same node, so the digests must agree byte for byte.
         let got = proof_transcript(
             CHAIN_ID,
             TASK_ADDRESS.parse().expect("address"),
@@ -184,10 +204,11 @@ mod tests {
             b256("0xa3d7329343c8b278393d3e6d990e99e514d3474f8d4f4df834630ecbdf9d0827"),
             b256("0xa68765884cb666d6f6f1673b17cd9d3d23bc01d171acdf0f77bcd5c0ae88544f"),
             b256("0x01c8a3e3937be1c605ffbdfd93fa4c7b1a68ef7dd87913adf52d6c0739ee7f62"),
+            TEST_NODE, // H2 fix
         );
         assert_eq!(
             got,
-            b256("0xdc1867631d1169dfd4f8aea83777cd1547c6803912701565add73fb417faafa2")
+            b256("0x0454f70057b5b5de290d04ff8a8e93e2f6ec4fa9d063a1a0eb95d73681cd99f9")
         );
     }
 
@@ -199,7 +220,7 @@ mod tests {
             B256::repeat_byte(2),
             B256::repeat_byte(3),
         );
-        let base = || proof_transcript(CHAIN_ID, task, U256::from(1), 0, ct, w, tr);
+        let base = || proof_transcript(CHAIN_ID, task, U256::from(1), 0, ct, w, tr, TEST_NODE);
         let mut seen = vec![base()];
         for (chain_id, task_id, epoch, root, weights, trace) in [
             (CHAIN_ID + 1, U256::from(1), 0, ct, w, tr),
@@ -209,7 +230,9 @@ mod tests {
             (CHAIN_ID, U256::from(1), 0, ct, B256::repeat_byte(9), tr),
             (CHAIN_ID, U256::from(1), 0, ct, w, B256::repeat_byte(9)),
         ] {
-            let got = proof_transcript(chain_id, task, task_id, epoch, root, weights, trace);
+            let got = proof_transcript(
+                chain_id, task, task_id, epoch, root, weights, trace, TEST_NODE,
+            );
             assert_ne!(
                 got,
                 base(),
@@ -221,6 +244,24 @@ mod tests {
         seen.sort();
         seen.dedup();
         assert_eq!(seen.len(), before, "two distinct input sets collided");
+        // H2 fix: the node is a public input. Same computation under a different node
+        // must produce a different transcript; otherwise proofs are replayable.
+        assert_ne!(
+            proof_transcript(CHAIN_ID, task, U256::from(1), 0, ct, w, tr, TEST_NODE),
+            proof_transcript(
+                CHAIN_ID,
+                task,
+                U256::from(1),
+                0,
+                ct,
+                w,
+                tr,
+                "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                    .parse()
+                    .expect("address")
+            ),
+            "node must change the transcript"
+        );
     }
 
     #[test]
@@ -295,7 +336,8 @@ mod tests {
                 0,
                 B256::ZERO,
                 B256::ZERO,
-                B256::ZERO
+                B256::ZERO,
+                TEST_NODE
             ),
             proof_transcript(
                 CHAIN_ID,
@@ -304,7 +346,8 @@ mod tests {
                 0,
                 B256::ZERO,
                 B256::ZERO,
-                B256::ZERO
+                B256::ZERO,
+                TEST_NODE
             ),
         );
     }

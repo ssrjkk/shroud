@@ -220,6 +220,12 @@ pub struct ShardConfig {
     pub cache_dir: PathBuf,
     /// Drop cached objects older than this.
     pub cache_ttl: Duration,
+    /// How many shards the worker fetches in parallel per epoch. A value of 1 restores the
+    /// old strictly-sequential behaviour; a larger value keeps the network busy but bounds
+    /// memory because results are collected into a bounded buffer. The bound exists so a
+    /// hostile `TaskOnChain` cannot force the node to open an unbounded number of concurrent
+    /// connections by setting a huge contributor count.
+    pub fetch_concurrency: usize,
     /// Derive the per-shard AEAD transport key instead of trusting the DA transport.
     ///
     /// NOT IMPLEMENTED: no code in this crate reads this flag, so `true` used to mean
@@ -247,6 +253,16 @@ pub struct MeshConfig {
     /// Max concurrent streams per h2 connection. Each gossip stream spawns a task plus a
     /// channel, so uncapped streams are task/memory exhaustion by handshake.
     pub max_streams_per_connection: usize,
+    /// Global cap on concurrent in-flight streams across ALL connections.
+    ///
+    /// M15 fix: a hostile peer that opens many connections (each with
+    /// `max_streams_per_connection` streams) can exhaust the node's task/socket/FD budget.
+    /// This cap is the last line of defence: excess streams wait for a free slot rather
+    /// than immediately consuming a task slot, so legitimate requests are delayed rather
+    /// than dropped. The value must be >= `max_streams_per_connection`; the validator
+    /// enforces that and the server applies `concurrency_limit` before
+    /// `concurrency_limit_per_connection` so the global gate is hit first.
+    pub max_global_streams: usize,
     /// Max peer-IP buckets in the inbound throttle. Memory-bounded by construction;
     /// past it the stalest bucket is evicted, never the accounting.
     pub max_throttle_peers: usize,
@@ -346,6 +362,7 @@ impl Default for Config {
                 range_bytes: 4 << 20,
                 cache_dir: PathBuf::from("./data/cache"),
                 cache_ttl: Duration::from_secs(7 * 86_400),
+                fetch_concurrency: 64,
                 aead_transport: false,
             },
             mesh: MeshConfig {
@@ -359,6 +376,7 @@ impl Default for Config {
                 inbound_rps: 100,
                 inbound_burst: 200,
                 max_streams_per_connection: 100,
+                max_global_streams: 100_000,
                 max_throttle_peers: 10_000,
                 mtls_cert: None,
                 mtls_key: None,
@@ -529,6 +547,13 @@ impl Config {
             }
             .into());
         }
+        if self.shard.fetch_concurrency == 0 {
+            return Err(ConfigError::Invalid {
+                field: "shard.fetch_concurrency",
+                reason: "must be >= 1; at zero the worker cannot fetch any shards".into(),
+            }
+            .into());
+        }
         if self.mesh.index_capacity == 0 {
             return Err(ConfigError::Invalid {
                 field: "mesh.index_capacity",
@@ -554,6 +579,23 @@ impl Config {
             return Err(ConfigError::Invalid {
                 field: "mesh.max_streams_per_connection",
                 reason: "must be >= 1; at zero no peer can open a stream".into(),
+            }
+            .into());
+        }
+        if self.mesh.max_global_streams == 0 {
+            return Err(ConfigError::Invalid {
+                field: "mesh.max_global_streams",
+                reason: "must be >= 1; at zero no stream can make progress".into(),
+            }
+            .into());
+        }
+        if self.mesh.max_global_streams < self.mesh.max_streams_per_connection {
+            return Err(ConfigError::Invalid {
+                field: "mesh.max_global_streams",
+                reason: format!(
+                    "{} must be >= max_streams_per_connection ({})",
+                    self.mesh.max_global_streams, self.mesh.max_streams_per_connection
+                ),
             }
             .into());
         }

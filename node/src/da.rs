@@ -73,6 +73,7 @@ pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B2
     })?;
     let cid = keccak256(bytes);
     let path = cache_dir.join(file_name(&cid));
+    // Idempotent fast path: the object already exists.
     match std::fs::read(&path) {
         Ok(existing) if existing == bytes => return Ok(cid),
         Ok(existing) => {
@@ -90,13 +91,32 @@ pub fn write_object(cache_dir: &Path, bytes: &[u8], max_bytes: u64) -> Result<B2
             }));
         }
     }
-    let tmp = cache_dir.join(format!(".tmp-{}", file_name(&cid)));
+    // M14 fix: unique temp name per writer. A fixed `.tmp-<cid>` name means two stores of the
+    // same cid (possible only under a keccak collision or a planted file) race on the same
+    // temp file and the last writer silently wins the atomic rename. With a per-process,
+    // per-call suffix each writer uses its own temp file, so the rename is a pure publishing
+    // step and "last writer on the same BYTES" is idempotent.
+    let tmp = cache_dir.join(format!(
+        ".tmp-{}-{}-{}",
+        file_name(&cid),
+        std::process::id(),
+        // Nanosecond timestamp: two stores from the same process in the same microsecond
+        // still get distinct temp names.
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    ));
     std::fs::write(&tmp, bytes).map_err(|e| {
         Error::ShardStore(ShardError::Malformed {
             offset: 0,
             reason: format!("cannot write {}: {e}", tmp.display()),
         })
     })?;
+    // Sync before rename so a crash cannot leave a zero-length published object.
+    if let Ok(f) = std::fs::File::open(&tmp) {
+        let _ = f.sync_all();
+    }
     std::fs::rename(&tmp, &path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         Error::ShardStore(ShardError::Malformed {
