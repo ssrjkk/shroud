@@ -207,9 +207,11 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
   fixed-point SGD, weight/shard formats, ctRoot/transcript/trace layouts; dependency-free
   except `sha3`, wasm32-checked in CI) so a zkVM guest can import it; guest circuit over
   the 8-field transcript, recursive aggregation and CPU/GPU benchmarks still pending.
-- [ ] **Cryptoeconomics (Phase 4):** stake-weighted re-executor
-  assignment (+ slashing both ways), fhEVM Gateway threshold re-encryption, Foundry
-  native invariants.
+- [ ] **Cryptoeconomics (Phase 4):** sortition-gated dispute committee is live
+  (`COMMITTEE_SIZE` lottery over the registry, first-report fixes the seed; uniform
+  weights while bonds are flat) plus Foundry math invariants; reporter-side slashing
+  deliberately absent (revert atomicity + typo-indistinguishability, see `DisputeLib`);
+  still pending: variable-stake weights, fhEVM Gateway threshold re-encryption.
 - [x] **Green devnet-live execution leg:** the two-node agreement script runs green in CI
   (`live node registers + bonds on devnet` in `.github/workflows/rust.yml`).
 
