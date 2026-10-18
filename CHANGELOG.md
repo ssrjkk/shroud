@@ -6,6 +6,28 @@ first tagged release.
 
 ## Unreleased
 
+### Site: the reading-mode switch is now reachable
+
+- The site has advertised newcomer / pro modes from the start, but the buttons
+  existed only inside the lab: `data-mode-btn` appeared in `playground.html` and
+  nowhere else. Landing straight on the home page meant `03 / PRO` — the
+  constants table — was simply unreachable, and there was no way to leave pro
+  mode either. The switch now sits in the masthead of the four pages whose
+  content actually changes with it (home, protocol, security, license) and
+  shares the existing `shroud-mode` key in localStorage, so the choice follows
+  the visitor across the site. Pipeline and practice deliberately have no
+  switch: nothing on them is gated by the mode, and a dead control is worse
+  than none.
+- Masthead spacing tightened (segment padding 10→8px, gaps 12→10 and 6→4) so
+  brand + seven menu items + theme + language + mode still fit on one row at
+  1280px: measured 1084px of the 1132px available in the worst case (Russian),
+  939px in English.
+- `aria-label` on the language and mode groups was hardcoded English
+  ("language", "mode") on Russian pages; both are translated now.
+- `nav.mjs` gained the invariant that made this class of bug visible: a page with
+  `only-new` / `only-pro` blocks must have a mode switch, and a page with a mode
+  switch must have such blocks. Verified in both directions on a throwaway copy.
+
 ### Site: motion and small tools (no new dependencies, no build step)
 
 - **Animations**, all of them decorative and reversible: hero elements rise in

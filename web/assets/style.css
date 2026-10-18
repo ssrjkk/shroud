@@ -52,7 +52,7 @@ pre.code .c{color:#8fa5c4}pre.code .k{color:var(--acc)}
 
 /* --- шапка --- */
 .masthead{background:var(--bg2);border-bottom:2px solid var(--line);position:sticky;top:0;z-index:40}
-.masthead-in{max-width:var(--max);margin:0 auto;padding:10px 24px;display:flex;align-items:center;gap:12px;justify-content:space-between;flex-wrap:wrap}
+.masthead-in{max-width:var(--max);margin:0 auto;padding:10px 24px;display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none}
 .brand-mark{width:36px;height:36px;border:2px solid var(--line);display:grid;place-items:center;
   background:var(--acc);color:var(--acc-ink);font-family:var(--disp);font-weight:800;font-size:19px;flex:none}
@@ -63,10 +63,10 @@ pre.code .c{color:#8fa5c4}pre.code .k{color:var(--acc)}
   color:var(--mut);padding:8px 11px;border-bottom:2px solid transparent}
 .nav a:hover{color:var(--ink)}
 .nav a.active{color:var(--acc);border-bottom-color:var(--acc)}
-.controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto}
+.controls{display:flex;gap:4px;align-items:center;flex-wrap:wrap;margin-left:auto}
 .seg{display:flex;border:1px solid var(--line);background:transparent}
 .seg button{appearance:none;border:0;background:transparent;color:var(--mut);font-family:var(--disp);
-  font-weight:700;font-size:11px;letter-spacing:.05em;padding:7px 10px;cursor:pointer}
+  font-weight:700;font-size:11px;letter-spacing:.05em;padding:7px 8px;cursor:pointer}
 .seg button.on{background:var(--acc);color:var(--acc-ink)}
 .seg button + button{border-left:1px solid var(--line)}
 .iconbtn{width:32px;height:32px;border:1px solid var(--line);background:transparent;color:var(--ink);

@@ -31,7 +31,7 @@
   </nav>
   <div class="controls">
     <button class="iconbtn" data-theme-toggle aria-pressed="false" data-i18n-aria="theme.toggle" title="Theme"><span class="g-moon">☾</span><span class="g-sun">☀</span></button>
-    <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
+    <div class="seg" role="group" aria-label="language" data-i18n-aria="ui.lang"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
   </div>
 </div></header>
 
@@ -41,7 +41,7 @@
   <p class="sect-lede" data-i18n="lab.lede">Шесть стендов плюс журнал с итогами. Математика — как в node/src/fhe.rs и @shroud/sdk (квантование, reference-SGD, keccak-транскрипт, STAR-референс), сверено скриптом web/tests/equiv.mjs. Демо-раскладка шарда — shroud/noop/v1 (боевая — relayer/TFHE, смысл байтов тот же). Итог — веса, дайджесты и JSON-отчёт.</p>
   <div class="notice warn"><b class="t" data-i18n="lab.honest">Честно о стенде</b><span data-i18n="lab.honestp">Reference-движок считает в открытую из демо-байтов (dev-путь узла: shroud/noop/v1, без шифрования). Боевой TFHE-путь включается флагом prover, полной ончейн-проверки STARK пока нет, первого живого commitEpoch ещё не было — см. docs/05 §8. Дефолтный lr 0.05 даёт lrQ16 3277, а золотые векторы пинят 3276 (см. vectors.json) — сверяйся с векторами при том же lrQ16. Стенд показывает порядок шагов и форматы, а не криптографические гарантии.</span></div>
 
-  <div class="lab-modes"><div class="seg" role="group" aria-label="mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Новичкам</button><button data-mode-btn="pro" data-i18n="mode.pro">Профи</button></div></div>
+  <div class="lab-modes"><div class="seg" role="group" aria-label="mode" data-i18n-aria="ui.mode"><button data-mode-btn="new" class="on" data-i18n="mode.simple">Новичкам</button><button data-mode-btn="pro" data-i18n="mode.pro">Профи</button></div></div>
 
   <div class="lab">
   <div>
