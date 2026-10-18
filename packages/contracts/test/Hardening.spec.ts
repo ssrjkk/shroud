@@ -161,6 +161,40 @@ describe("Hardening", () => {
       void vault;
     });
 
+    it("slashed weight leaves the denominator: honest shares are undiluted", async () => {
+      const fx = await deployFixture();
+      const { task, token, buyer, alice, bob } = fx;
+      // Third contributor from the spare signers: with only two contributors the dust
+      // sink would mask dilution (the honest share plus the dust still sum to the pool),
+      // so the middle contributor's exact share is what discriminates the fix.
+      const carol = (await ethers.getSigners())[9];
+      const bondReq = 1_000_000n;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+      await task.connect(buyer).setContributionBondRequirement(id, bondReq);
+      for (const c of [alice, bob, carol]) {
+        await token.mint(c.address, bondReq);
+        await token.connect(c).approve(await task.getAddress(), bondReq);
+      }
+      // Alice out-rows the honest pair 2:1, then gets slashed for a bad shard.
+      await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 4_000);
+      await task.connect(bob).submitContribution(id, bytes32Of(5), bytes32Of(6), proofFor(7), bytes32Of(8), 1_000);
+      await task.connect(carol).submitContribution(id, bytes32Of(9), bytes32Of(10), proofFor(11), bytes32Of(12), 1_000);
+      await task.connect(buyer).slashContributionBond(id, alice.address);
+      await runEpochOnly(fx, id);
+      await matureRewardWindows();
+      await task.settle(id);
+      // Slashed earns nothing...
+      expect(await task.pendingPayout(alice.address)).to.equal(0n);
+      // ...and, crucially, her weight no longer dilutes the honest pair: with only
+      // 2000 of active weight against an 800M pool, bob and carol earn ~400M each —
+      // not ~133M with the forfeited ~533M pooling into dust for the highest address
+      // (an address the attacker picks, which would let a slashed weight earn
+      // through the back door).
+      expect(await task.pendingPayout(bob.address)).to.be.greaterThan(300_000_000n);
+      expect(await task.pendingPayout(carol.address)).to.be.greaterThan(300_000_000n);
+    });
+
     it("tasks without a requirement behave exactly as before (bond defaults to zero)", async () => {
       const fx = await deployFixture();
       const { task, buyer, alice } = fx;

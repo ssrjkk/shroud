@@ -117,6 +117,11 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     /// @notice Bonds posted, keyed by task then node. Released by `releaseBond`, forfeited by
     ///         `slashBond`; never counted toward any task sub-balance until slashed.
     mapping(uint256 => mapping(address => uint128)) public nodeBond;
+    /// @notice Sum of `nodeBond` per task: the stake weight the dispute sortition draws
+    ///         against (`DisputeLib`). Maintained incrementally on every bond movement
+    ///         (take/release/slash/top-up); it is a view over `nodeBond`, not new money,
+    ///         so the accounting invariant below does not contain it as a separate term.
+    mapping(uint256 => uint256) public taskBondTotal;
     /// @dev BLS keys already taken for a task. Keys are self-declared, so this stops accidents
     ///      and lazy key reuse, not a determined Sybil — generating fresh keys is free, and the
     ///      bond is what makes fresh identities cost.
@@ -177,6 +182,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     // compilation — a vault log decodes the same through the orchestrator ABI.
     event NodeBondSlashed(uint256 indexed taskId, uint32 indexed epoch, address indexed node, uint128 amount);
     event NodeBondWithdrawn(uint256 indexed taskId, address indexed node, uint128 amount);
+    event NodeBondToppedUp(uint256 indexed taskId, address indexed node, uint128 amount);
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner(msg.sender);
@@ -328,12 +334,37 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         blsKeyUsed[taskId][blsPubKey] = true;
         nodeBond[taskId][node] = REGISTRATION_BOND;
         bondTotal += REGISTRATION_BOND;
+        taskBondTotal[taskId] += REGISTRATION_BOND;
         totalLocked += REGISTRATION_BOND;
         // Fail closed on fee-on-transfer tokens: the bond must arrive whole, otherwise the
         // quorum price the threat model (F-04) assumes is not actually posted.
         uint256 received = _pull(node, REGISTRATION_BOND);
         if (received != REGISTRATION_BOND) revert BondInsufficient(taskId, node, REGISTRATION_BOND);
         _assertInvariant();
+    }
+
+    /// @notice Add to your own registration bond, raising your dispute-sortition weight.
+    /// @dev Only the bond owner tops up their own position (`msg.sender == node`): the
+    ///      money trail stays unambiguous, and funding someone else's weight is pointless
+    ///      anyway (weight is per node). Requires an existing bond — top-up is not a
+    ///      backdoor registration (no BLS key, no node count). Fail-closed on
+    ///      fee-on-transfer tokens, mirroring `takeBond`; checked arithmetic guards
+    ///      the `uint128` position on absurd inputs.
+    function topUpNodeBond(uint256 taskId, uint128 amount) external whenNotPaused nonReentrant {
+        address node = msg.sender;
+        if (amount == 0) revert ZeroAmount();
+        if (nodeBond[taskId][node] == 0) revert BondNotReleasable(taskId, node);
+        if (token.allowance(node, address(this)) < amount) {
+            revert BondInsufficient(taskId, node, amount);
+        }
+        nodeBond[taskId][node] += amount;
+        bondTotal += amount;
+        taskBondTotal[taskId] += amount;
+        totalLocked += amount;
+        uint256 received = _pull(node, amount);
+        if (received != amount) revert BondInsufficient(taskId, node, amount);
+        _assertInvariant();
+        emit NodeBondToppedUp(taskId, node, amount);
     }
 
     /// @notice Release `node`'s bond to it, once the task can no longer slash it: terminal
@@ -356,6 +387,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         }
         nodeBond[taskId][node] = 0;
         bondTotal -= bond;
+        taskBondTotal[taskId] -= bond;
         totalLocked -= bond;
         _assertInvariant();
         _push(node, bond);
@@ -377,6 +409,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         if (bond == 0) return;
         nodeBond[taskId][winner] = 0;
         bondTotal -= bond;
+        taskBondTotal[taskId] -= bond;
         // Reclassification, not movement: the tokens stay in the vault while the ledger moves
         // them from the bond term to the sub-balance term. `totalLocked` is untouched, so the
         // invariant holds by construction rather than by recomputation.

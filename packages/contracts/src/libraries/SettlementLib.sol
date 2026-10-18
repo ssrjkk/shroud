@@ -81,7 +81,10 @@ library SettlementLib {
     /// @param t the task, by storage pointer
     /// @param contributors the task's contributor list, in submission order
     /// @param contributions the task's contributions, keyed by address
-    /// @param totalWeight the task's frozen total weight in Q16.16
+    /// @param totalWeight the task's active total weight in Q16.16: frozen once
+    ///        settlement starts (slashes are forbidden after that point), already net
+    ///        of any pre-settlement slashes, so honest shares are never diluted by
+    ///        forfeited weight.
     /// @param s the host's settlement state
     /// @param treasury the committee leg's recipient; the host's own treasury, passed rather than
     ///        read, because this library has no storage of its own

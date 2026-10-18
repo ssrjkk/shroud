@@ -206,6 +206,9 @@ describe("node registration bonds", () => {
     // Bounty 1.5e6 out to reporter channels, slashed bond 1e7 back in: 1e9 - 1.5e6 + 1e7.
     expect(await vault.taskBalance(id)).to.equal(1_008_500_000n);
     expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
+    // The task bond total tracks every movement: 4 took, 1 slashed (checked here,
+    // before releases drain it back to zero below).
+    expect(await vault.taskBondTotal(id)).to.equal(3n * bond);
 
     // Reporters exit whole after terminal: honest disputes are not punished.
     await task.connect(buyer).abort(id, "0x656d556e");
@@ -213,5 +216,38 @@ describe("node registration bonds", () => {
       await vault.connect(c).releaseBond(id, c.address);
       expect(await token.balanceOf(c.address)).to.equal(bond);
     }
+  });
+
+  it("tops up a bond, tracks the task total, and releases everything", async () => {
+    const fx = await deployFixture();
+    const { task, vault, token, buyer, node, bond } = fx;
+    const id = await sealed(fx, [node]);
+    const topUp = 5_000_000n;
+    await token.mint(node.address, topUp);
+    await expect(vault.connect(node).topUpNodeBond(id, topUp))
+      .to.emit(vault, "NodeBondToppedUp")
+      .withArgs(id, node.address, topUp);
+    expect(await vault.nodeBond(id, node.address)).to.equal(bond + topUp);
+    expect(await vault.taskBondTotal(id)).to.equal(bond + topUp);
+    // Release returns the whole position, top-up included, and zeroes the total.
+    await task.connect(buyer).abort(id, "0x656d556e");
+    await vault.connect(node).releaseBond(id, node.address);
+    expect(await token.balanceOf(node.address)).to.equal(bond + topUp);
+    expect(await vault.taskBondTotal(id)).to.equal(0n);
+  });
+
+  it("refuses zero top-ups and top-ups without a bond position", async () => {
+    const fx = await deployFixture();
+    const { task, vault, buyer, node, outsider, bond } = fx;
+    const id = await sealed(fx, [node]);
+    await expect(vault.connect(node).topUpNodeBond(id, 0n)).to.be.revertedWithCustomError(
+      vault,
+      "ZeroAmount"
+    );
+    await expect(vault.connect(outsider).topUpNodeBond(id, bond)).to.be.revertedWithCustomError(
+      vault,
+      "BondNotReleasable"
+    );
+    void buyer;
   });
 });

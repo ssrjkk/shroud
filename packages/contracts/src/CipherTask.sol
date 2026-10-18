@@ -594,7 +594,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external whenNotPaused {
         DisputeLib.reveal(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
-            taskId, epoch, msg.sender, reexecutedDigest, salt, _nodeCount[taskId]
+            taskId, epoch, msg.sender, reexecutedDigest, salt,
+            vault.taskBondTotal(taskId), vault.nodeBond(taskId, msg.sender)
         );
     }
 
@@ -616,7 +617,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external whenNotPaused {
         DisputeLib.report(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
-            taskId, epoch, msg.sender, reexecutedDigest, _nodeCount[taskId]
+            taskId, epoch, msg.sender, reexecutedDigest,
+            vault.taskBondTotal(taskId), vault.nodeBond(taskId, msg.sender)
         );
     }
 
@@ -704,10 +706,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      committed to paying — the amounts come from the frozen escrow and the recorded weights,
     ///      not from the caller.
     ///
-    ///      Ordering matters for correctness: `userPool` and `totalWeight` are recomputed from
-    ///      `t.budget` and `_totalWeight`, both of which are immutable once the contribution window
-    ///      closes, so every page computes identical per-contributor amounts and no contributor is
-    ///      paid twice or underpaid by paging.
+    ///      Ordering matters for correctness: `userPool` is frozen by the first page and
+    ///      `totalWeight` moves only downward on pre-settlement slashes — and slashing is
+    ///      forbidden once settlement starts (`SettlementBegun`) — so the denominator is
+    ///      constant across pages: every page computes identical per-contributor amounts
+    ///      and no contributor is paid twice or underpaid by paging.
     function settleFrom(uint256 taskId, uint256 cursor) external whenNotPaused nonReentrant {
         _settleFrom(taskId, cursor);
     }
@@ -938,7 +941,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
             revert AlreadyTerminal(taskId, t.status);
         }
-        BondLib.slash(_bonds, _contributions, _escrowToken, treasury, taskId, contributor);
+        BondLib.slash(_bonds, _contributions, _totalWeight, _escrowToken, treasury, taskId, contributor);
     }
 
     /// @notice Bond required of new contributions to `taskId` (0 = none).
@@ -1097,15 +1100,19 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     /// @notice Whether `reporter` may dispute in this epoch: drawn members of the
-    ///         committee fixed by the epoch seed. False before the first report (no
-    ///         seed yet) and for registries the lottery did not pick.
+    ///         committee fixed by the epoch seed, weighted by posted bond. False before
+    ///         the first report (no seed yet) and for stake the lottery did not pick.
     function isCommitteeEligible(uint256 taskId, uint32 epoch, address reporter)
         external
         view
         returns (bool)
     {
-        return
-            DisputeLib.isEligibleSeed(_disputes.seed[taskId][epoch], _nodeCount[taskId], reporter);
+        return DisputeLib.isEligibleSeed(
+            _disputes.seed[taskId][epoch],
+            vault.taskBondTotal(taskId),
+            vault.nodeBond(taskId, reporter),
+            reporter
+        );
     }
 
     /// @notice STARK transcript bound to the node. H2 fix: `node` is a public input so a
