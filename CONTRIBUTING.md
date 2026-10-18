@@ -61,6 +61,9 @@ grep -rnE '(tree|blob)/main/' web/ README.md *.md docs/ && exit 1 || echo "branc
 node web/tests/equiv.mjs              # site math vs golden vectors
 ```
 
+Enable the versioned hook once with `git config core.hooksPath .githooks`
+(runs `cargo fmt --all -- --check` inside `node/` on every push).
+
 CI then runs the rest per workflow (`contracts`, `sdk`, `bot`, `shardstore`,
 `site`, `rust`, `links`): push only when the local gates above are green, one
 push per verifiable hypothesis.

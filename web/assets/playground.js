@@ -368,7 +368,7 @@
     $("dlShard").addEventListener("click", function () {
       if (!S.shardBytes) { err("msg2", t("lab.m.nodl")); return; }
       var hex = Array.prototype.map.call(S.shardBytes, function (b) { return (b < 16 ? "0" : "") + b.toString(16); }).join("");
-      download("shard-demo.hex", hex, "text/plain");
+      download("shard.hex", hex, "text/plain");
     });
     $("taskBtn").addEventListener("click", function () {
       wrap("msg3", t("lab.m.taskok"), doTask);
