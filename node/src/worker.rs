@@ -633,16 +633,24 @@ impl Worker {
         // too — at most `fetch_concurrency` fetches are in flight, each capped at
         // `max_ciphertext_bytes` — so size `fetch_concurrency` against RAM.
         let fetch_concurrency = self.cfg.shard.fetch_concurrency.max(1);
-        let sem = Arc::new(Semaphore::new(fetch_concurrency));
+        // Clone-once for the stream: a `move` FnMut closure takes ownership of
+        // everything it captures, so handing it `dir`/`endpoint`/the semaphore
+        // directly would move the originals and break their uses below
+        // (prev-weights fetch). These clones are the closure's property; each call
+        // re-clones from them (Arc/PathBuf/String — all cheap), and the per-shard
+        // `async move` futures own their copies outright.
+        let stream_sem = Arc::new(Semaphore::new(fetch_concurrency));
+        let stream_dir = dir.clone();
+        let stream_endpoint = endpoint.clone();
 
         let shard_stream = futures_util::stream::iter(leaves.into_iter())
             .map({
-                let sem = Arc::clone(&sem);
                 move |(index, leaf)| {
+                    let sem = Arc::clone(&stream_sem);
                     let client = self.client.clone();
                     let task_id = task_id;
-                    let dir = dir.clone();
-                    let endpoint = endpoint.clone();
+                    let dir = stream_dir.clone();
+                    let endpoint = stream_endpoint.clone();
                     let max = max;
                     async move {
                         // The permit is the backpressure gate: it is held for the full
