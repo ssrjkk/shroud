@@ -50,7 +50,7 @@ const CT_STEPS = [
   { leaf: 2, cid: "0x4780e827121b4e535b1661f87ed03f1ea1c3845f7c059087f524423d53238403", root: "0xa3d7329343c8b278393d3e6d990e99e514d3474f8d4f4df834630ecbdf9d0827" },
 ];
 
-/** `CipherTask.proofTranscript(1, 0, traceDigest)` under the parameters below. */
+/** `CipherTask.proofTranscript(1, 0, traceDigest, node)` under the parameters below. */
 const TRANSCRIPT_MAGIC = "SHROUD/PoC/v1";
 const TRANSCRIPT = {
   epoch: 0,
@@ -58,7 +58,7 @@ const TRANSCRIPT = {
   weightsDigest: "0xa68765884cb666d6f6f1673b17cd9d3d23bc01d171acdf0f77bcd5c0ae88544f",
   encWeightsCid: "0x3678b6346b5d7438951ee3fd450cfe307d900e56e2fbb316aca2dc85423e8bbd",
   ctRoot: "0xa3d7329343c8b278393d3e6d990e99e514d3474f8d4f4df834630ecbdf9d0827",
-  expected: "0xdc1867631d1169dfd4f8aea83777cd1547c6803912701565add73fb417faafa2",
+  expected: "0x0454f70057b5b5de290d04ff8a8e93e2f6ec4fa9d063a1a0eb95d73681cd99f9",
 };
 
 /**
@@ -283,12 +283,13 @@ describe("chain vectors", () => {
     const live = await task.tasks(id);
     expect(live.ctRoot).to.equal(TRANSCRIPT.ctRoot);
 
-    const onChain = await task.proofTranscript(id, TRANSCRIPT.epoch, TRANSCRIPT.traceDigest);
+    const onChain = await task.proofTranscript(id, TRANSCRIPT.epoch, TRANSCRIPT.traceDigest, node.address);
     expect(onChain).to.equal(TRANSCRIPT.expected);
-    // The same eight head words `node::chain::transcript::proof_transcript` writes by hand.
+    // The same nine head words `node::chain::transcript::proof_transcript` writes by hand.
+    // H2 fix: `node` is the last public input, binding the proof to the committer.
     const encoded = ethers.AbiCoder.defaultAbiCoder().encode(
-      ["string", "uint256", "address", "uint256", "uint32", "bytes32", "bytes32", "bytes32"],
-      [TRANSCRIPT_MAGIC, chainId, await task.getAddress(), id, TRANSCRIPT.epoch, TRANSCRIPT.ctRoot, TRANSCRIPT.weightsDigest, TRANSCRIPT.traceDigest]
+      ["string", "uint256", "address", "uint256", "uint32", "bytes32", "bytes32", "bytes32", "address"],
+      [TRANSCRIPT_MAGIC, chainId, await task.getAddress(), id, TRANSCRIPT.epoch, TRANSCRIPT.ctRoot, TRANSCRIPT.weightsDigest, TRANSCRIPT.traceDigest, node.address]
     );
     expect(ethers.keccak256(encoded)).to.equal(TRANSCRIPT.expected);
 

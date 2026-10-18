@@ -2,14 +2,13 @@
 pragma solidity ^0.8.24;
 
 /// @title Dividend
-/// @notice Pro-rata distribution of the contributor pool with sqrt-damping and a liveness
-///         multiplier, plus deterministic remainder handling.
-/// @dev Why sqrt-damping: if the weight were linear in `rows`, splitting one dataset across
-///      400 sybil addresses would earn 400x a single honest address. With `w = sqrt(rows)`
-///      the split earns `400 * 1 = 400` while the honest address earns `sqrt(400) = 20`,
-///      i.e. 20x more. The weight is computed and frozen in Q16.16 at submission time
-///      (see `Contribution.weightQ16`) so settlement is a single pass and liveness cannot be
-///      gamed by ordering.
+/// @notice Pro-rata distribution of the contributor pool with liveness multiplier,
+///         plus deterministic remainder handling.
+/// @dev Linear weights (w = rows * liveness): splitting a dataset across N addresses earns
+///      exactly the same as one address with all N rows, so sybil has no economic advantage
+///      beyond the per-address gas cost. The liveness multiplier (1.0 → 0.25) still rewards
+///      early commitment. Anti-sybil enforcement is handled by minRowsPerShard, gas costs,
+///      and the optional contribution bond (BondLib), not by weight distortion.
 ///
 ///      The three entry points are `external` so their bodies link out of `CipherTask`: they are
 ///      stateless pure math, and `shareOf` runs once per contributor inside a paged settlement
@@ -18,13 +17,18 @@ pragma solidity ^0.8.24;
 library Dividend {
     uint256 public constant Q16 = 1 << 16;
 
-    /// @notice Contribution weight: `sqrt(rows) * liveness`, in Q16.16.
+    /// @notice Contribution weight: `rows * liveness`, in Q16.16.
     /// @param rows number of accepted rows in the contribution
     /// @param livenessQ16 Q16.16 factor in (0, 1]; 1.0 == contributed at task creation,
     ///        0.25 == contributed at/after the window deadline.
+    /// @dev H3 fix: changed from sqrt(rows) to linear. The original sqrt was claimed to damp
+    ///      sybil but actually gives massive advantage to large sybil rings (400 rows split
+    ///      as 400×1 earns 400 vs honest sqrt(400)=20 — a 20x disadvantage for honest).
+    ///      Linear weight makes splitting neutral; real sybil deterrence comes from minRows
+    ///      and bonds.
     function weight(uint32 rows, uint256 livenessQ16) external pure returns (uint256) {
         if (rows == 0) return 0;
-        return (_isqrt(uint256(rows) << 32) * livenessQ16) >> 16;
+        return uint256(rows) * livenessQ16; // linear: split has no advantage, no disadvantage
     }
 
     /// @notice Liveness multiplier: linear decay from 1.0 to 0.25 across the contribution

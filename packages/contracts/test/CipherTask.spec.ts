@@ -112,7 +112,7 @@ describe("CipherTask", () => {
   async function runEpoch(fx: Fx, id: bigint, epoch: number, node: Fx["node"], traceDigest = bytes32Of(999)) {
     const { task, buyer, verifier } = fx;
     await openEpochAs(fx, id, buyer, bytes32Of(100 + Number(epoch)), bytes32Of(200 + Number(epoch)), BigInt(epoch));
-    const transcript = await task.proofTranscript(id, epoch, traceDigest);
+    const transcript = await task.proofTranscript(id, epoch, traceDigest, node.address);
     if (await verifier.consumed(transcript)) {
       // Reusing a transcript across tests is a bug in the fixture, not in the contract.
       throw new Error("fixture reused a proof transcript");
@@ -130,7 +130,7 @@ describe("CipherTask", () => {
    * `reportDispute` counts a report only from an address that holds a verified commit for that epoch
    * whose `traceDigest` is the digest being reported, so a dispute fixture has to make those commits
    * rather than just announce digests. Each challenger needs its own digest because the proof
-   * transcript is derived from `(taskId, epoch, traceDigest)` and the mock verifier consumes a
+   * transcript is derived from `(taskId, epoch, traceDigest, node)` and the mock verifier consumes a
    * transcript on first use.
    *
    * The claimant commits first, which is what makes it the claim: the winner seat follows
@@ -269,8 +269,10 @@ describe("CipherTask", () => {
       const a = await task.contributions(id, alice.address);
       const b = await task.contributions(id, bob.address);
       expect(a.weightQ16).to.be.greaterThan(b.weightQ16);
-      // sqrt damping: 2x the rows must not be 2x the weight.
-      expect(a.weightQ16).to.be.lessThan(b.weightQ16 * 2n);
+      // H3 linear weight: 2x the rows earns ~2x the weight (exactly 2x within the same
+      // block; alice submitted first so liveness decay can only put her slightly above).
+      expect(a.weightQ16).to.be.greaterThanOrEqual(b.weightQ16 * 2n);
+      expect(a.weightQ16).to.be.lessThan((b.weightQ16 * 201n) / 100n);
     });
 
     it("rejects a copied ciphertextCid from a second contributor", async () => {
@@ -375,7 +377,7 @@ describe("CipherTask", () => {
       ).to.be.revertedWithCustomError(task, "ProofRejected");
 
       // Consuming the transcript simulates the verifier having accepted it before, i.e. a replay.
-      await verifier.consume(await task.proofTranscript(id, 0, bytes32Of(999)));
+      await verifier.consume(await task.proofTranscript(id, 0, bytes32Of(999), node.address));
       await expect(
         task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(1), bytes32Of(2), bytes32Of(3), bytes32Of(999))
       ).to.be.revertedWithCustomError(task, "ProofRejected");
@@ -392,7 +394,7 @@ describe("CipherTask", () => {
       // Bonds are per task too: the same node registering twice pays twice.
       await token.mint(node.address, await vault.REGISTRATION_BOND());
       const idB = await sealed(fx);
-      expect(await task.proofTranscript(idA, 0, bytes32Of(5))).to.not.equal(await task.proofTranscript(idB, 0, bytes32Of(5)));
+      expect(await task.proofTranscript(idA, 0, bytes32Of(5), node.address)).to.not.equal(await task.proofTranscript(idB, 0, bytes32Of(5), node.address));
     });
 
     it("rejects commits from unregistered nodes, missing proof references, and late commits", async () => {
@@ -655,7 +657,7 @@ describe("CipherTask", () => {
   });
 
   describe("settlement", () => {
-    it("pays contributors pro-rata with sqrt damping, streams node pay, and refunds the rest", async () => {
+    it("pays contributors pro-rata with linear weight, streams node pay, and refunds the rest", async () => {
       const fx = await deployFixture();
       const { task, vault, token, buyer, alice, bob, node, treasury } = fx;
       const id = await sealed(fx, { epochs: 1, aRows: 4_000, bRows: 1_000 });
@@ -691,7 +693,10 @@ describe("CipherTask", () => {
       const aliceDue = await task.pendingPayout(alice.address);
       const bobDue = await task.pendingPayout(bob.address);
       expect(aliceDue).to.be.greaterThan(bobDue);
-      expect(aliceDue).to.be.lessThan(bobDue * 4n); // sqrt damping, not linear
+      // H3 linear weight, not sqrt damping: 4x the rows earns ~4x the payout (alice
+      // submitted first, so liveness decay puts her a hair above exactly 4x).
+      expect(aliceDue).to.be.greaterThanOrEqual(bobDue * 4n);
+      expect(aliceDue).to.be.lessThan((bobDue * 401n) / 100n);
 
       await vault.connect(alice).claim();
       await vault.connect(bob).claim();
@@ -1085,7 +1090,7 @@ describe("CipherTask", () => {
       const { verifier, outsider, task, buyer, node } = fx;
       const id = await sealed(fx);
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
-      const transcript = await task.proofTranscript(id, 0, bytes32Of(999));
+      const transcript = await task.proofTranscript(id, 0, bytes32Of(999), node.address);
 
       // Anyone could spend a transcript and permanently invalidate the honest node's proof for
       // that (task, epoch), because `consumed` is never cleared.
