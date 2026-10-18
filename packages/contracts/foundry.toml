@@ -6,5 +6,11 @@ libs = ["node_modules", "lib"]
 # over the same files.
 test = "test/foundry"
 auto_detect_solc = true
+# The tree requires via-IR under Hardhat too (SettlementLib hits "stack too
+# deep" on legacy codegen); mirror optimizer settings so both toolchains build
+# the same bytecode shape.
+via_ir = true
+optimizer = true
+optimizer_runs = 100
 # Fuzz depth: math invariants are exact (no division), so 512 runs stay fast.
 fuzz = { runs = 512 }
