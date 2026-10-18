@@ -171,7 +171,7 @@ table.tbl{width:100%;border-collapse:collapse;font-size:14px}
 
 /* замечания */
 .notice{border:1px solid var(--line);border-left:8px solid var(--bad);background:rgba(127,127,127,.07);
-  padding:16px 20px;margin:0 0 18px;font-size:14.5px}
+  padding:16px 20px;margin:0 0 18px;font-size:14.5px;overflow-wrap:break-word}
 .notice.good{border-left-color:var(--good)}
 .notice.warn{border-left-color:var(--warn)}
 .notice b.t{display:block;font-family:var(--disp);font-weight:800;font-size:12px;letter-spacing:.06em;margin-bottom:6px}
@@ -258,6 +258,7 @@ html[data-mode="pro"] .only-new{display:none!important}
 /* подвал */
 .foot{border-top:2px solid var(--line);margin-top:64px;background:var(--bg2);color:var(--mut)}
 .foot-in{max-width:var(--max);margin:0 auto;padding:40px 24px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:28px}
+.foot-in p a{display:inline-block;padding:5px 0}
 .foot h5{font-family:var(--disp);font-weight:800;font-size:12px;letter-spacing:.06em;color:var(--dim);margin:0 0 12px}
 .foot p,.foot a{font-size:13.5px;color:var(--mut)}
 .foot a{text-decoration:none;border-bottom:1px solid var(--hair)}
@@ -363,7 +364,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
   border-bottom:2px solid transparent;transition:color .18s ease,border-color .18s ease}
 .toc a:hover{color:var(--ink)}
 .toc a.on{color:var(--acc);border-bottom-color:var(--acc)}
-@media(max-width:900px){.toc{display:none}}
+@media(max-width:700px){.toc{display:none}}
 
 /* копирование кода */
 .prewrap{position:relative}

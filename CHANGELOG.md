@@ -6,6 +6,22 @@ first tagged release.
 
 ## Unreleased
 
+### Site: mobile matrix — 7 devices, 3 real fixes
+
+- Ran the site through emulated devices over CDP (iPhone SE/14, Pixel 7,
+  Galaxy S8, 320px small, landscape, iPad — viewport, DPR, touch, mobile UA):
+  49 combinations measured for document overflow, tiny tap targets, burger
+  menu and section-bar visibility.
+- `security.html` overflowed the document on every portrait phone: the report
+  notice holds the unbreakable advisories URL (485px at 320–412px viewports).
+  `.notice` now wraps long words; document width equals the viewport on all
+  devices, verified by re-running the matrix.
+- Footer links were 14–16px tap targets; they now have vertical padding
+  (33px, above the 24px minimum), measured live.
+- The section bar hid at 900px, so landscape phones lost it; the breakpoint
+  is 700px now, verified shown on 844px landscape and hidden on small
+  portraits.
+
 ### Contracts/SDK: VRF-committee ABI drift fixed, CI hole closed
 
 - `packages/sdk` was failing its own gate: 2 of 60 smoke tests red
