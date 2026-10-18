@@ -6,6 +6,50 @@ first tagged release.
 
 ## Unreleased
 
+### Site: motion and small tools (no new dependencies, no build step)
+
+- **Animations**, all of them decorative and reversible: hero elements rise in
+  sequence once on load; every section header draws a short accent tick when it
+  enters the viewport; the arrows in Diagram A flow along their own direction;
+  the status ticker now actually scrolls (seamless, pauses on hover); cards lift
+  and light up their border on hover/focus; menu underlines grow from the left.
+- **Small tools**: an auto-built section bar under the masthead with a scroll-spy
+  (pages with 2+ sections: home, practice, security, protocol) — every section
+  also gets a stable `id`, so `#sec-3` style deep links work and respect the
+  existing `scroll-margin-top`; a copy button on every `pre.code` block (labels
+  follow the language, hidden on touch devices where hover does not exist); a
+  2px scroll-progress line and a "back to top" button.
+- `prefers-reduced-motion` is honoured in both directions: CSS kills the motion,
+  and JS skips ticker duplication and reveal observers entirely.
+- Progress and "back to top" write styles straight from the scroll handler (no
+  `requestAnimationFrame`), so they keep working when frames are throttled.
+- 4 new i18n keys (`ui.copy`, `ui.copied`, `ui.toc`, `ui.top`), RU/EN symmetric
+  at 563 keys each. No claim, number or guarantee was added or softened.
+- New `web/tests/i18n.mjs` (wired into the `site` workflow and the CONTRIBUTING
+  pre-push list): ru/en key-set symmetry, every `data-i18n*` key in the markup
+  resolving in both languages, and keys that nothing references — markup or JS.
+  It caught one leftover (`idx.more`) from the section that moved to
+  `security.html`, which was removed.
+
+### Site: one page per topic (home stops being a single scroll)
+
+- `web/index.html` is now a hub: hero + the three plain-language steps + a
+  "where to go" card grid (6 links) + repository table + the pro constants block.
+  It went from 192 to 129 lines; the four long sections moved to pages of their own.
+- New `web/pipeline.html` (data-and-money diagram, the FHE/PROOF/MONEY cards, the
+  ticker) and new `web/use.html` (lab cycle, four roles, devnet quickstart). Each has
+  its own title, meta description, topbar status and `nav` active item.
+- The home page's `03 ENFORCED` / `04 NOT YET` sections were **folded into the existing
+  tables on `security.html`** instead of being copied there: the three gaps already
+  exist as `01 / GAPS` rows (F-04, F-01, §3, F-10), and the three unique rows survive
+  as a new `sec.g6` gap (end-to-end FHE, still a goal) plus `sec.e13` / `sec.e14`
+  (explicit budgets, paged settlement). No security claim was dropped.
+- i18n: keys re-prefixed per page (`pip.*`, `use.*`, `sec.*`), 19 duplicated keys
+  removed, 27 added — `ru` and `en` stay symmetric at 560 keys each, all 497 keys
+  used in markup resolve in both languages.
+- Nav is identical on all seven pages (home, pipeline, practice, lab, protocol,
+  security, license); `active` moved per page; no JS added.
+
 ### Security hardening (merged as #14–#19)
 
 - Contracts (#14): `abort` reverts once every epoch ran (`SettleReady` — buyer rug

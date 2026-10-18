@@ -22,6 +22,8 @@
   <button class="burger" data-burger>Меню</button>
   <nav class="nav" data-nav>
     <a href="./index.html" data-i18n="nav.home">Главная</a>
+    <a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a>
+    <a href="./use.html" data-i18n="nav.use">Практика</a>
     <a href="./playground.html" data-i18n="nav.lab">Лаборатория</a>
     <a href="./protocol.html" data-i18n="nav.proto">Протокол</a>
     <a href="./security.html" class="active" data-i18n="nav.sec">Безопасность</a>
@@ -57,13 +59,14 @@
     <tr><td><span data-i18n="sec.g3t">Бонд взносов — opt-in, не fraud-proof</span> <span class="stamp mid">opt-in</span></td><td data-i18n="sec.g3p">Покупатель может требовать бонд (кап, слэш — только в treasury, слэш снимает и долю в settle). По умолчанию требования нет; ончейн-доказательства «шард — яд» не существует — слэш аттестован, не доказан.</td><td>F-01</td></tr>
     <tr><td><span data-i18n="sec.g4t">Цепочка не проверяет STARK целиком</span> <span class="stamp no">sampled</span></td><td data-i18n="sec.g4p">Ончейн — привязка транскрипта и сэмпл сегментов; полная проверка — off-chain в ops-контуре.</td><td>§3</td></tr>
     <tr><td><span data-i18n="sec.g5t">Большинство комитета расшифрует строки</span> <span class="stamp mid">by design</span></td><td data-i18n="sec.g5p">Свойство пороговой схемы: меньшинство не может, сговор большинства — может.</td><td>F-10</td></tr>
+    <tr><td><span data-i18n="sec.g6t">Сквозное FHE — цель</span> <span class="stamp mid">goal</span></td><td data-i18n="sec.g6p">боевой путь: строки шифруются на клиенте и никогда не расшифровываются; веса раскрывает комитет после settlement. Сегодня стенд и reference-движок работают с открытыми dev-байтами — см. docs/05 §8</td><td>§8</td></tr>
   </table></div>
 </section>
 
 <section class="sect">
   <div class="sect-head"><span class="sect-num" data-i18n="sec.en">02 / ENFORCED</span><h2 class="sect-title" data-i18n="sec.et">Enforced и покрыто тестами</h2></div>
   <p class="sect-lede" data-i18n="sec.el">У каждого пункта есть тест, падающий без фикса.</p>
-  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="idx.th.g">Гарантия</th><th data-i18n="idx.th.h">Как</th></tr>
+  <div class="tblwrap rv"><table class="tbl"><tr><th data-i18n="sec.gth1">Гарантия</th><th data-i18n="sec.gth2">Как</th></tr>
     <tr><td data-i18n="sec.e1">Учёт эскроу согласован</td><td data-i18n="sec.e1h">PaymentVault: totalLocked == subBalances + channelLocks на каждом движении, O(1) + fuzz</td></tr>
     <tr><td data-i18n="sec.e2">Реентрантность закрыта</td><td data-i18n="sec.e2h">hostile-токен с колбэком mid-transferFrom; гард держит</td></tr>
     <tr><td data-i18n="sec.e3">Покупатель не трогает чужое</td><td data-i18n="sec.e3h">settle и reclaim — из непересекающихся пулов</td></tr>
@@ -76,6 +79,8 @@
     <tr><td data-i18n="sec.e10">Ротация ставит проверенное</td><td data-i18n="sec.e10h">кандидат привязан к хэшу и перепроверен при исполнении</td></tr>
     <tr><td data-i18n="sec.e11">Верифаер не подменить</td><td data-i18n="sec.e11h">предложение → 7 дней → исполнение кем угодно</td></tr>
     <tr><td data-i18n="sec.e12">Поверхность не врёт</td><td data-i18n="sec.e12h">недостижимые декларации удалены, а не оставлены</td></tr>
+    <tr><td data-i18n="sec.e13">Явные бюджеты</td><td data-i18n="sec.e13h">createTask(budget, params) эскроуирует ровно названное — ни больше</td></tr>
+    <tr><td data-i18n="sec.e14">Сеттлмент всегда завершается</td><td data-i18n="sec.e14h">всех сразу не оплатить (~584M газа при лимите 30M), поэтому settleFrom(taskId, cursor) — по 200 за вызов</td></tr>
   </table></div>
 </section>
 
@@ -93,7 +98,7 @@
 
 <footer class="foot"><div class="foot-in">
   <div><p class="foot-brand">Shroud</p><p data-i18n="f.secnote">Протокол двигает деньги. Красное читай первым.</p></div>
-  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
   <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.secp">Security policy</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
 </div><div class="foot-base"><span>© 2026 ssrjkk</span><span data-i18n="f.base4">threats 39 · honest first</span></div></footer>
 <script src="./assets/i18n.js"></script>

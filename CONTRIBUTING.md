@@ -59,6 +59,7 @@ Rust cannot be verified on every machine (linking needs a full toolchain — see
 cargo fmt --all -- --check            # from node/: the one Rust gate that runs in any sandbox
 grep -rnE '(tree|blob)/main/' web/ README.md *.md docs/ && exit 1 || echo "branch links OK"
 node web/tests/equiv.mjs              # site math vs golden vectors
+node web/tests/i18n.mjs               # ru/en symmetry, markup coverage, dead keys
 ```
 
 Enable the versioned hook once with `git config core.hooksPath .githooks`

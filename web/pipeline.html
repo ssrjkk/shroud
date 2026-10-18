@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="ink" data-mode="new">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="theme-color" content="#0e3a7a" />
+<title data-i18n="pip.title">Конвейер — Shroud: от plaintext до выплат</title>
+<meta name="description" data-i18n-desc="pip.desc" content="Как по Shroud идут данные и деньги: FHE-шифрование на устройстве контрибьютора, исполнение эпохи на узле, STARK-транскрипт, спор из трёх голосов и потоковые выплаты." />
+<script>try{var t=localStorage.getItem("shroud-theme");if(t)document.documentElement.setAttribute("data-theme",t);else if(window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches)document.documentElement.setAttribute("data-theme","paper");var l=localStorage.getItem("shroud-lang");if(l==="ru"||l==="en")document.documentElement.lang=l;var md=localStorage.getItem("shroud-mode");if(md==="pro"||md==="new")document.documentElement.setAttribute("data-mode",md);}catch(e){}</script>
+<link rel="stylesheet" href="./assets/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 38 38'%3E%3Crect width='38' height='38' fill='%230E3A7A'/%3E%3Ctext x='19' y='27' font-family='Arial' font-weight='bold' font-size='21' fill='%23FFFFFF' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+<a class="skip" href="#main" data-i18n="meta.skip">К содержанию</a>
+
+<div class="topbar"><div class="topbar-in">
+  <span class="st"><span class="pulse"></span><span data-i18n="piptop.status">конвейер · от plaintext до выплат</span></span>
+  <span><a href="./index.html" data-i18n="nav.home">Главная</a> · <a href="./protocol.html" data-i18n="nav.proto">Протокол</a></span>
+</div></div>
+
+<header class="masthead"><div class="masthead-in">
+  <a class="brand" href="./index.html"><span class="brand-mark">S</span>
+    <span><span class="brand-name">Shroud</span><br /><span class="brand-sub" data-i18n="pipbrand.sub">pipeline · схема A</span></span></a>
+  <button class="burger" data-burger>Меню</button>
+  <nav class="nav" data-nav>
+    <a href="./index.html" data-i18n="nav.home">Главная</a>
+    <a href="./pipeline.html" class="active" data-i18n="nav.pipe">Конвейер</a>
+    <a href="./use.html" data-i18n="nav.use">Практика</a>
+    <a href="./playground.html" data-i18n="nav.lab">Лаборатория</a>
+    <a href="./protocol.html" data-i18n="nav.proto">Протокол</a>
+    <a href="./security.html" data-i18n="nav.sec">Безопасность</a>
+    <a href="./license.html" data-i18n="nav.lic">Лицензия</a>
+  </nav>
+  <div class="controls">
+    <button class="iconbtn" data-theme-toggle aria-pressed="false" data-i18n-aria="theme.toggle" title="Theme"><span class="g-moon">☾</span><span class="g-sun">☀</span></button>
+    <div class="seg" role="group" aria-label="language"><button data-lang="ru" class="on">RU</button><button data-lang="en">EN</button></div>
+  </div>
+</div></header>
+
+<main id="main">
+
+<div class="ticker" aria-hidden="true"><div class="ticker-in">
+  <span data-i18n="pip.tick1">◆ escrow — бюджет фиксируется целиком</span><span data-i18n="pip.tick2">◆ FHE — plaintext не покидает устройство</span><span data-i18n="pip.tick3">◆ ctRoot — один корень на весь датасет</span><span data-i18n="pip.tick4">◆ dispute — 3 репортера отклоняют эпоху</span><span data-i18n="pip.tick5">◆ channels — выплаты слайсами EIP-712</span><span data-i18n="pip.tick6">◆ threshold — раскрытие только комитетом</span>
+</div></div>
+
+<section class="sect">
+  <div class="sect-head"><span class="sect-num" data-i18n="pip.n">01 / PIPELINE</span><h2 class="sect-title" data-i18n="pip.t">Конвейер: от plaintext до денег</h2></div>
+  <p class="sect-lede" data-i18n="pip.l">В боевом пути шифрование происходит на устройстве контрибьютора (SDK/relayer); стенд считает локально. С этого момента ни цепочка, ни память узла plaintext не содержат. Полная последовательность из 29 шагов — на странице «Протокол»; здесь — скелет.</p>
+  <div class="scheme rv">
+    <div class="scheme-head"><span data-i18n="pip.sch.head">Схема A — движение данных и денег</span><span data-i18n="pip.sch.side">лист 01 · масштаб 1:1</span></div>
+    <div class="scheme-body">
+      <svg viewBox="0 0 980 300" width="100%" role="img" aria-label="data flow" style="min-width:640px;display:block">
+        <defs><marker id="ah" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="currentColor" stroke-width="1.6"/></marker></defs>
+        <g font-family="ui-monospace,Menlo,monospace" font-size="12">
+          <rect x="10" y="60" width="150" height="86" fill="none" stroke="currentColor" stroke-width="2"/><text x="85" y="94" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.plain">plaintext</text><text x="85" y="112" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.plain2">у вас дома</text><text x="85" y="130" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.plain3">CSV → вектор</text>
+          <rect x="190" y="60" width="150" height="86" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="265" y="94" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.enc">FHEWasm</text><text x="265" y="112" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.enc2">шифрование</text><text x="265" y="130" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.enc3">в браузере</text>
+          <rect x="370" y="60" width="150" height="86" fill="none" stroke="currentColor" stroke-width="3"/><text x="445" y="94" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.ct">ciphertext</text><text x="445" y="112" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.ct2">запечатанные строки</text><text x="445" y="130" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.ct3">CID + ctDigest</text>
+          <rect x="190" y="190" width="150" height="80" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="265" y="216" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.da">ShardStore</text><text x="265" y="234" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.da2">DA · range-pull</text>
+          <rect x="370" y="190" width="150" height="80" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="445" y="216" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.node">узел</text><text x="445" y="234" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.node2">FHE-исполнение</text>
+          <rect x="550" y="190" width="150" height="80" fill="none" stroke="currentColor" stroke-width="1.2"/><text x="625" y="216" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.stark">STARK</text><text x="625" y="234" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.stark2">trace digest</text>
+          <rect x="730" y="60" width="240" height="210" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="7 4"/><text x="850" y="88" text-anchor="middle" font-weight="bold" fill="currentColor" data-i18n="pip.svg.ctt">CipherTask</text><text x="850" y="108" text-anchor="middle" fill="currentColor" opacity=".6" data-i18n="pip.svg.ctt2">escrow + FSM + каналы</text><text x="850" y="140" text-anchor="middle" fill="currentColor" data-i18n="pip.svg.s1">createTask → seal →</text><text x="850" y="158" text-anchor="middle" fill="currentColor" data-i18n="pip.svg.s2">openEpoch → commit →</text><text x="850" y="176" text-anchor="middle" fill="currentColor" data-i18n="pip.svg.s3">settleFrom → reveal</text><text x="850" y="208" text-anchor="middle" fill="currentColor" data-i18n="pip.svg.s4">PaymentVault · EIP-712</text><text x="850" y="228" text-anchor="middle" fill="currentColor" data-i18n="pip.svg.s5">DecryptionGate · t-of-n</text>
+          <line x1="160" y1="103" x2="186" y2="103" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/><line x1="340" y1="103" x2="366" y2="103" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="445" y1="146" x2="445" y2="186" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="340" y1="230" x2="366" y2="230" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/><line x1="520" y1="230" x2="546" y2="230" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="700" y1="230" x2="726" y2="230" stroke="currentColor" stroke-width="1.6" marker-end="url(#ah)"/>
+          <line x1="625" y1="186" x2="625" y2="150" stroke="currentColor" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+        </g>
+      </svg>
+    </div>
+    <div class="scheme-foot" data-i18n="pip.sch.foot">покупатель ──► CipherTask (escrow + автомат состояний + платёжные каналы) ◄── STARK-дайджест эпохи</div>
+  </div>
+  <div class="cols3">
+    <article class="card solid rv"><span class="tag">FHE</span><h3 data-i18n="pip.c1t">Считаем, не глядя</h3><p data-i18n="pip.c1p">ZK доказывает, что посчитано. FHE убирает саму нужду показывать вход. Разница между «проверь результат» и «тебе вообще нечего смотреть».</p><div class="foot-line" data-i18n="pip.c1f">вход: euint32 · масштаб 1e4 · батч 8</div></article>
+    <article class="card solid rv"><span class="tag">PROOF</span><h3 data-i18n="pip.c2t">Доказательство работы</h3><p data-i18n="pip.c2p">Эпоха привязана к chainId, задаче, корню датасета и прошлым весам. Три ре-экзекьютора с другим дайджестом — эпоха отклонена, выплат нет.</p><div class="foot-line" data-i18n="pip.c2f">кворум 3 · бонд победителя сжигается в refund</div></article>
+    <article class="card solid rv"><span class="tag">MONEY</span><h3 data-i18n="pip.c3t">Потоковые выплаты</h3><p data-i18n="pip.c3p">PaymentVault платит слайсами по мере эпох. Невостребованное узел забирает сам через reclaim; покупатель чужого не тронет — пулы не пересекаются.</p><div class="foot-line" data-i18n="pip.c3f">settleFrom · курсор · 200 за вызов</div></article>
+  </div>
+  <p style="margin-top:18px"><a href="./use.html" data-i18n="nav.use">Практика</a> · <a href="./protocol.html" data-i18n="nav.proto">Протокол</a></p>
+</section>
+</main>
+
+<footer class="foot"><div class="foot-in">
+  <div><p class="foot-brand">Shroud</p><p data-i18n="f.about">Приватное программируемое ML с проверяемыми вычислениями и потоковыми выплатами. Референсная реализация, не продукт.</p></div>
+  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
+</div><div class="foot-base"><span>© 2026 ssrjkk · SHR-2026-01</span><span data-i18n="f.base">plaintext никогда не покидает устройство</span></div></footer>
+
+<script src="./assets/i18n.js"></script>
+<script src="./assets/app.js"></script>
+</body>
+</html>

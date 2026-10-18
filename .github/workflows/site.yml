@@ -61,6 +61,8 @@ jobs:
           EOF
       - name: check site math matches golden vectors
         run: node web/tests/equiv.mjs
+      - name: check i18n dictionary
+        run: node web/tests/i18n.mjs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

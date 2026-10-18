@@ -18,7 +18,7 @@
 🌐 **Live site: [ssrjkk.github.io/shroud](https://ssrjkk.github.io/shroud/)** — the project,
 the protocol, the honest security posture, and a lab that runs the pipeline in your browser.
 
-| [Home](https://ssrjkk.github.io/shroud/) · [Lab](https://ssrjkk.github.io/shroud/playground.html) · [Protocol](https://ssrjkk.github.io/shroud/protocol.html) · [Security](https://ssrjkk.github.io/shroud/security.html) · [License](https://ssrjkk.github.io/shroud/license.html) |
+| [Home](https://ssrjkk.github.io/shroud/) · [Pipeline](https://ssrjkk.github.io/shroud/pipeline.html) · [Practice](https://ssrjkk.github.io/shroud/use.html) · [Lab](https://ssrjkk.github.io/shroud/playground.html) · [Protocol](https://ssrjkk.github.io/shroud/protocol.html) · [Security](https://ssrjkk.github.io/shroud/security.html) · [License](https://ssrjkk.github.io/shroud/license.html) |
 |---|
 
 | ![Home — pipeline, guarantees, repo map](docs/shots/home.png) | ![Lab — the protocol running in the browser](docs/shots/lab.png) |
@@ -26,7 +26,9 @@ the protocol, the honest security posture, and a lab that runs the pipeline in y
 | ![Protocol — full spec, params, roles](docs/shots/protocol.png) | ![Mobile layout](docs/shots/mobile.png) |
 
 The site is fully static (`web/`, no build step): bilingual RU/EN, ink/paper themes,
-newcomer/pro audience modes. The lab computes with the same math as the node
+newcomer/pro audience modes. The home page is a hub — pipeline, practice, lab,
+protocol and security status each have their own address instead of one long scroll.
+The lab computes with the same math as the node
 and the SDK — quantization, reference SGD, trace digest, proof reference, settlement —
 entirely client-side, byte-for-byte against `packages/sdk` and `node/`.
 
@@ -90,7 +92,7 @@ the mock coprocessor is never installed, and `CipherTask`'s constructor reverts 
 | `packages/sdk/` | `@shroud/sdk` — `uploadAndMonetize(data, taskId)`, `publishWeights`, EIP-712 binding, hardened DA client, on-chain key-pin check, weight files ([counts live in CI](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml)) |
 | `node/` | Rust compute node: chain follower + epoch executor (deterministic reference engine, `tfhe-rs` behind `prover`), gRPC mesh, content-addressed DA (`da` feature for remote) — see [Node](#node) |
 | `bot/` | Telegram ops bot: task pool, disputes, **network key rotation alerts** ([counts live in CI](https://github.com/ssrjkk/shroud/actions/workflows/bot.yml), incl. stub-RPC read coverage) |
-| `web/` | Project site (static, no build): home, in-browser lab, protocol, security status, license — RU/EN, ink/paper themes, newcomer/pro modes |
+| `web/` | Project site (static, no build), one page per topic: home hub, pipeline, practice, in-browser lab, protocol, security status, license — RU/EN, ink/paper themes, newcomer/pro modes |
 | `infra/` | docker-compose devnet: fhEVM node, ShardStore (DA, size-capped + range-pull), 3 nodes — operator runbook in [`infra/README.md`](infra/README.md) |
 | `docs/` | architecture, cryptography, proof-of-compute, threat model, honest limitations |
 

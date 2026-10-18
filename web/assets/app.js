@@ -85,6 +85,19 @@
       document.addEventListener("shroud:lang", syncBurger);
     }
     syncBurger();
+    Array.prototype.forEach.call(document.querySelectorAll("pre.code"), function (pre) {
+      var wrap = document.createElement("div");
+      wrap.className = "prewrap";
+      if (pre.parentNode) pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(pre);
+      var cbtn = document.createElement("button");
+      cbtn.className = "copybtn";
+      cbtn.type = "button";
+      cbtn.textContent = tr("ui.copy");
+      cbtn.setAttribute("data-copied", tr("ui.copied"));
+      cbtn.setAttribute("data-copy", pre.textContent);
+      wrap.appendChild(cbtn);
+    });
     document.querySelectorAll("[data-copy]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var text = btn.getAttribute("data-copy") || "";
@@ -119,5 +132,122 @@
     } else {
       targets.forEach(function (el) { el.classList.add("on"); });
     }
+
+    // --- живое chrome: оглавление, прогресс, «наверх», наблюдатели ---
+    var visibleSections = function () {
+      return Array.prototype.slice.call(document.querySelectorAll("main > section.sect"))
+        .filter(function (s) { return s.offsetParent !== null; });
+    };
+    var tocEl = null, tocLinks = [], spyObs = null;
+    function placeToc() {
+      if (!tocEl) return;
+      var m = document.querySelector(".masthead");
+      tocEl.style.top = ((m ? m.offsetHeight : 58) + 6) + "px";
+    }
+    function spy() {
+      if (!tocLinks.length || !("IntersectionObserver" in window)) return;
+      if (!spyObs) {
+        spyObs = new IntersectionObserver(function (entries) {
+          entries.forEach(function (en) {
+            tocLinks.forEach(function (l) { if (l.s === en.target) l.a.classList.toggle("on", en.isIntersecting); });
+          });
+        }, { rootMargin: "-18% 0px -72% 0px" });
+      }
+      tocLinks.forEach(function (l) { spyObs.observe(l.s); });
+    }
+    function buildToc() {
+      var secs = visibleSections();
+      if (secs.length < 2) { if (tocEl && tocEl.parentNode) tocEl.parentNode.removeChild(tocEl); tocEl = null; tocLinks = []; return; }
+      if (!tocEl) {
+        tocEl = document.createElement("nav");
+        tocEl.className = "toc";
+        tocEl.setAttribute("aria-label", tr("ui.toc"));
+        document.body.appendChild(tocEl);
+        placeToc();
+      }
+      tocEl.innerHTML = "";
+      tocLinks = [];
+      secs.forEach(function (sec, i) {
+        var head = sec.querySelector(".sect-head");
+        if (!head) return;
+        if (!sec.id) sec.id = "sec-" + (i + 1);
+        var num = head.querySelector(".sect-num"), title = head.querySelector(".sect-title");
+        var a = document.createElement("a");
+        a.href = "#" + sec.id;
+        a.textContent = num ? num.textContent : (title ? title.textContent : "");
+        if (title) a.title = title.textContent;
+        tocEl.appendChild(a);
+        tocLinks.push({ a: a, s: sec });
+      });
+      if (spyObs) spyObs.disconnect();
+      spy();
+    }
+    buildToc();
+
+    // проявление заголовков секций и «текущих» стрелок схемы
+    var seen = document.querySelectorAll(".sect-head, .scheme");
+    if (!reduce && seen.length && "IntersectionObserver" in window) {
+      var io2 = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) { en.target.classList.add("onshown"); io2.unobserve(en.target); }
+        });
+      }, { threshold: 0.15 });
+      Array.prototype.forEach.call(seen, function (el) { io2.observe(el); });
+    } else {
+      Array.prototype.forEach.call(seen, function (el) { el.classList.add("onshown"); });
+    }
+
+    // бегущая строка: дублируем содержимое для бесшовного цикла
+    var tick = document.querySelector(".ticker-in");
+    if (tick && !reduce && tick.children.length) {
+      tick.innerHTML += tick.innerHTML;
+      tick.style.animation = "shroudTicker 38s linear infinite";
+    }
+
+    // прогресс прокрутки + кнопка «наверх»
+    var bar = document.createElement("div");
+    bar.className = "progress";
+    bar.setAttribute("aria-hidden", "true");
+    bar.appendChild(document.createElement("i"));
+    document.body.appendChild(bar);
+    var fill = bar.firstChild;
+    var toTop = document.createElement("button");
+    toTop.className = "iconbtn totop";
+    toTop.type = "button";
+    toTop.textContent = "↑";
+    toTop.title = tr("ui.top");
+    toTop.setAttribute("aria-label", tr("ui.top"));
+    toTop.addEventListener("click", function () {
+      if (window.scrollTo) window.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+    });
+    document.body.appendChild(toTop);
+    function onScroll() {
+      var y = window.pageYOffset || document.documentElement.scrollTop;
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      fill.style.transform = "scaleX(" + (max > 0 ? Math.min(1, Math.max(0, y / max)) : 0) + ")";
+      toTop.classList.toggle("show", y > 600);
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", function () { onScroll(); placeToc(); });
+    onScroll();
+
+    // перевод и смена режима меняют подписи — обновляем
+    document.addEventListener("shroud:lang", function () {
+      buildToc();
+      Array.prototype.forEach.call(document.querySelectorAll(".prewrap"), function (w) {
+        var b = w.querySelector(".copybtn"), p = w.querySelector("pre");
+        if (!b || !p) return;
+        b.textContent = tr("ui.copy");
+        b.setAttribute("data-copied", tr("ui.copied"));
+        b.setAttribute("data-copy", p.textContent);
+      });
+      if (tocEl) tocEl.setAttribute("aria-label", tr("ui.toc"));
+      toTop.title = tr("ui.top");
+      toTop.setAttribute("aria-label", tr("ui.top"));
+      onScroll();
+    });
+    document.querySelectorAll("[data-mode-btn]").forEach(function (b) {
+      b.addEventListener("click", buildToc);
+    });
   });
 })();
