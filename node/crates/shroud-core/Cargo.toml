@@ -1,0 +1,17 @@
+[package]
+name = "shroud-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.94.1"
+description = "Shroud's portable compute core: deterministic fixed-point SGD, weight/shard file formats, and the byte layouts for ctRoot, proof transcripts and trace digests. No network, no chain, no clock."
+license = "MIT"
+repository = "https://github.com/ssrjkk/shroud"
+
+[lib]
+name = "shroud_core"
+path = "src/lib.rs"
+
+[dependencies]
+# The ONLY external dependency, and the reason the whole crate can compile for a
+# zkVM guest or wasm32: Keccak-256 (Ethereum flavour, NOT NIST SHA3-256) over bytes.
+sha3 = "0.11"

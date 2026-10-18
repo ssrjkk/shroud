@@ -33,267 +33,36 @@
 
 use std::sync::Arc;
 
-use alloy::primitives::{keccak256, Address, B256, U256};
+use alloy::primitives::{Address, B256, U256};
 
 use crate::config::FheConfig;
-use crate::error::{Error, FheError, Result, ShardError};
+use crate::error::{Error, FheError, Result};
 
-/// Envelope magic of a development (`NoopEncryptor`) shard, byte-for-byte what
-/// `packages/sdk/src/encrypt.ts` writes: `shroud/noop/v1\0{features}\0{rows}\0` + f64-LE rows.
-pub const NOOP_SHARD_MAGIC: &[u8] = b"shroud/noop/v1\0";
-/// Envelope magic of an encoded weight vector written by this module.
-pub const WEIGHTS_MAGIC: &[u8] = b"shroud/weights/v1\0";
-/// Envelope magic of a `tfhe-rs` shard (feature `prover` only).
-pub const TFHE_SHARD_MAGIC: &[u8] = b"shroud/tfhe/v1\0";
+/// Envelope magics, re-exported from the portable core so there is exactly one
+/// definition of each: `shroud/noop/v1` development shards, `shroud/weights/v1`
+/// files, and the `tfhe-rs` envelopes (feature `prover` only).
+pub use shroud_core::shard::{NOOP_SHARD_MAGIC, TFHE_SHARD_MAGIC};
+pub use shroud_core::weights::WEIGHTS_MAGIC;
 /// Envelope magic of `tfhe-rs` weight vectors (feature `prover` only).
 pub const TFHE_WEIGHTS_MAGIC: &[u8] = b"shroud/tfhe-weights/v1\0";
-/// Domain tag of the trace digest preimage.
-const TRACE_MAGIC: &[u8] = b"SHROUD/TRACE/v1\0";
-/// Domain tag of the proof-reference derivation.
-const PROOF_REF_MAGIC: &[u8] = b"SHROUD/PROOF-REF/v1";
-/// First four bytes every proof reference carries (`"STAR"`).
-const PROOF_REF_PREFIX: [u8; 4] = [0x53, 0x54, 0x41, 0x52];
+/// Domain tag of the trace digest preimage (see [`trace_digest`]).
+pub use shroud_core::transcript::TRACE_MAGIC;
+/// Domain tag of the proof-reference derivation, and the `"STAR"` prefix every
+/// proof reference carries (see [`proof_reference`]).
+pub use shroud_core::transcript::{PROOF_REF_MAGIC, PROOF_REF_PREFIX};
 /// Upper bound for the mean quantised loss of a sane epoch, in true (unscaled) units.
 /// Past this the update is not learning but exploding, and committing its digest would put
 /// a garbage claim on chain that a re-executor must then dispute.
 const DIVERGENCE_LOSS_CAP: f64 = 1e12;
 
-/// A weight vector. Lanes are `i32` two's complement stored in `u32` words: linear models
-/// legitimately go negative, and a `u32` lane width cannot express that any other way.
-/// `lanes.len()` always equals `features`; the last lane is the bias.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Weights {
-    pub features: u32,
-    pub lanes: Vec<u32>,
-}
+/// A weight vector, re-exported from the portable core (single definition — see
+/// `shroud_core::weights`). Lanes are `i32` two's complement stored in `u32`
+/// words; `lanes.len()` always equals `features`; the last lane is the bias.
+pub use shroud_core::weights::Weights;
 
-impl Weights {
-    /// All-zero vector (genesis weights when a task pins no seed).
-    pub fn zeros(features: u32) -> Result<Self> {
-        if features < 2 {
-            return Err(Error::Fhe(FheError::ShapeMismatch {
-                got_rows: 0,
-                got_cols: 0,
-                want_rows: 0,
-                want_cols: 2,
-            }));
-        }
-        Ok(Self {
-            features,
-            lanes: vec![0u32; features as usize],
-        })
-    }
-
-    fn signed(&self) -> Vec<i64> {
-        self.lanes.iter().map(|w| (*w as i32) as i64).collect()
-    }
-
-    /// `keccak256` over the lane words, little-endian. This is the `weightsDigest`
-    /// `commitEpoch` stores; the next epoch binds it as `lastWeightsDigest`.
-    pub fn digest(&self) -> B256 {
-        let mut buf = Vec::with_capacity(self.lanes.len() * 4);
-        for lane in &self.lanes {
-            buf.extend_from_slice(&lane.to_le_bytes());
-        }
-        keccak256(buf)
-    }
-
-    /// Encode to the [`WEIGHTS_MAGIC`] file format for the content-addressed store.
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(WEIGHTS_MAGIC.len() + 8 + self.lanes.len() * 4);
-        out.extend_from_slice(WEIGHTS_MAGIC);
-        out.extend_from_slice(&self.features.to_le_bytes());
-        out.extend_from_slice(&(self.lanes.len() as u32).to_le_bytes());
-        for lane in &self.lanes {
-            out.extend_from_slice(&lane.to_le_bytes());
-        }
-        out
-    }
-
-    /// Decode and validate a weight file. `expected_features` is the task's `features`;
-    /// anything else is a shape error, never a silent reinterpretation.
-    pub fn decode(bytes: &[u8], expected_features: u32) -> Result<Self> {
-        let fail = |reason: String| Error::ShardStore(ShardError::Malformed { offset: 0, reason });
-        if bytes.len() < WEIGHTS_MAGIC.len() + 8 {
-            return Err(fail(format!(
-                "weight object is {} bytes, shorter than the header",
-                bytes.len()
-            )));
-        }
-        if &bytes[..WEIGHTS_MAGIC.len()] != WEIGHTS_MAGIC {
-            return Err(fail("bad weights magic".into()));
-        }
-        let r = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().expect("sliced"));
-        let features = r(WEIGHTS_MAGIC.len());
-        let count = r(WEIGHTS_MAGIC.len() + 4);
-        if features != expected_features {
-            return Err(Error::Fhe(FheError::ShapeMismatch {
-                got_rows: 0,
-                got_cols: features as usize,
-                want_rows: 0,
-                want_cols: expected_features as usize,
-            }));
-        }
-        if count != features {
-            return Err(fail(format!(
-                "weight file holds {count} lanes for {features} features"
-            )));
-        }
-        let want = WEIGHTS_MAGIC.len() + 8 + count as usize * 4;
-        if bytes.len() != want {
-            return Err(fail(format!(
-                "weight object is {} bytes, expected {want} for {count} lanes",
-                bytes.len()
-            )));
-        }
-        let mut lanes = Vec::with_capacity(count as usize);
-        for i in 0..count as usize {
-            lanes.push(r(WEIGHTS_MAGIC.len() + 8 + i * 4));
-        }
-        Ok(Self { features, lanes })
-    }
-}
-
-/// Quantise one row value exactly the way the SDK does (`round(v * scale)`), rejecting
-/// anything TFHE cannot represent rather than coercing it: a wrapped negative would train
-/// on a huge positive with no error anywhere downstream.
-fn quantize(value: f64, scale: u32, index: usize) -> Result<u64> {
-    let malformed = |reason: String| {
-        Error::ShardStore(ShardError::Malformed {
-            offset: index,
-            reason,
-        })
-    };
-    if !value.is_finite() {
-        return Err(malformed(format!(
-            "row value at index {index} is not finite"
-        )));
-    }
-    if value < 0.0 {
-        return Err(malformed(format!(
-            "row value at index {index} is negative ({value}): TFHE encrypts unsigned integers"
-        )));
-    }
-    let q = (value * f64::from(scale)).round();
-    // `as u64` saturates, so the boundary itself must be rejected: a value that rounds
-    // to exactly 2^64 would otherwise become u64::MAX silently.
-    if q >= 18_446_744_073_709_551_616.0 {
-        return Err(malformed(format!(
-            "row value at index {index} overflows uint64 at scale {scale}"
-        )));
-    }
-    Ok(q as u64)
-}
-
-/// Decoded development shard: quantised row-major values.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShardRows {
-    pub features: u32,
-    pub rows: u32,
-    pub values: Vec<u64>,
-}
-
-/// Decode a `shroud/noop/v1` shard payload into quantised rows.
-///
-/// `expected_features` is the task's on-chain `features` and `scale` is `fhe.scale`
-/// (default 10_000, matching the SDK's `DEFAULT_QUANTIZE_SCALE`): a shard quantised at any
-/// other scale trains on different numbers than the contributor approved, so the scale is a
-/// parameter here, never a default.
-pub fn decode_noop_shard(bytes: &[u8], expected_features: u32, scale: u32) -> Result<ShardRows> {
-    let malformed =
-        |offset: usize, reason: String| Error::ShardStore(ShardError::Malformed { offset, reason });
-    if bytes.len() < NOOP_SHARD_MAGIC.len() {
-        return Err(malformed(
-            0,
-            "shard is shorter than the envelope magic".into(),
-        ));
-    }
-    if &bytes[..NOOP_SHARD_MAGIC.len()] != NOOP_SHARD_MAGIC {
-        // Anything else here is either corruption or a handle-based (relayer) or tfhe
-        // shard, which this backend cannot decrypt. Say which, loudly: attempting to
-        // train on handle bytes as floats would produce a digest no honest node
-        // reproduces.
-        if bytes.len() >= TFHE_SHARD_MAGIC.len()
-            && &bytes[..TFHE_SHARD_MAGIC.len()] == TFHE_SHARD_MAGIC
-        {
-            return Err(Error::Fhe(FheError::Backend(
-                "shard holds tfhe-rs ciphertexts: the reference engine cannot decrypt them; \
-                 run a tfhe backend with the network server key (fhe.backend + fhe.server_key_path)"
-                    .into(),
-            )));
-        }
-        return Err(malformed(
-            0,
-            "bad shard magic: not a shroud/noop/v1 payload".into(),
-        ));
-    }
-    let mut pos = NOOP_SHARD_MAGIC.len();
-    let mut number = |what: &str| -> Result<u32> {
-        let start = pos;
-        while pos < bytes.len() && bytes[pos] != 0 {
-            if !bytes[pos].is_ascii_digit() {
-                return Err(malformed(start, format!("non-decimal byte in {what}")));
-            }
-            pos += 1;
-        }
-        if pos >= bytes.len() {
-            return Err(malformed(start, format!("unterminated {what}")));
-        }
-        let text = std::str::from_utf8(&bytes[start..pos])
-            .map_err(|_| malformed(start, format!("{what} is not UTF-8")))?;
-        pos += 1; // the NUL
-        text.parse::<u32>()
-            .map_err(|_| malformed(start, format!("{what} {text:?} is not a u32")))
-    };
-    let features = number("features")?;
-    let rows = number("rows")?;
-    if features != expected_features {
-        return Err(Error::Fhe(FheError::ShapeMismatch {
-            got_rows: rows as usize,
-            got_cols: features as usize,
-            want_rows: rows as usize,
-            want_cols: expected_features as usize,
-        }));
-    }
-    let lanes = (rows as usize)
-        .checked_mul(features as usize)
-        .ok_or_else(|| {
-            malformed(
-                pos,
-                "row count overflows the address space; the header is hostile or corrupt".into(),
-            )
-        })?;
-    let want = lanes
-        .checked_mul(8)
-        .and_then(|body| pos.checked_add(body))
-        .ok_or_else(|| {
-            malformed(
-                pos,
-                "row count overflows the address space; the header is hostile or corrupt".into(),
-            )
-        })?;
-    if bytes.len() != want {
-        return Err(malformed(
-            pos,
-            format!(
-                "shard is {} bytes, expected {want} for {rows} rows x {features} features",
-                bytes.len()
-            ),
-        ));
-    }
-    let mut values = Vec::with_capacity(lanes);
-    for i in 0..lanes {
-        let word: [u8; 8] = bytes[pos + i * 8..pos + i * 8 + 8]
-            .try_into()
-            .expect("length checked");
-        values.push(quantize(f64::from_le_bytes(word), scale, i)?);
-    }
-    Ok(ShardRows {
-        features,
-        rows,
-        values,
-    })
-}
+/// Decoded development shard and its decoder, re-exported from the portable core
+/// (single definition — see `shroud_core::shard`).
+pub use shroud_core::shard::{decode_noop_shard, ShardRows};
 
 /// Everything an epoch execution needs, gathered by the worker before the engine runs.
 ///
@@ -377,37 +146,53 @@ pub trait FheEngine: Send + Sync {
 /// disagree on the digest instead of accusing each other. `ct_digest` (already verified
 /// by the worker to equal `keccak256` of the shard bytes) stands in for the bytes: the
 /// digest commits to the exact payload the chain pinned without re-hashing megabytes.
+/// Byte-array conversions for the portable core (chain types stay at the boundary).
+fn b2a(b: &B256) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out.copy_from_slice(b.as_slice());
+    out
+}
+
+fn a2a(a: &Address) -> [u8; 20] {
+    let mut out = [0u8; 20];
+    out.copy_from_slice(a.as_slice());
+    out
+}
+
 pub fn trace_digest(
     inputs: &EpochInputs,
     n_rows: u64,
     loss_mean_q: Option<i128>,
     next_weights_digest: B256,
 ) -> B256 {
-    let mut buf = Vec::new();
-    buf.extend_from_slice(TRACE_MAGIC);
-    buf.extend_from_slice(&inputs.task_id.to_be_bytes::<32>());
-    buf.extend_from_slice(&inputs.epoch.to_be_bytes());
-    buf.extend_from_slice(&inputs.chain_id.to_be_bytes());
-    buf.extend_from_slice(inputs.cipher_task.as_slice());
-    buf.extend_from_slice(inputs.ct_root.as_slice());
-    buf.extend_from_slice(inputs.prev_weights_digest.as_slice());
-    buf.extend_from_slice(&inputs.features.to_be_bytes());
-    buf.extend_from_slice(&inputs.scale.to_be_bytes());
-    buf.extend_from_slice(&inputs.lr_q16.to_be_bytes());
-    buf.extend_from_slice(&inputs.l2_q16.to_be_bytes());
-    buf.extend_from_slice(&(inputs.minibatch as u64).to_be_bytes());
-    buf.extend_from_slice(&inputs.seed.to_be_bytes());
-    buf.extend_from_slice(&n_rows.to_be_bytes());
-    buf.extend_from_slice(&loss_mean_q.unwrap_or(0).to_be_bytes());
     let mut leaves: Vec<&ShardInput> = inputs.shards.iter().collect();
     leaves.sort_by_key(|s| s.leaf_index);
-    for leaf in leaves {
-        buf.extend_from_slice(&leaf.leaf_index.to_be_bytes());
-        buf.extend_from_slice(leaf.cid.as_slice());
-        buf.extend_from_slice(leaf.ct_digest.as_slice());
-    }
-    buf.extend_from_slice(next_weights_digest.as_slice());
-    keccak256(buf)
+    let core_leaves: Vec<shroud_core::transcript::TraceLeaf> = leaves
+        .iter()
+        .map(|s| shroud_core::transcript::TraceLeaf {
+            leaf_index: s.leaf_index,
+            cid: b2a(&s.cid),
+            ct_digest: b2a(&s.ct_digest),
+        })
+        .collect();
+    B256::from(shroud_core::transcript::trace_digest(
+        inputs.task_id.to_be_bytes::<32>(),
+        inputs.epoch,
+        inputs.chain_id,
+        a2a(&inputs.cipher_task),
+        b2a(&inputs.ct_root),
+        b2a(&inputs.prev_weights_digest),
+        inputs.features,
+        inputs.scale,
+        inputs.lr_q16,
+        inputs.l2_q16,
+        inputs.minibatch as u64,
+        inputs.seed,
+        n_rows,
+        loss_mean_q,
+        &core_leaves,
+        b2a(&next_weights_digest),
+    ))
 }
 
 /// The 32-byte `proof` reference for `commitEpoch`.
@@ -417,14 +202,7 @@ pub fn trace_digest(
 /// binds the exact trace, so the reference is useless for any other epoch. See the module
 /// docs for why this is a reference and what replaces it on production verifiers.
 pub fn proof_reference(trace_digest: B256) -> B256 {
-    let mut preimage = Vec::with_capacity(PROOF_REF_MAGIC.len() + 32);
-    preimage.extend_from_slice(PROOF_REF_MAGIC);
-    preimage.extend_from_slice(trace_digest.as_slice());
-    let hash = keccak256(preimage);
-    let mut out = [0u8; 32];
-    out[..4].copy_from_slice(&PROOF_REF_PREFIX);
-    out[4..].copy_from_slice(&hash.as_slice()[..28]);
-    B256::from(out)
+    B256::from(shroud_core::transcript::proof_reference(b2a(&trace_digest)))
 }
 
 /// Deterministic fixed-point SGD for linear regression over quantised rows.
@@ -461,7 +239,7 @@ impl ReferenceCpuEngine {
         }
     }
 
-    fn decoded(&self, inputs: &EpochInputs) -> Result<Vec<ShardRows>> {
+    fn decoded(&self, inputs: &EpochInputs) -> shroud_core::Result<Vec<ShardRows>> {
         let mut leaves: Vec<&ShardInput> = inputs.shards.iter().collect();
         leaves.sort_by_key(|s| s.leaf_index);
         leaves
@@ -501,8 +279,7 @@ impl FheEngine for ReferenceCpuEngine {
             )));
         }
         let decoded = self.decoded(inputs)?;
-        let s = i128::from(self.scale);
-        let mut w: Vec<i64> = inputs
+        let w: Vec<i64> = inputs
             .prev_weights
             .as_ref()
             .ok_or_else(|| {
@@ -511,82 +288,28 @@ impl FheEngine for ReferenceCpuEngine {
                 ))
             })?
             .signed();
-        let mut grad = vec![0i128; f];
-        let mut in_batch: u64 = 0;
-        let mut n_rows: u64 = 0;
-        let mut loss: i128 = 0;
-
-        let overflow = |stage: &'static str| {
-            Error::Fhe(FheError::Overflow {
-                stage,
-                detail:
-                    "i128 accumulator exceeded its range; the lane budget cannot hold this epoch"
-                        .into(),
+        // The numeric heart lives in the portable core (`shroud_core::sgd`); the
+        // `From<CoreError>` mapping keeps every stage label and message identical,
+        // so disputes and logs see exactly the errors this function raised before.
+        let views: Vec<shroud_core::sgd::ShardView<'_>> = decoded
+            .iter()
+            .map(|shard| shroud_core::sgd::ShardView {
+                rows: shard.rows,
+                values: &shard.values,
             })
-        };
-
-        for shard in &decoded {
-            for r in 0..shard.rows as usize {
-                let base = r * f;
-                // Prediction in quantised units: Σ w·x / S + bias.
-                let mut dot: i128 = 0;
-                for (j, wj) in w.iter().enumerate().take(f - 1) {
-                    dot = dot
-                        .checked_add(
-                            i128::from(*wj)
-                                .checked_mul(i128::from(shard.values[base + j]))
-                                .ok_or_else(|| overflow("dot product"))?,
-                        )
-                        .ok_or_else(|| overflow("dot product"))?;
-                }
-                let pred = dot / s + i128::from(w[f - 1]);
-                let err = pred - i128::from(shard.values[base + f - 1]);
-                loss = loss
-                    .checked_add(err.checked_mul(err).ok_or_else(|| overflow("loss"))?)
-                    .ok_or_else(|| overflow("loss"))?;
-                for (j, gj) in grad.iter_mut().enumerate().take(f - 1) {
-                    *gj = (*gj)
-                        .checked_add(
-                            err.checked_mul(i128::from(shard.values[base + j]))
-                                .ok_or_else(|| overflow("gradient"))?,
-                        )
-                        .ok_or_else(|| overflow("gradient"))?;
-                }
-                // The bias is the weight on the constant input 1.0, quantised as `S`:
-                // its accumulator lives in the same S² domain as every other lane, so
-                // the shared update rule applies to it unchanged.
-                grad[f - 1] = grad[f - 1]
-                    .checked_add(err.checked_mul(s).ok_or_else(|| overflow("gradient"))?)
-                    .ok_or_else(|| overflow("gradient"))?;
-                in_batch += 1;
-                n_rows += 1;
-                if in_batch as usize >= self.minibatch {
-                    apply_update(&mut w, &mut grad, in_batch, self.lr_q16, s);
-                    in_batch = 0;
-                }
-            }
-        }
-        if n_rows == 0 {
-            return Err(Error::Fhe(FheError::ShapeMismatch {
-                got_rows: 0,
-                got_cols: f,
-                want_rows: 1,
-                want_cols: f,
-            }));
-        }
-        if in_batch > 0 {
-            apply_update(&mut w, &mut grad, in_batch, self.lr_q16, s);
-        }
-        // L2 shrinkage, once per epoch. Clamped into i64: the final i32
-        // range check below turns an out-of-lane result into an error.
-        if self.l2_q16 != 0 {
-            for lane in w.iter_mut() {
-                let shrink = (i128::from(self.l2_q16) * i128::from(*lane)) / 65_536;
-                *lane =
-                    (i128::from(*lane) - shrink).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
-            }
-        }
-        let loss_mean = loss / i128::from(n_rows);
+            .collect();
+        let sgd = shroud_core::sgd::run_epoch(
+            &shroud_core::sgd::SgdParams {
+                scale: self.scale,
+                lr_q16: self.lr_q16,
+                l2_q16: self.l2_q16,
+                minibatch: self.minibatch,
+            },
+            f,
+            &w,
+            &views,
+        )?;
+        let (w, loss_mean, n_rows) = (sgd.weights, sgd.loss_mean_q, sgd.n_rows);
         let loss_true = loss_mean as f64 / f64::from(self.scale).powi(2);
         if loss_true > DIVERGENCE_LOSS_CAP {
             return Err(Error::Fhe(FheError::Diverged {
@@ -605,7 +328,7 @@ impl FheEngine for ReferenceCpuEngine {
             features: inputs.features,
             lanes,
         };
-        let weights_digest = weights.digest();
+        let weights_digest = B256::from(weights.digest());
         let weights_bytes = weights.encode();
         let metrics_bytes = metrics_bytes(
             "reference-cpu",
@@ -625,19 +348,6 @@ impl FheEngine for ReferenceCpuEngine {
             loss_mean_q: Some(loss_mean),
             rows: n_rows,
         })
-    }
-}
-
-/// One minibatch step: `w -= (lr_q16 * acc) / (2^16 * S * m)`, accumulators cleared.
-///
-/// The conversions clamp rather than wrap: a step that does not fit is reported by the
-/// i32 range check at the end of the epoch, never silently folded.
-fn apply_update(w: &mut [i64], grad: &mut [i128], m: u64, lr_q16: u32, s: i128) {
-    let denom = 65_536i128 * s * i128::from(m);
-    for (lane, acc) in w.iter_mut().zip(grad.iter_mut()) {
-        let delta = (i128::from(lr_q16) * *acc) / denom;
-        *lane = (i128::from(*lane) - delta).clamp(i64::MIN as i128, i64::MAX as i128) as i64;
-        *acc = 0;
     }
 }
 
@@ -1161,6 +871,11 @@ impl FheEngine for UnsupportedEngine {
 mod tests {
     use super::*;
 
+    // Explicit (not via the glob above): the top level no longer imports these —
+    // every value-use lives in tests, so they live here. Mirrors tfhe_backend.
+    use alloy::primitives::keccak256;
+    use shroud_core::fixed::quantize;
+
     /// Build a `shroud/noop/v1` payload exactly like the SDK's `NoopEncryptor`.
     fn noop_bytes(features: u32, rows: &[f64]) -> Vec<u8> {
         let n = (rows.len() / features as usize) as u32;
@@ -1217,7 +932,9 @@ mod tests {
         let mut tfhe_like = Vec::new();
         tfhe_like.extend_from_slice(TFHE_SHARD_MAGIC);
         tfhe_like.extend_from_slice(&[0u8; 16]);
-        let err = decode_noop_shard(&tfhe_like, 2, 10_000).expect_err("must refuse");
+        let err = decode_noop_shard(&tfhe_like, 2, 10_000)
+            .map_err(Error::from)
+            .expect_err("must refuse");
         assert!(matches!(err, Error::Fhe(FheError::Backend(_))), "{err:?}");
     }
 
@@ -1229,7 +946,7 @@ mod tests {
         assert!(decode_noop_shard(&bytes, 2, 10_000).is_err());
         bytes = noop_bytes(3, &[1.0, 2.0, 3.0]);
         assert!(matches!(
-            decode_noop_shard(&bytes, 2, 10_000),
+            decode_noop_shard(&bytes, 2, 10_000).map_err(Error::from),
             Err(Error::Fhe(FheError::ShapeMismatch { .. }))
         ));
     }
@@ -1285,7 +1002,7 @@ mod tests {
             .expect("first epoch");
         let round_tripped = Weights::decode(&first.weights_bytes, 2).expect("weights file decodes");
         assert_eq!(round_tripped, first.weights);
-        assert_eq!(first.weights_digest, round_tripped.digest());
+        assert_eq!(first.weights_digest, B256::from(round_tripped.digest()));
         let mut second_inputs = inputs_for(&[2.0, 3.0], round_tripped);
         second_inputs.epoch = 1;
         second_inputs.prev_weights_digest = first.weights_digest;

@@ -39,6 +39,13 @@ jobs:
       - run: cargo check --locked --no-default-features
       - run: cargo clippy --locked --all-features -- -D warnings
       - run: cargo clippy --locked --no-default-features -- -D warnings
+      # The portable core must stay guest-compilable: no tokio/alloy/serde may creep
+      # in, or the zkVM/WASM builds below fail here instead of in a guest toolchain.
+      - name: install wasm32 target for the portability check
+        run: rustup target add wasm32-unknown-unknown
+      - name: check the portable core for wasm32
+        run: cargo check --target wasm32-unknown-unknown
+        working-directory: node/crates/shroud-core
 
   test:
     name: cargo test
@@ -56,6 +63,11 @@ jobs:
           workspaces: node -> target
       - run: cargo test --locked --all-features
       - run: cargo test --locked --no-default-features
+      # Unit tests of the portable core (own directory: it is a path dependency,
+      # not a workspace member, so the node runs above do not execute them).
+      - name: test the portable core
+        run: cargo test
+        working-directory: node/crates/shroud-core
 
   build:
     name: cargo build --release

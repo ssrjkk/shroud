@@ -735,7 +735,7 @@ impl Worker {
     ) -> Result<fhe::Weights> {
         match fhe::Weights::decode(bytes, task.features) {
             Ok(w) => {
-                if w.digest() != task.last_weights_digest {
+                if B256::from(w.digest()) != task.last_weights_digest {
                     warn!(
                         digest = %task.last_weights_digest,
                         "seed weights decode but their digest differs from the chain pin; \
@@ -761,7 +761,7 @@ impl Worker {
                     "seed weights are not a shroud/weights/v1 file; executing from genesis \
                      zeros and binding the chain pin in the trace"
                 );
-                fhe::Weights::zeros(task.features)
+                fhe::Weights::zeros(task.features).map_err(Error::from)
             }
         }
     }

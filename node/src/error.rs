@@ -76,6 +76,40 @@ impl From<alloy::transports::RpcError<alloy::transports::TransportErrorKind>> fo
     }
 }
 
+/// The portable core speaks its own dependency-free error; this mapping is what
+/// keeps the refactor behaviour-identical. Every arm carries the same fields and
+/// the same message strings the node built inline before — `CoreError::Malformed`
+/// reasons are pre-formatted in core and wrapped verbatim, and the overflow
+/// detail below is the exact string `execute_epoch` used.
+impl From<shroud_core::CoreError> for Error {
+    fn from(e: shroud_core::CoreError) -> Self {
+        match e {
+            shroud_core::CoreError::Overflow { stage } => Error::Fhe(FheError::Overflow {
+                stage,
+                detail:
+                    "i128 accumulator exceeded its range; the lane budget cannot hold this epoch"
+                        .into(),
+            }),
+            shroud_core::CoreError::ShapeMismatch {
+                got_rows,
+                got_cols,
+                want_rows,
+                want_cols,
+            } => Error::Fhe(FheError::ShapeMismatch {
+                got_rows,
+                got_cols,
+                want_rows,
+                want_cols,
+            }),
+            shroud_core::CoreError::Malformed { offset, reason } => {
+                Error::ShardStore(ShardError::Malformed { offset, reason })
+            }
+            shroud_core::CoreError::LaneOverflow(v) => Error::Fhe(FheError::LaneOverflow(v)),
+            shroud_core::CoreError::Backend(msg) => Error::Fhe(FheError::Backend(msg)),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("missing required field `{0}`")]
