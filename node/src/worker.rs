@@ -643,7 +643,7 @@ impl Worker {
         let stream_dir = dir.clone();
         let stream_endpoint = endpoint.clone();
 
-        let shard_stream = futures_util::stream::iter(leaves.into_iter())
+        let shard_stream = futures_util::stream::iter(leaves)
             .map({
                 move |(index, leaf)| {
                     let sem = Arc::clone(&stream_sem);
