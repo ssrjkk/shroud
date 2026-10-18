@@ -224,6 +224,11 @@ interface ICipherTask {
     error DisputeAgreesWithClaim(uint256 taskId, uint32 epoch, address reporter);
     error DisputeWithoutVerifiedCommit(uint256 taskId, uint32 epoch, address reporter);
     error DisputeDigestMismatch(uint256 taskId, uint32 epoch, address reporter, bytes32 committed, bytes32 reported);
+    /// The reporter was not drawn into this epoch's dispute committee. Disputes count
+    /// only from sortition-selected members (stake-weighted once bonds vary; uniform
+    /// over registered nodes while the registration bond is flat), so a Sybil ring
+    /// cannot manufacture quorum with throwaway identities.
+    error NotCommitteeMember(uint256 taskId, uint32 epoch, address reporter);
 
     /* ---------------------------- nodes: bond ---------------------------- */
     /// @dev Declared here so the orchestrator ABI resolves them, but raised by `PaymentVault`,
@@ -375,6 +380,9 @@ interface ICipherTask {
     function divisorFor(uint256 taskId) external view returns (uint128);
     function escrowToken() external view returns (address);
     function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have);
+    function committeeSize() external view returns (uint256);
+    function committeeSeed(uint256 taskId, uint32 epoch) external view returns (bytes32);
+    function isCommitteeEligible(uint256 taskId, uint32 epoch, address reporter) external view returns (bool);
     function statusOf(uint256 taskId) external view returns (TaskStatus);
     function nodeRegistered(uint256 taskId, address node) external view returns (bool);
     function epochWinner(uint256 taskId, uint32 epoch) external view returns (address);

@@ -656,6 +656,140 @@ describe("CipherTask", () => {
     });
   });
 
+  describe("dispute committee (Phase 4)", () => {
+    it("publishes the committee size clients mirror", async () => {
+      const { task } = await deployFixture();
+      expect(await task.committeeSize()).to.equal(7n);
+    });
+
+    it("fixes the epoch seed on first report and keeps it stable across reverts", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, node, node2 } = fx;
+      const id = await sealed(fx, { epochs: 1, nodes: [node, node2] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      expect(await task.committeeSeed(id, 0)).to.equal(ethers.ZeroHash);
+      const claimDigest = bytes32Of(900);
+      const chalDigest = bytes32Of(901);
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), claimDigest);
+      await task.connect(node2).commitEpoch(id, 0, proofRef(2), bytes32Of(302), bytes32Of(402), bytes32Of(502), chalDigest);
+      // Two registered nodes and a committee of seven: the whole registry is drawn,
+      // so this report counts deterministically.
+      await task.connect(node2).reportDispute(id, 0, chalDigest);
+      const seed = await task.committeeSeed(id, 0);
+      expect(seed).to.not.equal(ethers.ZeroHash);
+      // A reverting report (agrees with the claim) must not move the seed.
+      await expect(task.connect(node).reportDispute(id, 0, claimDigest)).to.be.revertedWithCustomError(
+        task,
+        "DisputeAgreesWithClaim"
+      );
+      expect(await task.committeeSeed(id, 0)).to.equal(seed);
+    });
+
+    it("counts only drawn reporters on large registries", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, vault, token } = fx;
+      const signers = await ethers.getSigners();
+      const extra = signers.slice(12, 20);
+      const bond = await vault.REGISTRATION_BOND();
+      for (const n of extra) {
+        await token.mint(n.address, bond);
+        await token.connect(n).approve(await vault.getAddress(), ethers.MaxUint256);
+      }
+      const all = [fx.node, fx.node2, ...extra];
+      expect(all.length).to.equal(10);
+      const id = await sealed(fx, { epochs: 1, nodes: all });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      const claimDigest = bytes32Of(1900);
+      await task
+        .connect(all[0])
+        .commitEpoch(id, 0, proofRef(1), bytes32Of(1301), bytes32Of(1401), bytes32Of(1501), claimDigest);
+      const challengers = all.slice(1);
+      const digests = challengers.map((_, i) => bytes32Of(2000 + i));
+      for (let i = 0; i < challengers.length; i++) {
+        await task
+          .connect(challengers[i])
+          .commitEpoch(
+            id,
+            0,
+            proofRef(60 + i),
+            bytes32Of(1601 + i),
+            bytes32Of(1701 + i),
+            bytes32Of(1801 + i),
+            digests[i]
+          );
+      }
+      // Report adaptively. Before the first counted report there is no seed, so the
+      // first attempts go in blind (a fresh lottery per attempt; a miss reverts with
+      // NotCommitteeMember and rolls the seed back). Once a report counts, the seed
+      // is fixed and the eligibility view is authoritative for everyone after.
+      let counted = 0;
+      let ineligibleSeen = false;
+      for (let i = 0; i < challengers.length; i++) {
+        const seed = await task.committeeSeed(id, 0);
+        if (seed !== ethers.ZeroHash) {
+          const eligible = await task.isCommitteeEligible(id, 0, challengers[i].address);
+          if (!eligible) {
+            ineligibleSeen = true;
+            await expect(
+              task.connect(challengers[i]).reportDispute(id, 0, digests[i])
+            ).to.be.revertedWithCustomError(task, "NotCommitteeMember");
+            continue;
+          }
+          await task.connect(challengers[i]).reportDispute(id, 0, digests[i]);
+          counted++;
+        } else {
+          try {
+            await task.connect(challengers[i]).reportDispute(id, 0, digests[i]);
+            counted++;
+          } catch (e: any) {
+            // The only acceptable failure pre-seed is losing the fresh lottery.
+            // Anything else (unregistered, no commit, digest mismatch) is a bug.
+            expect(String(e?.message ?? e)).to.match(/NotCommitteeMember/);
+            ineligibleSeen = true;
+          }
+        }
+      }
+      const [, have] = await task.disputeQuorum(id);
+      expect(have).to.equal(BigInt(counted));
+      expect(counted).to.be.greaterThan(0);
+      if (!ineligibleSeen) console.log("committee test: all 9 challengers were drawn (rare)");
+    });
+
+    it("a mismatched reveal burns nothing and leaves the reporter un-bricked", async () => {
+      const fx = await deployFixture();
+      const { task, vault, buyer, node, node2 } = fx;
+      const id = await sealed(fx, { epochs: 1, nodes: [node, node2] });
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
+      const claimDigest = bytes32Of(1900);
+      const chalDigest = bytes32Of(1901);
+      await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), claimDigest);
+      await task.connect(node2).commitEpoch(id, 0, proofRef(2), bytes32Of(302), bytes32Of(402), bytes32Of(502), chalDigest);
+      const salt = bytes32Of(777);
+      const commitment = ethers.keccak256(
+        ethers.AbiCoder.defaultAbiCoder().encode(
+          ["bytes32", "bytes32", "address"],
+          [chalDigest, salt, node2.address]
+        )
+      );
+      await task.connect(node2).commitDispute(id, 0, commitment);
+      // Wrong salt: reverts, burns nothing (a revert rolls back every state change,
+      // so an eager slash here would be theatre; and a typo is indistinguishable
+      // on-chain from malice, so burning would tax honest mistakes).
+      await expect(
+        task.connect(node2).reportDisputeWithSalt(id, 0, claimDigest, salt)
+      ).to.be.revertedWithCustomError(task, "CommitmentMismatch");
+      expect(await vault.nodeBond(id, node2.address)).to.equal(await vault.REGISTRATION_BOND());
+      // The commitment survives the failed reveal, so the reporter retries with the
+      // right salt and counts — a failed reveal must never brick an honest reporter.
+      await expect(task.connect(node2).reportDisputeWithSalt(id, 0, chalDigest, salt)).to.emit(
+        task,
+        "DisputeReported"
+      );
+      const [, have] = await task.disputeQuorum(id);
+      expect(have).to.equal(1n);
+    });
+  });
+
   describe("settlement", () => {
     it("pays contributors pro-rata with linear weight, streams node pay, and refunds the rest", async () => {
       const fx = await deployFixture();
