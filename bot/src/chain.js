@@ -78,13 +78,45 @@ export const shortAddr = (a) => {
   return `${s.slice(0, 8)}…${s.slice(-6)}`;
 };
 
+/** Decimals cache for ERC20 tokens, keyed by token address. */
+const tokenDecimalsCache = new Map();
+
+/** ERC20 minimal ABI for reading decimals. */
+const ERC20_DECIMALS_ABI = ["function decimals() view returns (uint8)"];
+
+/**
+ * Fetch and cache token decimals. Uses the chain provider from the ChainReader instance.
+ * @param {string} tokenAddress - ERC20 token address
+ * @param {import("ethers").JsonRpcProvider} provider - RPC provider
+ * @returns {Promise<number>} token decimals (defaults to 18 if read fails)
+ */
+async function getTokenDecimals(tokenAddress, provider) {
+  if (!tokenAddress || tokenAddress === "0x0000000000000000000000000000000000000000") {
+    return 18; // Default for ETH or invalid token
+  }
+  const cached = tokenDecimalsCache.get(tokenAddress.toLowerCase());
+  if (cached !== undefined) return cached;
+
+  try {
+    const tokenContract = new Contract(tokenAddress, ERC20_DECIMALS_ABI, provider);
+    const decimals = Number(await tokenContract.decimals());
+    tokenDecimalsCache.set(tokenAddress.toLowerCase(), decimals);
+    return decimals;
+  } catch {
+    tokenDecimalsCache.set(tokenAddress.toLowerCase(), 18);
+    return 18; // Default to 18 if read fails
+  }
+}
+
 /** 1e18-scaled token amount as a plain decimal string with 4dp. */
-export function fmtEth(wei, decimals = 4) {
+export function fmtEth(wei, decimals = 4, tokenDecimals = 18n) {
   try {
     const v = BigInt(wei);
-    const whole = v / 10n ** 18n;
-    const frac = v % 10n ** 18n;
-    const fracStr = frac.toString().padStart(18, "0").slice(0, decimals);
+    const d = BigInt(tokenDecimals);
+    const scale = 10n ** d;
+    const whole = v / scale;
+    const frac = v % scale;
+    const fracStr = frac.toString().padStart(Number(d), "0").slice(0, decimals);
     return fracStr.replace(/0+$/, "") === ""
       ? whole.toString()
       : `${whole}.${fracStr.replace(/0+$/, "")}`;
@@ -97,11 +129,30 @@ export class ChainReader {
   #provider;
   #ifaces;
   #config;
+  /** Memoized `ethers.Contract` instances, keyed by role. Constructing one is cheap
+   *  but not free (ABI parsing + runner binding), and readers run every poll — nine
+   *  call sites sharing three instances instead of rebuilding them per read. */
+  #contracts = new Map();
 
   constructor(provider, interfaces, config) {
     this.#provider = provider;
     this.#ifaces = interfaces;
     this.#config = config;
+  }
+
+  /**
+   * Cached contract handle, or null when unconfigured. Addresses are fixed for the
+   * life of the reader, so one instance per role is enough; callers keep their
+   * existing `if (!... ) return <default>` guards unchanged.
+   */
+  #contract(role, address, iface) {
+    if (!address) return null;
+    let c = this.#contracts.get(role);
+    if (!c) {
+      c = new Contract(address, iface, this.#provider);
+      this.#contracts.set(role, c);
+    }
+    return c;
   }
 
   static async connect(config, ifaces) {
@@ -261,7 +312,7 @@ export class ChainReader {
   /** Number of tasks the contract knows about. */
   async taskCount() {
     if (!this.#config.cipherTask) return 0;
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     return Number(await c.taskCount());
   }
 
@@ -274,7 +325,10 @@ export class ChainReader {
    */
   async task(taskId) {
     if (!this.#config.cipherTask) return null;
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    // Optimistic clear: a success below leaves the flag null; the catch re-sets it
+    // on failure. Without this a one-second RPC blip warns for the full 5-minute TTL.
+    this.#lastReadError = null;
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     try {
       const t = await c.tasks(taskId);
       if (!t) return null;
@@ -310,7 +364,8 @@ export class ChainReader {
 
   async statusOf(taskId) {
     if (!this.#config.cipherTask) return null;
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    this.#lastReadError = null;
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     try {
       return Number(await c.statusOf(taskId));
     } catch (e) {
@@ -331,7 +386,8 @@ export class ChainReader {
    */
   async contributors(taskId) {
     if (!this.#config.cipherTask) return [];
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    this.#lastReadError = null;
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     try {
       return [...(await c.contributorsOf(taskId))];
     } catch (e) {
@@ -344,7 +400,7 @@ export class ChainReader {
   async commitsForEpoch(taskId, epoch) {
     const nodes = await this.contributors(taskId);
     if (!nodes.length) return [];
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     // All reads in flight at once: the sequential loop paid a full RPC round trip per
     // node. Order is the contributor-list order either way (Promise.all preserves it).
     const settled = await Promise.all(
@@ -373,7 +429,8 @@ export class ChainReader {
 
   async epochWinner(taskId, epoch) {
     if (!this.#config.cipherTask) return null;
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    this.#lastReadError = null;
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     try {
       return await c.epochWinner(taskId, epoch);
     } catch (e) {
@@ -392,7 +449,8 @@ export class ChainReader {
    */
   async disputeQuorum(taskId) {
     if (!this.#config.cipherTask) return null;
-    const c = new Contract(this.#config.cipherTask, this.#ifaces.cipherTask, this.#provider);
+    this.#lastReadError = null;
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     try {
       const [need, have] = await c.disputeQuorum(taskId);
       return { need: Number(need), have: Number(have) };
@@ -478,7 +536,8 @@ export class ChainReader {
   /** Current network parameters, including the pinned FHE key hash. */
   async networkParams() {
     if (!this.#config.networkParams) return null;
-    const c = new Contract(this.#config.networkParams, this.#ifaces.networkParams, this.#provider);
+    this.#lastReadError = null;
+    const c = this.#contract("networkParams", this.#config.networkParams, this.#ifaces.networkParams);
     try {
       const n = this.#named(this.#ifaces.networkParams, "current", await c.current());
       return {
@@ -502,7 +561,7 @@ export class ChainReader {
   /** The queued rotation, or `null` when none is pending. */
   async pendingRotation() {
     if (!this.#config.networkParams) return null;
-    const c = new Contract(this.#config.networkParams, this.#ifaces.networkParams, this.#provider);
+    const c = this.#contract("networkParams", this.#config.networkParams, this.#ifaces.networkParams);
     try {
       if (!(await c.rotationPending())) return null;
       const r = this.#named(this.#ifaces.networkParams, "pending", await c.pending());
