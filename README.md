@@ -208,8 +208,8 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 - [ ] **Cryptoeconomics (Phase 4):** stake-weighted re-executor
   assignment (+ slashing both ways), fhEVM Gateway threshold re-encryption, Foundry
   native invariants.
-- [ ] **Green devnet-live execution leg:** the two-node agreement script is wired in CI
-  and awaiting its first green run.
+- [x] **Green devnet-live execution leg:** the two-node agreement script runs green in CI
+  (`live node registers + bonds on devnet` in `.github/workflows/rust.yml`).
 
 ## Docs
 
