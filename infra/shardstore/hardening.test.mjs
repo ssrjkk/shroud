@@ -400,6 +400,52 @@ describe("hardening", () => {
     }
   });
 
+  it("(з) PUT без Content-Length: инкрементальный учёт бюджета, без 503", async () => {
+    const port10 = 18091;
+    const dir10 = mkdtempSync(join(tmpdir(), "shardstore-chunked-"));
+    const c10 = spawnServer({
+      PORT: String(port10), DATA_DIR: dir10, AUTH_TOKEN: TOKEN, GUARD_WRITE_BURST: "1000",
+    });
+    const base10 = `http://127.0.0.1:${port10}`;
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`${base10}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("chunked server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // ReadableStream body => undici шлёт chunked без content-length. Сервер не
+      // вправе ни требовать длину (411), ни резервировать полный кап (64 МБ) на
+      // каждое такое соединение — иначе горстка медленных тел выбирает весь бюджет.
+      const chunkedPut = (fill) => {
+        const stream = new ReadableStream({
+          start(c) { c.enqueue(Buffer.alloc(16, fill)); c.close(); },
+        });
+        return fetch(`${base10}/objects`, {
+          method: "PUT", headers: authed(), body: stream, duplex: "half",
+        });
+      };
+      const cids = [];
+      for (const fill of [9, 10, 11]) {
+        const r = await chunkedPut(fill);
+        assert.equal(r.status, 201);
+        cids.push((await r.json()).cid);
+      }
+      const health = await (await fetch(`${base10}/healthz`)).json();
+      assert.equal(health.objectsBytes, 48);
+      assert.equal(health.inflightBytes, 0);
+      for (const cid of cids) {
+        assert.equal((await fetch(`${base10}/objects/${cid}`)).status, 200);
+      }
+    } finally {
+      c10.kill("SIGKILL");
+      rmSync(dir10, { recursive: true, force: true });
+    }
+  });
+
   it("(ж) байт-бюджет вытесняет oldest-first, одиночку сверх бюджета держит", async () => {
     const port7 = 18088;
     const dir7 = mkdtempSync(join(tmpdir(), "shardstore-bytes-"));

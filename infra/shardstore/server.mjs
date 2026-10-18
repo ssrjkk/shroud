@@ -416,16 +416,18 @@ async function routePut(req, res, url, ip) {
     }
     throw e;
   }
-  // 2. Резерв глобального бюджета. Неизвестная длина = резерв под полный кап.
-  const reserve = declared ?? MAX_OBJECT_BYTES;
-  if (inflightBytes + reserve > guard.maxInflightBytes) {
-    audit.warn("BACKPRESSURE_SHED", { ip, op: "put", inflightBytes, reserve });
+  // 2. Резерв глобального бюджета. Неизвестная длина стартует с нуля, а учитывается
+  // по мере прихода чанков в doPut: резерв под полный кап на каждое соединение без
+  // Content-Length позволяет горстке медленных тел выбрать весь бюджет (8 x 64 МБ).
+  let accounted = declared ?? 0;
+  if (inflightBytes + accounted > guard.maxInflightBytes) {
+    audit.warn("BACKPRESSURE_SHED", { ip, op: "put", inflightBytes, reserve: accounted });
     metrics.incr("route:put:503");
     return send(res, 503, { error: "server busy" }, "application/json", retryAfter(1000));
   }
-  inflightBytes += reserve;
+  inflightBytes += accounted;
   let settled = false;
-  const release = () => { if (!settled) { settled = true; inflightBytes = Math.max(0, inflightBytes - reserve); } };
+  const release = () => { if (!settled) { settled = true; inflightBytes = Math.max(0, inflightBytes - accounted); } };
   res.on("close", release);
 
   // 3. Ключ идемпотентности (400 на мусор — до дорогой работы).
@@ -463,6 +465,13 @@ async function routePut(req, res, url, ip) {
       req.on("data", (c) => {
         if (aborted) return;
         size += c.length;
+        if (declared == null) {
+          // Тело без заявленной длины: бюджет учитываем по факту, а не резервом.
+          // `accounted` захвачен замыканием `release` ниже, так что освобождение
+          // вернёт ровно столько, сколько пришло (включая обрыв по 413).
+          accounted += c.length;
+          inflightBytes += c.length;
+        }
         if (size > MAX_OBJECT_BYTES) {
           aborted = true;
           metrics.incr("route:put:413");
