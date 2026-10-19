@@ -18,7 +18,13 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # Scoped per ref, not one global `pages` group: a single group makes every
+  # concurrently-open PR cancel every other one, so a batch of Dependabot PRs
+  # all report the site job as `cancelled` (and therefore red) even though the
+  # site itself is fine. Per-ref keeps the intended behaviour where it matters —
+  # a new push to master cancels the older master deploy — while letting
+  # unrelated PRs build in parallel.
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

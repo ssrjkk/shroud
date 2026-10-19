@@ -6,6 +6,22 @@ first tagged release.
 
 ## Unreleased
 
+### CI: one global concurrency group made every concurrent PR report red
+
+- `site.yml` used a single `concurrency: group: pages` for every ref. GitHub keeps one
+  job per group, so when several PRs were open at once, each new run **cancelled**
+  the others — and a cancelled job is reported as a failed check. A batch of
+  Dependabot PRs therefore showed `package static site` and `deploy to GitHub Pages`
+  as red even though the site itself builds fine, which made it look like the site
+  was broken when nothing was wrong with it. The group is now per-ref
+  (`pages-${{ github.ref }}`): a new push to master still cancels the older master
+  deploy, and unrelated PRs no longer cancel each other.
+- The red was not the whole story, and the distinction matters: PR #43 failed for a
+  real reason (the SDK's embedded ABI snapshot did not match the compiled
+  `CipherTask` artifact) and PR #46 for another (`hardhat-ethers` 4.x conflicts with
+  the `^3.1.3` peer range `@fhevm/hardhat-plugin` requires). Those are dependency
+  problems, not CI problems, and are closed as such.
+
 ### Node: the build needed a flag nobody set — CI could not compile the crate
 
 - `alloy-signer-local` 2.5.0 calls `<[u8; 32]>::from(self.to_field_bytes())`, and the
