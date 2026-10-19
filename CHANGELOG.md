@@ -6,6 +6,41 @@ first tagged release.
 
 ## Unreleased
 
+### Repository: one branch, no open PRs, green CI
+
+- `fix/unified` is merged into `master` (fast-forward, no conflicts). `master` now
+  carries the node build fix, the documentation that matches the fail-closed
+  defaults, the node/web/SDK corrections, and the regenerated SDK ABI snapshots.
+- The SDK ABI snapshots on `master` had drifted from the compiled contracts:
+  `committeeSeed`, `isCommitteeEligible`, `committeeSize`, `NotCommitteeMember`,
+  `taskBondTotal`, `topUpNodeBond` and `NodeBondToppedUp` were missing after #40
+  added them. `sdk.yml` never caught it because its `paths` filter only covered
+  `packages/sdk/**` — a Solidity change could not fail the ABI-drift test. The
+  filter now includes `packages/contracts/src/**`, and the snapshots are
+  regenerated to match.
+- Every open PR is closed and every branch other than `master` is deleted
+  (local and remote). The Dependabot branches go with their PRs; Dependabot will
+  re-propose on its next weekly run, against a `master` that now builds.
+- `feat/tg-bot-ux` was deleted rather than merged: it is the earlier version of
+  the inline-keyboard/watchlist feature that is already in `master` and was
+  reworked there (`watchlist.js` 227 lines against 130, `keyboards.js` 154
+  against 112, `index.js` 921 against 597, and longer versions of all three
+  test files). `fix/rust-ci` was already contained in `master`.
+
+### CI: the link check raced the Pages deployment
+
+- `links.yml` ran lychee over `README.md`, which links to the live Pages site
+  (`ssrjkk.github.io/shroud/pipeline.html`, `.../use.html`, ...). Pages deploys
+  asynchronously, so on any push that adds a page the deployment still serves
+  the old tree and every one of those self-links 404s. The check therefore
+  failed on the very push that introduced the pages it complained about — a race
+  between two workflows, not a broken link, and one a re-run would "fix".
+- Self-links are now verified against the repository: every
+  `ssrjkk.github.io/shroud/...` reference must point at a file that exists in
+  `web/`. That is deterministic and states the same property the old check was
+  meant to establish. lychee keeps checking every external link and skips our
+  own host.
+
 ### CI: one global concurrency group made every concurrent PR report red
 
 - `site.yml` used a single `concurrency: group: pages` for every ref. GitHub keeps one
