@@ -36,6 +36,12 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# --- Evidence packs ---
+# `scripts/evidence-pack.sh` writes one directory per run (versions, suite logs,
+# checksums) and its own header says they are not committed. Without this line
+# the script dirties the working tree with untracked output.
+evidence/
+
 # --- Scratch / tool-cache dirs ---
 # A PyManager cache directory left by tooling on the author's machine: nothing in the repo
 # references it (no workflow, no README instruction), so it is local state, not source.

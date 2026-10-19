@@ -67,7 +67,7 @@ Enable the versioned hook once with `git config core.hooksPath .githooks`
 (runs `cargo fmt --all -- --check` inside `node/` on every push).
 
 CI then runs the rest per workflow (`contracts`, `sdk`, `bot`, `shardstore`,
-`site`, `rust`, `links`): push only when the local gates above are green, one
+`site`, `rust`, `links`, `codeql`): push only when the local gates above are green, one
 push per verifiable hypothesis.
 
 ## Security

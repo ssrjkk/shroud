@@ -22,9 +22,10 @@ and re-cut.
 Runs every suite that runs without secrets (contracts, SDK, bot, ShardStore,
 `equiv.mjs`, `cargo fmt --check`) and writes `evidence/<UTC-timestamp>/` with:
 
-- `versions.txt` — `git rev-parse HEAD`, node/npm/rustc/solc versions, lockfile hashes;
-- one log file per suite, unedited, exit codes recorded;
-- `ci.txt` — the CI run IDs covering the same commit (from `gh run list`).
+- `versions.txt` — `git rev-parse HEAD`, node/npm/rustc/hardhat/solc versions, lockfile hashes;
+- `ci.txt` — the CI run IDs covering the same commit (from `gh run list`);
+- one log file per suite, unedited;
+- `exit-codes.txt` — one `name=code` line per suite, the exit codes the release notes cite.
 
 The directory is **not** committed. Its checksums go into the release notes;
 the logs attach to the draft release.

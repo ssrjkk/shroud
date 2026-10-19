@@ -6,6 +6,26 @@ first tagged release.
 
 ## Unreleased
 
+### Release tooling: the evidence pack did not produce what the release process promised
+
+- `RELEASE_PROCESS.md` lists `ci.txt` (the CI run IDs covering the tagged commit) and
+  per-suite exit codes among the evidence pack's artifacts. `scripts/evidence-pack.sh`
+  produced neither: no `ci.txt`, and the exit code was only printed to the terminal,
+  where it vanished with the shell. A tag whose evidence cannot name the runs that
+  cleared it, or the exit code of the suite that ran, is not auditable.
+- The pack now writes `ci.txt` (via `gh run list --commit`; it says so plainly when
+  `gh` is unavailable rather than skipping the file) and `exit-codes.txt` with one
+  `name=code` line per suite. The suite logs stay unedited, which is what the release
+  process says they are.
+- The pack recorded `hardhat --version` under the label `solc`, so the evidence named
+  Hardhat's version (2.29.1) as the compiler version. The two are different: the
+  contracts are compiled with solc 0.8.24, and the pack now reads that from the
+  build-info (`hardhat` and `solc` are recorded separately, and before the first
+  compile the pack says "NOT COMPILED" rather than recording a wrong number).
+- `evidence/` was not in `.gitignore`, although the script's own header says its
+  output is not committed — running the release tool dirtied the working tree with
+  untracked output. It is ignored now.
+
 ### Repository: one branch, no open PRs, green CI
 
 - `fix/unified` is merged into `master` (fast-forward, no conflicts). `master` now
