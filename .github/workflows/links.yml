@@ -31,6 +31,42 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+      # The site's own Pages URLs are checked against the repository, not against the
+      # live deployment: Pages deploys asynchronously, so on any push that adds a page
+      # the live site still serves the old tree and every self-link 404s. That is a
+      # race between two workflows, not a broken link, and it made CI red for a
+      # reason that a re-run would "fix". The step below verifies the same thing
+      # deterministically — the referenced page exists in `web/`.
+      - name: self-links point at pages that exist in the repo
+        run: |
+          python3 - <<'EOF'
+          import re, sys
+          from pathlib import Path
+
+          root = Path(".")
+          site = "https://ssrjkk.github.io/shroud"
+          files = [root / "README.md", *sorted(root.glob("*.md")),
+                   *sorted((root / "docs").glob("*.md")), *sorted((root / "web").glob("*.html"))]
+          bad = []
+          seen = set()
+          for f in files:
+              if not f.is_file():
+                  continue
+              for m in re.finditer(re.escape(site) + r"/?([^\s\"'<>)\]|]*)", f.read_text(errors="ignore")):
+                  page = m.group(1).split("#")[0].split("?")[0]
+                  target = root / "web" / page if page else root / "web" / "index.html"
+                  key = (str(f), page)
+                  if key in seen:
+                      continue
+                  seen.add(key)
+                  if not target.is_file():
+                      bad.append(f"{f}: {site}/{page} -> {target} does not exist")
+          if bad:
+              print("self-links pointing at pages that do not exist:")
+              print("\n".join(bad))
+              sys.exit(1)
+          print(f"self-links OK: {len(seen)} reference(s) resolve to files in web/")
+          EOF
       - name: check external links with retries
         uses: lycheeverse/lychee-action@v2
         env:
@@ -39,9 +75,14 @@ jobs:
           # 404.html is excluded: its only unresolvable link is the Pages `<base>`
           # deployment tag, and its external footer links byte-duplicate the five
           # checked pages. The branch-links job above still guards 404 for /main/.
+          # Our own Pages host is excluded for the same reason as 404.html, only
+          # stronger: it is served by a deployment that trails the push, so it
+          # cannot be a reliable source of truth for what the repo contains. The
+          # step above checks those references against `web/` instead.
           args: >-
             --no-progress
             --max-retries 3
             --exclude-path 'web/404.html'
+            --exclude 'https://ssrjkk\.github\.io/shroud.*'
             README.md *.md docs/ web/
           fail: true
