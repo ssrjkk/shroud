@@ -15,6 +15,11 @@ RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/ap
 # world. Both a stub lib and a stub bin are required: Cargo.toml declares a `[[bin]]` at
 # src/main.rs, and `cargo build` fails outright when a declared target's source file is missing —
 # a stub lib.rs alone is not enough.
+#
+# `.cargo/config.toml` carries the `--cfg relaxed_coherence` the dependency tree needs
+# (the file explains why); without it this stage dies inside `alloy-signer-local` with a
+# trait error that mentions neither the flag nor the crate that needs it.
+COPY node/.cargo ./.cargo
 COPY node/Cargo.toml node/Cargo.lock ./
 COPY node/build.rs ./
 COPY node/proto ./proto/

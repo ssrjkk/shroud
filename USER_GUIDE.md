@@ -97,7 +97,8 @@ payment_vault = "0x…"
 [node]
 operator_key = "0x…"     # pays gas + registration bond (10 token units at 6 dp/task)
 data_dir = "./data"
-# enforce_key_pin = false  # dev default; set true + fhe.public_key_hash + contracts.network_params anywhere real
+enforce_key_pin = false    # devnet only: the default is true, and it needs
+                           # fhe.public_key_hash + contracts.network_params or the node refuses to boot
 [shard]
 da_endpoint = "file://./data/da"
 [mesh]
@@ -157,5 +158,5 @@ the same lrQ16 (see the lab honesty note).
 | Bot "chain reads failing" in /status | RPC down or wrong chain | Check `RPC_URL`/`CHAIN_ID`, node logs |
 | DA `413`/`503` | Object over cap / in-flight budget shed | Smaller shards; retry with backoff (SDK retries 429/5xx) |
 | `DuplicateShard` / `AlreadyContributed` | Same bytes or same address twice | New bytes, new address |
-| Node "key is NOT checked" warning | `enforce_key_pin` off | Expected on devnet; enable with pin + NetworkParams elsewhere |
+| Node "key is NOT checked" warning | `enforce_key_pin` off | Expected on devnet (explicit opt-out); elsewhere the default is on and the node refuses to boot without pins |
 | `NoEpochOpened` on emergencyUnwind | No epoch ever opened | Buyer `abort` is the recovery path there |

@@ -37,7 +37,9 @@ tagged commit, not `master` in motion.
 2. Contract owner is a single key (pause/treasury/abort/slash paths).
 3. TFHE backend is non-deterministic across nodes: single-executor only.
 4. Committee collusion at threshold decrypts rows (residual by design).
-5. `node.enforce_key_pin` defaults off (devnet); substitution then logs a warning only.
+5. `node.enforce_key_pin` is on by default (a node without `fhe.public_key_hash` +
+   `contracts.network_params` refuses to boot; devnet opts out explicitly). The check is at
+   startup, not per epoch, so a mid-epoch rotation is caught only at the next restart.
 6. Thirty open Dependabot alerts, all Hardhat dev-toolchain transitives (see `docs/05` §7b).
 
 ## Questions for auditors

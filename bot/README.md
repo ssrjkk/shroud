@@ -15,11 +15,11 @@ npm start
 
 ## Why the key-rotation alert is the important one
 
-`docs/05-honest-limitations.md` records a gap that no default configuration covers: participants
-**cannot** detect a substituted FHE public key at submission time. `NetworkParams`
-pins the key correctly on chain, but nothing reads it by default — the SDK checks only when
+`docs/05-honest-limitations.md` records a gap that survives every default configuration:
+participants **cannot** detect a substituted FHE public key *at submission time*. `NetworkParams`
+pins the key correctly on chain, but nothing re-reads it mid-epoch — the SDK checks only when
 the caller passes `networkParams` + `fhePublicKeyHash`, and the node's `enforce_key_pin`
-check is opt-in (and runs once, at startup). A malicious sequencer can swap the key and
+check runs once, at startup. A malicious sequencer can swap the key and
 harvest ciphertexts, and the only detection is forensic, after the fact.
 
 So the bot watches `RotationProposed` and `RotationExecuted` and says so loudly.

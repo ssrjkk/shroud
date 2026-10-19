@@ -11,6 +11,9 @@ packages/contracts/fhevmTemp/
 
 # --- Rust ---
 node/target/
+# `shroud-core` is its own workspace (a path dependency, not a member), so `cargo test`
+# there writes its own target directory next to the crate.
+node/crates/shroud-core/target/
 
 # --- SDK build output ---
 packages/sdk/dist/

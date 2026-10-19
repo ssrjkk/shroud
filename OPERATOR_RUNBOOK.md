@@ -32,9 +32,10 @@ shroud-node --config shroud.toml
   `data_dir`; see `infra/README.md` for the full annotated example.
 - The operator key pays gas + the registration bond (10 units, pulled per task,
   approval is one-per-lifetime and exact-allowance checked first).
-- `node.enforce_key_pin = false` by default: the node logs a loud warning and
-  does NOT check the on-chain FHE key. Set it with `fhe.public_key_hash` plus
-  `contracts.network_params` for any non-devnet run.
+- `node.enforce_key_pin` is on by default: the node compares the on-chain FHE key at startup
+  and refuses to boot on a mismatch. It needs `fhe.public_key_hash` plus
+  `contracts.network_params` — without them the node will not start. Devnet sets it false
+  explicitly, and the node then logs a loud warning that the key is NOT checked.
 - Mesh serves plaintext without `mesh.mtls_*` (all three paths or none) — logged
   as WARN. Throttle: `inbound_rps`/`inbound_burst` per IP, `max_throttle_peers`
   buckets with stalest-eviction, `max_streams_per_connection` per h2 connection.

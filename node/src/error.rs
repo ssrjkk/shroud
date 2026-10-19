@@ -112,8 +112,13 @@ impl From<shroud_core::CoreError> for Error {
 
 #[derive(Debug, Error)]
 pub enum ConfigError {
-    #[error("missing required field `{0}`")]
-    Missing(&'static str),
+    #[error("missing required field `{field}`{}", reason.map_or(String::new(), |r| format!(": {r}")))]
+    Missing {
+        field: &'static str,
+        /// What the operator should do about it. A bare "missing field" is a dead end
+        /// when the field is only required because a *default* turned a check on.
+        reason: Option<&'static str>,
+    },
     #[error("`{field}` is invalid: {reason}")]
     Invalid { field: &'static str, reason: String },
     #[error("could not load config: {0}")]

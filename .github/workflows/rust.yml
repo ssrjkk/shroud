@@ -12,7 +12,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: "-D warnings"
+  # `--cfg relaxed_coherence` is required to compile `alloy-signer-local` (see
+  # `node/.cargo/config.toml` for the full explanation); `--check-cfg` keeps it from
+  # tripping `unexpected_cfgs` under `-D warnings`. `RUSTFLAGS` replaces
+  # `build.rustflags` from the config file, so both places must carry the flag.
+  RUSTFLAGS: "-D warnings --cfg relaxed_coherence --check-cfg cfg(relaxed_coherence)"
 
 jobs:
   check:

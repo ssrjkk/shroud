@@ -1039,10 +1039,14 @@ mod tests {
 
     #[test]
     fn hostile_headers_are_errors_never_panics() {
-        // rows × features overflows usize: without checked arithmetic this panics in
-        // debug builds (and wraps in release). Either way it must come back as Err.
+        // rows × features overflows the address space: without checked arithmetic this panics
+        // in debug builds (and wraps in release). Either way it must come back as Err.
+        // The header is decimal ASCII, NUL-separated: "features\0rows\0". Written with \x00
+        // rather than \0 on purpose — "\04294967295" is the octal escape 0o42 (a quote), not
+        // a NUL followed by "42", and the wrong byte makes the decoder fail one step earlier
+        // than the overflow this test is about.
         let mut bytes = Vec::from(NOOP_SHARD_MAGIC);
-        bytes.extend_from_slice(b"4294967295\04294967295\0");
+        bytes.extend_from_slice(b"4294967295\x0042994967295\x00");
         assert!(decode_noop_shard(&bytes, 4294967295, 10_000).is_err());
         // Same shape, wrong features: a shape error, still not a panic.
         assert!(decode_noop_shard(&bytes, 2, 10_000).is_err());

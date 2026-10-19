@@ -1435,9 +1435,9 @@ mod tests {
         // `consumed` is the contract's replay guard, and it moves even when `redeem` pays zero, so
         // the same nudge must never produce the same transaction twice.
         let mut ch = channel(ME);
-        assert_eq!(ch.accepts_slice(slice::SLICE_INDEX), true);
+        assert!(ch.accepts_slice(slice::SLICE_INDEX));
         ch.consumed = slice::SLICE_INDEX + 1;
-        assert_eq!(ch.accepts_slice(slice::SLICE_INDEX), false);
+        assert!(!ch.accepts_slice(slice::SLICE_INDEX));
     }
 
     #[test]

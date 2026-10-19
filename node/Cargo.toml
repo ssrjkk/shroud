@@ -9,6 +9,10 @@
 #   * There is no `tfhe-traits` crate. The traits (`FheType`, `FheEncrypt`, ...) are re-exported
 #     from `tfhe::prelude`. A dependency on the non-existent crate fails resolution.
 #
+# The crate needs `--cfg relaxed_coherence` to compile at all (a `generic-array` impl
+# that `alloy-signer-local` depends on is gated behind it). The flag lives in
+# `node/.cargo/config.toml` and in the CI `RUSTFLAGS` — do not remove either.
+#
 # MSRV is 1.94.1, set by `alloy` 2.5.0. `tfhe` alone requires 1.91.1 and `winterfell` 1.87, so
 # the value here is the maximum of the three, not a guess.
 

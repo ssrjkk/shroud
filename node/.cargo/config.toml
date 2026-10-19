@@ -1,0 +1,20 @@
+# Build flags the node cannot compile without.
+#
+# `alloy-signer-local` 2.5.0 does `B256::new(<[u8; 32]>::from(self.to_field_bytes()))`.
+# `to_field_bytes()` returns a `generic_array::GenericArray<u8, U32>`, and the
+# `From<GenericArray<T, N>> for [T; N]` impl it needs is an orphan-rule violation
+# (both the trait and the types are foreign), so `generic-array` gates it behind
+# `--cfg relaxed_coherence` and offers `Into` instead. Without the flag the node
+# fails to compile with a trait error *inside a dependency that never mentions
+# `generic-array`*:
+#
+#   error[E0277]: the trait bound `[u8; 32]: From<GenericArray<u8, ...>>` is not satisfied
+#   --> alloy-signer-local-2.5.0/src/private_key.rs:88
+#
+# `--check-cfg` is not optional: `--cfg` for a name the crate does not declare trips
+# the `unexpected_cfgs` lint, and CI compiles with `-D warnings`.
+#
+# The `RUSTFLAGS` environment variable *replaces* this list rather than extending it,
+# so CI carries the same flags in `.github/workflows/rust.yml` — keep the two in sync.
+[build]
+rustflags = ["--cfg", "relaxed_coherence", "--check-cfg", "cfg(relaxed_coherence)"]

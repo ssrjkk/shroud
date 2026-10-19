@@ -470,11 +470,12 @@ to change. That part is genuinely well built, and it means a key swap is *visibl
 
 What is missing: continuous checking. The SDK only refuses to encrypt when the caller
 passes `networkParams` + `fhePublicKeyHash`; without them the check is skipped, not failed.
-The node checks at startup whenever `enforce_key_pin = true`, which is now the default —
-a node without pins refuses to boot — but the check still happens once, at startup.
+The node checks at startup whenever `enforce_key_pin = true` — now the default — and a node
+without `fhe.public_key_hash` + `contracts.network_params` refuses to boot rather than run
+unpinned. But the check still happens once, at startup.
 
-Consequence: a malicious sequencer substituting `s_pub` is **not** detected by anything that is
-on by default. It is not an availability failure, which is what this finding used to claim —
+Consequence: a malicious sequencer substituting `s_pub` is **not** detected mid-epoch by
+anything. It is not an availability failure, which is what this finding used to claim —
 there is no participant that would notice. The sequencer can publish its own key, harvest the
 ciphertexts submitted under it, and decrypt them, and every participant will treat the result as
 normal. The on-chain pin still gives you *forensic* detection after the fact (the old hash is
@@ -487,14 +488,14 @@ fail-closed:** `NetworkParamsClient` plus `SdkConfig.networkParams` / `fhePublic
 `uploadAndMonetize` verify `isCurrentKey` before it builds a payload, and a client whose
 encryptor actually encrypts under a declared key now *refuses to construct* without
 `networkParams` (unless `allowUnpinnedKey` is set for deployments that pin out of band) — the
-old silent skip is gone. **The node half now exists but is opt-in:** with `node.enforce_key_pin
+old silent skip is gone. **The node half is the default too:** with `node.enforce_key_pin
 = true` (plus `fhe.public_key_hash` and `contracts.network_params`) the node compares the
-on-chain key hash at startup and refuses to run on a mismatch, and the startup log is a `warn`,
-not an `info`, when the check is off — an operator who never sees the warning is not looking.
-It defaults to off — the devnet config sets neither field — and it is a startup check, not a
-continuous one: a rotation that lands mid-epoch is not caught until the next restart. So the
-finding stands as **not mitigated for any default configuration**, but the unsafe defaults are
-now loud on both sides instead of silent.
+on-chain key hash at startup and refuses to run on a mismatch; when the check is off the
+startup log is a `warn`, not an `info`, so an operator who never sees the warning is not
+looking. A node that turns it on without the two pin fields does not start at all — the
+devnet config sets it false explicitly. It is still a startup check, not a continuous one:
+a rotation that lands mid-epoch is caught at the next restart, not before the next commit.
+So the finding stands as **mitigated at boot, not mid-epoch**.
 
 ### F-09 — Committee minority decryption (ADV6) — **Mitigated**
 Shamir t-of-n. `DecryptionGate` additionally restricts *what* may be decrypted: a member's

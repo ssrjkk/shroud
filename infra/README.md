@@ -96,7 +96,7 @@ chain_id = 31337          # verified against the RPC at startup; mismatch refuse
 [contracts]
 cipher_task = "0x..."     # zero address = watcher matches nothing (warns, still runs)
 payment_vault = "0x..."
-network_params = "0x..."  # only needed with enforce_key_pin
+network_params = "0x..."  # required by the default enforce_key_pin (see [node] below)
 
 [node]
 operator_key = "0x..."    # pays gas, receives rewards; NEVER commit a funded key
@@ -109,18 +109,22 @@ bls_pub_key = "0x..."     # per-task registration identity (must be unique per t
 # accordingly.
 min_epoch_window = { secs = 300, nanos = 0 }  # refuse commits with less time left (a
                           # commit that cannot finish before the deadline is burned gas)
-enforce_key_pin = false   # opt-in: refuse to start unless fhe.public_key_hash equals
+enforce_key_pin = true    # default: refuse to start unless fhe.public_key_hash equals
                           # the on-chain pin (one check at boot, not per epoch).
-                          # Off logs a WARN naming F-08: without the pin a substituted
-                          # s_pub is undetectable. Devnet sets neither field.
-strict_weights = false    # opt-in: refuse epochs whose seed weights are not a decodable
+                          # Needs fhe.public_key_hash + contracts.network_params, else
+                          # the node refuses to boot. Off logs a WARN naming F-08: without
+                          # the pin a substituted s_pub is undetectable. Devnet sets it false.
+strict_weights = true     # default: refuse epochs whose seed weights are not a decodable
                           # shroud/weights/v1 file, instead of executing from genesis
-                          # zeros. Default off is a consensus choice (every node running
-                          # this code agrees on zeros); turn on when buyers always
-                          # publish SDK-encoded seeds and drift must be loud.
+                          # zeros. Turn it off only where the deployment knowingly serves
+                          # non-file pins (devnet mocks).
 
 [fhe]
 backend = "reference"     # reference | tfhe-short-integer | tfhe-concrete | accelerator
+# public_key_hash = "0x..."  # REQUIRED while enforce_key_pin is on (the default): the
+                           # keccak(s_pub) the chain pins. Without it the node refuses
+                           # to boot. The devnet config sets enforce_key_pin = false
+                           # instead — its mock coprocessor publishes no pin.
 scale = 10000             # fixed-point scale; must match the shards' quantization
 lr_q16 = 65536            # learning rate, Q16.16 (65536 = 1.0)
 l2_q16 = 65               # L2 shrinkage, Q16.16

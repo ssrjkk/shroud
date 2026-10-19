@@ -170,7 +170,7 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 | Disputes target the real winner | **Enforced.** A losing committer cannot redirect a dispute onto an honest epoch. |
 | Disputing is rational | **Enforced.** `reexecutionBps` of the lock goes to reporters; the winner's bond slashes into the buyer refund on quorum reject. |
 | `Disclosed` means decrypted | **Enforced.** `withdraw` requires the threshold gate. |
-| Key substitution is detected before upload | **Enforced, fail-closed for real encryptors.** A confidential encryptor with a declared key refuses to run without `networkParams` (unless `allowUnpinnedKey`); node-side check is opt-in but its absence is a startup `WARN`. |
+| Key substitution is detected before upload | **Enforced, fail-closed for real encryptors.** A confidential encryptor with a declared key refuses to run without `networkParams` (unless `allowUnpinnedKey`); the node-side check is on by default at startup — it refuses to boot without pins or on a mismatch. |
 | Cleartext upload by omission | **Enforced.** Non-encrypting encryptors are refused without `allowUnencrypted`. |
 | Wrong-chain signing | **Enforced.** A configured `chainId` mismatch is a hard error. |
 | Hostile DA | **Enforced.** CIDs validated pre-request, responses size-capped and timed out, payloads re-hashed locally against the on-chain pin. |
@@ -183,7 +183,7 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 | Slashable contribution bond | **Opt-in, not a fraud proof.** `setContributionBondRequirement` + slash-to-treasury exists; no requirement by default and no on-chain proof of poison. |
 | Full on-chain STARK verification | **NOT implemented.** Segmented path is reachable (`commitEpochSegmented`) but no prover exists; sampled on chain, completed off-chain. See `05` §3. |
 | Committee cannot decrypt rows | **NOT mitigated, by design** (residual F-10). |
-| Key-substitution detection by default | **NOT enforced for default configs** (fail-closed only once a confidential encryptor declares its key; node opt-in; forensic detection after the fact). |
+| Key-substitution detection by default | **Enforced at boot, not mid-epoch** (fail-closed for confidential encryptors that declare a key; the node checks the on-chain pin at startup by default and refuses to boot without it; forensic detection after the fact). |
 
 ## Roadmap
 
@@ -196,7 +196,7 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
   maturity; fee-on-transfer fail-closed accounting; admin controls under test.
 - **Compute:** deterministic execution engine wired into the worker (commit, re-execute,
   commit-reveal disputes from own commits); `tfhe-rs` backend + remote DA behind cargo features;
-  inbound mesh throttling per peer IP + stream cap; `strict_weights` opt-in; two-node
+  inbound mesh throttling per peer IP + stream cap; `strict_weights` on by default; two-node
   devnet agreement check in CI.
 - **Clients & ops:** SDK upload/weights/key-pin (fail-closed)/DA hardening + DecryptionGate
   client, Telegram ops bot with read coverage + per-chat abuse quotas + alert dedupe,

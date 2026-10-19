@@ -492,13 +492,25 @@ impl Config {
             .into());
         }
         if self.contracts.cipher_task == Address::ZERO {
-            return Err(ConfigError::Missing("contracts.cipher_task").into());
+            return Err(ConfigError::Missing {
+                field: "contracts.cipher_task",
+                reason: None,
+            }
+            .into());
         }
         if self.contracts.payment_vault == Address::ZERO {
-            return Err(ConfigError::Missing("contracts.payment_vault").into());
+            return Err(ConfigError::Missing {
+                field: "contracts.payment_vault",
+                reason: None,
+            }
+            .into());
         }
         if self.node.operator_key.is_empty() {
-            return Err(ConfigError::Missing("node.operator_key").into());
+            return Err(ConfigError::Missing {
+                field: "node.operator_key",
+                reason: None,
+            }
+            .into());
         }
         if self.fhe.lanes_per_ciphertext == 0 || !self.fhe.lanes_per_ciphertext.is_power_of_two() {
             return Err(ConfigError::Invalid {
@@ -589,11 +601,31 @@ impl Config {
         }
         // A pin that cannot be compared is not a pin. Rejecting it here is the difference between
         // "the operator forgot a field" and "the node ran an epoch under a superseded key".
+        // The reason names the opt-out, because `enforce_key_pin` is on by default: an operator
+        // who did not know that would otherwise read "missing field" as a bug in the node.
         if self.node.enforce_key_pin && self.fhe.public_key_hash.is_none() {
-            return Err(ConfigError::Missing("fhe.public_key_hash").into());
+            return Err(ConfigError::Missing {
+                field: "fhe.public_key_hash",
+                reason: Some(
+                    "node.enforce_key_pin is on, so the node needs the keccak(s_pub) the chain \
+                     pins to compare against. Set fhe.public_key_hash + \
+                     contracts.network_params, or turn the check off explicitly with \
+                     `node.enforce_key_pin = false` (devnet mocks publish no pin)",
+                ),
+            }
+            .into());
         }
         if self.node.enforce_key_pin && self.contracts.network_params == Address::ZERO {
-            return Err(ConfigError::Missing("contracts.network_params").into());
+            return Err(ConfigError::Missing {
+                field: "contracts.network_params",
+                reason: Some(
+                    "node.enforce_key_pin is on, so the node needs the NetworkParams contract to \
+                     read the on-chain pin from. Set contracts.network_params, or turn the check \
+                     off explicitly with `node.enforce_key_pin = false` (devnet mocks publish no \
+                     pin)",
+                ),
+            }
+            .into());
         }
         // Parse the key at load rather than at the first `registerNode`: a typo in the one value
         // the contract stores as this node's identity should stop the node, not cost gas later.
@@ -911,7 +943,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::Config(ConfigError::Missing("contracts.cipher_task"))
+                Error::Config(ConfigError::Missing {
+                    field: "contracts.cipher_task",
+                    ..
+                })
             ),
             "got {err:?}"
         );
@@ -934,7 +969,10 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::Config(ConfigError::Missing("node.operator_key"))
+                Error::Config(ConfigError::Missing {
+                    field: "node.operator_key",
+                    ..
+                })
             ),
             "got {err:?}"
         );
@@ -1085,9 +1123,19 @@ mod tests {
         assert!(
             matches!(
                 err,
-                Error::Config(ConfigError::Missing("fhe.public_key_hash"))
+                Error::Config(ConfigError::Missing {
+                    field: "fhe.public_key_hash",
+                    ..
+                })
             ),
             "got {err:?}"
+        );
+        // The message has to be actionable: `enforce_key_pin` is on by default, so an operator
+        // who never read the docs meets this error first and must be told the opt-out.
+        let text = err.to_string();
+        assert!(
+            text.contains("enforce_key_pin = false"),
+            "the error must name the opt-out, got: {text}"
         );
 
         // Opting out of the pin is an explicit operator choice, and then the missing hash is
@@ -1101,7 +1149,10 @@ mod tests {
         assert!(
             matches!(
                 cfg.validate().expect_err("the pin has no contract to read"),
-                Error::Config(ConfigError::Missing("contracts.network_params"))
+                Error::Config(ConfigError::Missing {
+                    field: "contracts.network_params",
+                    ..
+                })
             ),
             "the pin needs an address"
         );
@@ -1235,7 +1286,8 @@ mod tests {
         // Each of these is a config that parses fine but makes the node useless:
         // no chain to follow, no store to fetch from, nothing it may fetch/prove/
         // redeem, or a busy-loop poll/announce. Fail closed with the field's name.
-        let cases: [(&str, fn(&mut Config)); 9] = [
+        type Case = (&'static str, fn(&mut Config));
+        let cases: [Case; 9] = [
             ("chain.rpc_url", |c: &mut Config| {
                 c.chain.rpc_url = "   ".into();
             }),
@@ -1267,9 +1319,9 @@ mod tests {
         for (field, mutate) in cases {
             let mut cfg = base();
             mutate(&mut cfg);
-            let err = cfg
-                .validate()
-                .expect_err(&format!("{field} must be rejected"));
+            let Err(err) = cfg.validate() else {
+                panic!("{field} must be rejected");
+            };
             assert!(
                 matches!(err, Error::Config(ConfigError::Invalid { .. })),
                 "got {err:?} for {field}"
@@ -1287,8 +1339,9 @@ mod tests {
         ] {
             let mut cfg = base();
             cfg.shard.da_endpoint = ok.into();
-            cfg.validate()
-                .expect(&format!("{ok} is served and must validate"));
+            if let Err(e) = cfg.validate() {
+                panic!("{ok} is served and must validate, got: {e}");
+            }
         }
     }
 }

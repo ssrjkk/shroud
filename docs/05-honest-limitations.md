@@ -176,6 +176,14 @@ on encrypted data. Neither property is hidden: both are in the module docs.
 
 What remains true:
 
+- The build needs `--cfg relaxed_coherence`, and that was not committed: `alloy-signer-local`
+  2.5.0 uses a `From<GenericArray<T, N>> for [T; N]` impl that `generic-array` gates behind
+  that cfg (the impl is an orphan-rule violation, so the crate offers `Into` instead). The
+  flag lived in one shell on 2026-10-18 and in no committed file, so `cargo check --locked
+  --all-features` could not build the crate at all — and the error names a trait bound
+  inside `alloy-signer-local`, never mentioning `generic-array`, which is what makes it
+  hard to read. It now lives in `node/.cargo/config.toml` and in the CI `RUSTFLAGS`, and
+  `infra/node/Dockerfile` copies the config into its dependency-cache stage.
 - The sandbox this was developed in cannot *link* Rust (`link.exe` is absent and
   Smart App Control blocks freshly compiled DLLs), so `cargo check`/`cargo test` run on CI,
   never locally — `cargo fmt --check` (parse + layout) is the one Rust gate that runs in the
@@ -189,8 +197,9 @@ What remains true:
   re-arms settlement at the earliest channel `unlockAt` instead of burning gas on the revert.
   Operator-visible consequence — committee/buyer legs land up to one reward window after the
   last epoch.
-- `node.strict_weights` (default off) turns the genesis-zeros fallback into a hard error for
-  deployments whose buyers always publish SDK-encoded seed files.
+- `node.strict_weights` is on by default: the genesis-zeros fallback is a hard error for
+  deployments whose buyers always publish SDK-encoded seed files. Deployments that knowingly
+  serve non-file pins (devnet mocks) opt out explicitly with `strict_weights = false`.
 
 ## 9. What is genuinely finished in this repo
 

@@ -6,6 +6,66 @@ first tagged release.
 
 ## Unreleased
 
+### Node: the build needed a flag nobody set — CI could not compile the crate
+
+- `alloy-signer-local` 2.5.0 calls `<[u8; 32]>::from(self.to_field_bytes())`, and the
+  `From<GenericArray<T, N>> for [T; N]` impl that requires is an orphan-rule violation,
+  so `generic-array` gates it behind `--cfg relaxed_coherence` and offers `Into`
+  instead. The flag was set in one developer's shell on 2026-10-18 and nowhere else:
+  **CI compiled with `RUSTFLAGS: "-D warnings"` only, so `cargo check --locked
+  --all-features` could not build the crate at all** — the failure is a trait error
+  inside a dependency that never mentions `generic-array`, which is what makes it
+  hard to read.
+- The flag now lives in the repository, in two places that must agree: `node/.cargo/config.toml`
+  (for every local build) and the CI `RUSTFLAGS` (the environment variable *replaces*
+  `build.rustflags` rather than extending it). `--check-cfg cfg(relaxed_coherence)`
+  comes with it: `--cfg` for a name the crate does not declare trips `unexpected_cfgs`,
+  and CI compiles with `-D warnings`.
+- `infra/node/Dockerfile` needed the same fix: its dependency-cache stage copied only
+  `Cargo.toml` / `Cargo.lock` / `build.rs` / `proto`, so the image build would have
+  failed the same way before the real source was even copied. It now copies
+  `node/.cargo` as well.
+- Verified: `cargo check --locked --all-targets --all-features` and `cargo fmt --all -- --check`
+  pass with the flag; without it the crate does not compile. `cargo clippy` is clean on both
+  feature sets (with `--all-targets`, which the CI invocation does not lint), and the suites
+  run green: 174 node tests and 14 `shroud-core` tests.
+
+### Node: key-pin and weight checks are on by default, config fails closed at load
+
+- `node.enforce_key_pin` and `node.strict_weights` default to **true**. A node with the
+  pin check on but no `fhe.public_key_hash` / `contracts.network_params` refuses to boot
+  instead of running unpinned, and an epoch whose seed weights are not a decodable
+  `shroud/weights/v1` file is a hard error instead of a silent fallback to genesis zeros.
+  Devnet opts out explicitly, per field.
+- `Config::validate` now rejects the configurations that parse but make the node useless:
+  an empty `chain.rpc_url` or `shard.da_endpoint`, a `da_endpoint` scheme nothing serves
+  (`s33://`), whitespace around the endpoint, a zero `shard.max_ciphertext_bytes` /
+  `stark.max_proof_bytes` / `payment.redeem_gas_limit`, and a zero `chain.poll_interval`
+  or `mesh.announce_interval` (those two busy-loop instead of polling).
+- A node that refuses to boot now says why. `ConfigError::Missing` carries an optional
+  reason, and the two pin checks use it: with `enforce_key_pin` on by default, "missing
+  required field `fhe.public_key_hash`" was a dead end — the message now names the
+  opt-out (`node.enforce_key_pin = false`) as well as the two fields to set instead.
+- F-08 in `docs/04-threat-model.md` is re-graded from "not mitigated" to **"mitigated at
+  boot, not mid-epoch"** — the node-side check is on by default, but it still runs once,
+  at startup, and the SDK half is still skipped when the caller does not pass a pin.
+- Every place that still described the old behaviour was corrected to match the code:
+  `README.md`, `OPERATOR_RUNBOOK.md`, `USER_GUIDE.md`, `infra/README.md`,
+  `AUDIT_SCOPE.md`, `TRUST_ASSUMPTIONS.md`, `docs/01-architecture.md`,
+  `docs/05-honest-limitations.md`, `bot/README.md`, and the F-08 rows of
+  `web/security.html` + `web/protocol.html` (RU and EN in lockstep).
+- Robustness on hot paths: the watcher drops pending logs that carry no block number
+  instead of folding them as block 0 (which would reorder a commit against its
+  settlement); the TFHE backend returns a typed error on a truncated header instead of
+  panicking; the mesh throttle and the epoch lookup fail closed instead of `expect`ing;
+  a closed shard-fetch semaphore surfaces as an error rather than a task panic.
+- `hostile_headers_are_errors_never_panics` was not testing what its comment said.
+  The header it builds is `b"4294967295\04294967295\0"`, and `\042` is the *octal*
+  escape 0o42 (a quote) — not a NUL followed by "42" — so the decoder rejected the
+  header one step earlier, on the non-digit, and the overflow the test is named after
+  was never reached. Rewritten with `\x00`, which is unambiguous, and it now exercises
+  the `rows × features` overflow it claims to.
+
 ### Site: mobile matrix — 7 devices, 3 real fixes
 
 - Ran the site through emulated devices over CDP (iPhone SE/14, Pixel 7,

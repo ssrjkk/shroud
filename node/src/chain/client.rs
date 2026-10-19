@@ -541,12 +541,16 @@ impl OrchestratorClient {
             warn!("node.enforce_key_pin is off; the on-chain FHE key is NOT checked — a substituted s_pub would go undetected");
             return Ok(());
         }
-        let local = cfg
-            .fhe
-            .public_key_hash
-            .ok_or(ConfigError::Missing("fhe.public_key_hash"))?;
+        let local = cfg.fhe.public_key_hash.ok_or(ConfigError::Missing {
+            field: "fhe.public_key_hash",
+            reason: Some("node.enforce_key_pin is on, so the node needs the local keccak(s_pub) to compare against the on-chain pin"),
+        })?;
         if self.network_params.is_zero() {
-            return Err(ConfigError::Missing("contracts.network_params").into());
+            return Err(ConfigError::Missing {
+                field: "contracts.network_params",
+                reason: Some("node.enforce_key_pin is on, so the node needs the NetworkParams contract to read the on-chain pin from"),
+            }
+            .into());
         }
         let on_chain = self.current_key_hash().await?;
         if on_chain != local {
