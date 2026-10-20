@@ -12,6 +12,7 @@ jobs:
   test:
     name: server unit tests
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: infra/shardstore
