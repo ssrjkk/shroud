@@ -67,6 +67,36 @@ function stubFetch(answer) {
 
 const ok = () => ({ ok: true, result: true });
 
+test("a long poll is not aborted by the client's own request deadline", async () => {
+  // A long poll holds the request open for its whole window, so the deadline has to
+  // clear that window. With the ordinary deadline (15s) shorter than the poll (30s),
+  // the client aborted its own poll: every idle poll ended in a timeout error and a
+  // two-second sleep, and the log reported a failure the bot caused itself.
+  const orig = globalThis.fetch;
+  globalThis.fetch = async (_url, init) => {
+    // The stub honours the abort signal, like a real fetch does.
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(resolve, 120);
+      init.signal.addEventListener("abort", () => {
+        clearTimeout(timer);
+        const err = new Error("aborted");
+        err.name = "AbortError";
+        reject(err);
+      });
+    });
+    return { json: async () => ({ ok: true, result: [] }) };
+  };
+  try {
+    // A 50ms deadline against a 1s poll window: the poll must survive it.
+    const bot = new TelegramBot("t", { log: silent, timeoutMs: 50 });
+    const { updates, nextOffset } = await bot.getUpdates(0, 1);
+    assert.deepEqual(updates, []);
+    assert.equal(nextOffset, 0);
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
 test("answerCallbackQuery acks with the toast text", async () => {
   const net = stubFetch(ok);
   try {

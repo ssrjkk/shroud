@@ -32,6 +32,15 @@ export class TelegramError extends Error {
 export const TELEGRAM_TEXT_LIMIT = 4096;
 const TRUNC_SUFFIX = "\n…(truncated)";
 
+/**
+ * How much longer than the long-poll window the request deadline is.
+ *
+ * Telegram holds a `getUpdates` request open until it has an update or the
+ * window ends, so the deadline has to clear the window plus the round trip -
+ * otherwise the client aborts its own poll (see `getUpdates`).
+ */
+const LONG_POLL_SLACK_MS = 10_000;
+
 export function truncateText(text) {
   const s = String(text);
   if (s.length <= TELEGRAM_TEXT_LIMIT) return s;
@@ -81,7 +90,7 @@ export class TelegramBot {
     return Date.now() - this.#waitSince[0];
   }
 
-  async #call(method, payload = {}, { retries = 3 } = {}) {
+  async #call(method, payload = {}, { retries = 3, timeoutMs = this.#timeoutMs } = {}) {
     const url = `${this.#base}/${method}`;
 
     for (let attempt = 0; ; attempt++) {
@@ -90,7 +99,7 @@ export class TelegramBot {
       // abort this attempt and fail fast (no retry — retrying a stall just
       // re-stalls the queue behind it).
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), this.#timeoutMs);
+      const timer = setTimeout(() => ac.abort(), timeoutMs);
       try {
         response = await fetch(url, {
           method: "POST",
@@ -100,7 +109,7 @@ export class TelegramBot {
         });
       } catch (cause) {
         if (cause?.name === "AbortError") {
-          throw new Error(`Telegram ${method}: timed out after ${this.#timeoutMs}ms`);
+          throw new Error(`Telegram ${method}: timed out after ${timeoutMs}ms`);
         }
         // Network-level failure: DNS, offline, TLS. Retrying is safe here
         // because every method used by this bot is either a read or a send
@@ -236,11 +245,23 @@ export class TelegramBot {
    * `message` so inline-keyboard presses arrive on the same poll loop.
    */
   async getUpdates(offset, timeoutSeconds = 30) {
-    const updates = await this.#call("getUpdates", {
-      offset,
-      timeout: timeoutSeconds,
-      allowed_updates: ["message", "callback_query"],
-    });
+    // A long poll holds the connection open for `timeoutSeconds` and answers only
+    // when an update arrives. The request deadline has to be *longer* than that
+    // window: with the ordinary deadline (15s) shorter than the poll (30s), the
+    // client aborted its own poll before Telegram answered, so every idle poll
+    // ended in a timeout error and a two-second sleep. Updates still arrived -
+    // Telegram answers as soon as it has one - but the bot was permanently
+    // reporting a failure that was its own doing.
+    const deadlineMs = Math.max(this.#timeoutMs, timeoutSeconds * 1000 + LONG_POLL_SLACK_MS);
+    const updates = await this.#call(
+      "getUpdates",
+      {
+        offset,
+        timeout: timeoutSeconds,
+        allowed_updates: ["message", "callback_query"],
+      },
+      { timeoutMs: deadlineMs }
+    );
     const fresh = updates.filter((u) => !this.#seen.has(u.update_id));
     for (const u of updates) this.#seen.add(u.update_id);
     // Bound the dedup set: this bot is long-lived and update ids grow forever.

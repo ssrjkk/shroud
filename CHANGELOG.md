@@ -6,6 +6,18 @@ first tagged release.
 
 ## Unreleased
 
+### Bot: the client aborted its own long poll
+
+- The Telegram client's request deadline (15 s) was shorter than the long-poll
+  window it asked for (30 s). Telegram holds a `getUpdates` request open until it
+  has an update or the window ends, so every *idle* poll was aborted by the
+  client's own deadline: the bot logged "command poll failed", slept two seconds
+  and polled again — on every quiet minute, forever. Updates still arrived
+  (Telegram answers as soon as it has one), so the bot was not blind, but the log
+  said "failed" continuously, and a log that always says "failed" tells an
+  operator nothing. The deadline now clears the poll window plus the round trip.
+- This is F-55 in the threat model: the site's finding count follows — 55.
+
 ### Threat model: the map now carries every defect that was fixed
 
 - F-40…F-46 covered the seven defects of the last pass. The fixes of the pass

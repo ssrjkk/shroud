@@ -708,6 +708,17 @@ the site, the harness and the node pin the same golden vector. Regression:
 `web/tests/equiv.mjs` — *"the lab leaf matches the golden digest"*, and
 `node/src/fhe.rs` — *"site_vectors_pin_the_digest_layout"*.
 
+### F-55 — The bot aborted its own long poll — **Mitigated**
+The Telegram client's request deadline (15s) was shorter than the long-poll window it
+asked for (30s). Telegram holds a `getUpdates` request open until it has an update or the
+window ends, so every *idle* poll was aborted by the client's own deadline: the bot logged
+"command poll failed", slept two seconds, and polled again — forever, on every quiet
+minute. Updates still arrived, because Telegram answers as soon as it has one, so the bot
+was not blind; but the log said "failed" continuously, and a log that always says "failed"
+tells an operator nothing. The deadline now clears the poll window plus the round trip.
+Regression: `bot/test/telegram.test.js` — *"a long poll is not aborted by the client's
+own request deadline"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.
