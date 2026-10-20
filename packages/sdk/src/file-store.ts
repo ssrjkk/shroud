@@ -31,6 +31,18 @@ export class FileShardStore implements ShardStore {
   /** 64 MiB, mirroring the reference service: anything larger is a mistake or an attack. */
   static readonly DEFAULT_MAX_OBJECT_BYTES = 64 * 1024 * 1024;
 
+  /**
+   * How old a `.tmp` file has to be before it is treated as an orphan.
+   *
+   * A crash between temp-write and rename leaves `<cid>.<pid>.<rand>.tmp` behind. Temp
+   * files are never complete objects, so sweeping them at open is safe - but only the
+   * orphans: a temp file that another process is writing *right now* carries the same
+   * suffix, and deleting it makes that writer's rename fail with ENOENT. The shard is
+   * then never stored and the caller sees a spurious failure, so the sweep skips
+   * anything young enough to still be in flight.
+   */
+  static readonly ORPHAN_TEMP_AGE_MS = 60 * 60_000;
+
   private readonly dir: string;
   private readonly maxObjectBytes: number;
 
@@ -39,17 +51,14 @@ export class FileShardStore implements ShardStore {
     this.dir = dir;
     this.maxObjectBytes = opts.maxObjectBytes ?? FileShardStore.DEFAULT_MAX_OBJECT_BYTES;
     mkdirSync(dir, { recursive: true });
-    // A crash between temp-write and rename leaves `<cid>.<pid>.<rand>.tmp` behind.
-    // Temp files are never complete objects, so sweeping them at open is safe and
-    // keeps a long-lived directory from filling with orphans.
+    const cutoff = Date.now() - FileShardStore.ORPHAN_TEMP_AGE_MS;
     for (const name of readdirSync(dir)) {
-      if (name.endsWith(".tmp")) {
-        try {
-          unlinkSync(join(dir, name));
-        } catch {
-          // Raced with a live writer: its rename either already happened (harmless)
-          // or will recreate the temp it needs.
-        }
+      if (!name.endsWith(".tmp")) continue;
+      try {
+        if (statSync(join(dir, name)).mtimeMs > cutoff) continue; // живой temp
+        unlinkSync(join(dir, name));
+      } catch {
+        // Raced with a live writer or another sweeper: harmless either way.
       }
     }
   }
@@ -81,7 +90,19 @@ export class FileShardStore implements ShardStore {
       // temp path — on Windows the second rename over an existing file throws.
       const tmp = `${path}.${process.pid}.${randomBytes(16).toString("hex")}.tmp`;
       writeFileSync(tmp, payload);
-      renameSync(tmp, path);
+      try {
+        renameSync(tmp, path);
+      } catch (e) {
+        // Another process stored the same content-addressed bytes first. The name is the
+        // hash of the bytes, so the file that is there is the file we wanted - and on
+        // Windows the rename over an existing file throws, which is not a failure.
+        if (!existsSync(path)) throw e;
+        try {
+          unlinkSync(tmp);
+        } catch {
+          // The temp is already gone: the other writer's rename took it.
+        }
+      }
     }
     return { cid, digest };
   }

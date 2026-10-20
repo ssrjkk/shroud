@@ -49,7 +49,18 @@ console.log(`1. keccak vectors: ${V.keccak.length} ok`);
 for (const p of V.pipelines) {
   const bytes = C.encodeNoopShard(p.features, p.rows, p.scale);
   const commit = C.noopRowCommitment(p.rows, p.scale);
-  const cid = hex(C.keccak256Bytes(bytes));
+  // The leaf the NODE builds from the chain's contribution record: the transport
+  // address the contributor submitted (sha256 of the payload) and the on-chain pin
+  // (keccak256 of the payload). The ctRoot is the chain's own running root.
+  const ctDigest = hex(C.keccak256Bytes(bytes));
+  const transportCid = hex(C.sha256Bytes(bytes));
+  const ctRoot = hex(C.keccak256Bytes(
+    Buffer.concat([
+      C.keccak256Bytes(Buffer.from("SHROUD/CTROOT/v1")),
+      (() => { const b = Buffer.alloc(4); b.writeUInt32BE(0); return b; })(),
+      Buffer.from(transportCid.slice(2), "hex"),
+    ])
+  ));
   const flat = [];
   p.rows.forEach((r) => r.forEach((v) => flat.push(Math.round(v * p.scale))));
   const res = C.referenceStep({
@@ -61,16 +72,18 @@ for (const p of V.pipelines) {
   const input = {
     taskId: taskHex, epoch: 0, chainId: 31337,
     cipherTask: "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-    ctRoot: cid, prevDigest: "0x" + "00".repeat(32),
+    ctRoot, prevDigest: "0x" + "00".repeat(32),
     features: p.features, scale: p.scale, lrQ16: p.lrQ16, l2Q16: p.l2Q16,
     minibatch: p.minibatch, seed: p.seed, nRows: p.rows.length,
-    lossMeanQ: res.lossMeanQ, leaves: [{ index: 0, cid, ct: commit }], nextDigest: nextD,
+    lossMeanQ: res.lossMeanQ, leaves: [{ index: 0, cid: transportCid, ct: ctDigest }], nextDigest: nextD,
   };
   const e = p.expect;
   const checks = [
     ["bytes", bytes.length, e.bytes],
     ["commit", commit, e.commit],
-    ["cid", cid, e.cid],
+    ["ctDigest", ctDigest, e.ctDigest],
+    ["transportCid", transportCid, e.transportCid],
+    ["ctRoot", ctRoot, e.ctRoot],
     ["lanes", JSON.stringify(res.lanes), JSON.stringify(e.lanes)],
     ["loss", res.lossMeanQ, e.lossMeanQ],
     ["weightsDigest", nextD, e.weightsDigest],
@@ -81,7 +94,43 @@ for (const p of V.pipelines) {
 }
 console.log(`2. pipeline goldens: ${V.pipelines.length} presets ok`);
 
-// --- 3. invariant fuzz (fixed seed) + guard parity ---
+// --- 3. the lab's own construction reproduces the golden ---
+//
+// The lab (playground.js) builds the leaf itself. It used to put the row commitment
+// and keccak(payload) into the two leaf slots, which is not the leaf the node builds
+// from the chain - so the digest the lab printed was not the one a node commits, and
+// nothing in the repo noticed: the lab and the golden harness agreed with each other
+// and both disagreed with the node. This check pins the lab's construction to the
+// golden, which the node's own test pins to the node.
+{
+  const p = V.pipelines[0];
+  const bytes = C.encodeNoopShard(p.features, p.rows, p.scale);
+  const cid = "0x" + C.hex(C.sha256Bytes(bytes));
+  const pin = "0x" + C.hex(C.keccak256Bytes(bytes));
+  const root = new Uint8Array(68);
+  root.set(C.keccak256Bytes(Buffer.from("SHROUD/CTROOT/v1")), 0);
+  const t = cid.slice(2);
+  for (let i = 0; i < 32; i++) root[36 + i] = parseInt(t.substr(i * 2, 2), 16);
+  const ctRoot = "0x" + C.hex(C.keccak256Bytes(root));
+  const flat = [];
+  p.rows.forEach((r) => r.forEach((v) => flat.push(Math.round(v * p.scale))));
+  const res = C.referenceStep({
+    features: p.features, scale: p.scale, lrQ16: p.lrQ16, l2Q16: p.l2Q16,
+    minibatch: p.minibatch, prevLanes: new Array(p.features).fill(0), shards: [flat],
+  });
+  const td = C.traceDigest({
+    taskId: "0x" + C.hex(C.keccak256Bytes(Buffer.from("demo-task-1"))), epoch: 0, chainId: 31337,
+    cipherTask: "0x5FbDB2315678afecb367f032d93F642f64180aa3", ctRoot,
+    prevDigest: "0x" + "00".repeat(32),
+    features: p.features, scale: p.scale, lrQ16: p.lrQ16, l2Q16: p.l2Q16,
+    minibatch: p.minibatch, seed: p.seed, nRows: p.rows.length, lossMeanQ: res.lossMeanQ,
+    leaves: [{ index: 0, cid, ct: pin }], nextDigest: C.weightsDigest(res.lanes),
+  });
+  if (td !== p.expect.traceDigest) fail("the lab's leaf does not reproduce the golden digest");
+  console.log("3b. lab leaf matches the golden digest");
+}
+
+// --- 4. invariant fuzz (fixed seed) + guard parity ---
 {
   const rnd = mulberry32(424242);
   for (let it = 0; it < 400; it++) {
@@ -164,13 +213,15 @@ console.log(`2. pipeline goldens: ${V.pipelines.length} presets ok`);
     const p = V.pipelines[0];
     // full-layout replication on the first golden (all fields from vectors)
     const g = V.pipelines[0];
-    const leaves = [{ index: 0, cid: g.expect.cid, ct: g.expect.commit }];
+    // The leaf the node builds from the chain: the transport address and the on-chain
+    // pin. The ctRoot is the chain's running root over (leafIndex, ciphertextCid).
+    const leaves = [{ index: 0, cid: g.expect.transportCid, ct: g.expect.ctDigest }];
     const pre = Buffer.concat([
       Buffer.from("SHROUD/TRACE/v1\0"),
       ethers.getBytes(hex(C.keccak256Bytes(Buffer.from("demo-task-1")))),
       u32be(0), u64be(31337),
       ethers.getBytes("0x5FbDB2315678afecb367f032d93F642f64180aa3"),
-      ethers.getBytes(g.expect.cid), ethers.getBytes("0x" + "00".repeat(32)),
+      ethers.getBytes(g.expect.ctRoot), ethers.getBytes("0x" + "00".repeat(32)),
       u32be(g.features), u32be(g.scale), u32be(g.lrQ16), u32be(g.l2Q16), u64be(g.minibatch), u64be(g.seed),
       u64be(g.rows.length),
       (() => { const lb = Buffer.alloc(16); let L = BigInt(g.expect.lossMeanQ); for (let i = 15; i >= 0; i--) { lb[i] = Number(L & 0xffn); L >>= 8n; } return lb; })(),
@@ -178,6 +229,15 @@ console.log(`2. pipeline goldens: ${V.pipelines.length} presets ok`);
       ethers.getBytes(g.expect.weightsDigest),
     ]);
     if (ethers.keccak256(pre) !== g.expect.traceDigest) fail("ethers trace layout");
+    // The transport address is sha256 of the payload (the SDK's stores address it
+    // that way) and the on-chain pin is keccak256 of it. The two must not be mixed up.
+    const shardBytes = C.encodeNoopShard(g.features, g.rows, g.scale);
+    if (ethers.sha256(shardBytes).toLowerCase() !== g.expect.transportCid.toLowerCase()) {
+      fail("ethers sha256 transport cid");
+    }
+    if (ethers.keccak256(shardBytes).toLowerCase() !== g.expect.ctDigest.toLowerCase()) {
+      fail("ethers keccak ct digest");
+    }
     console.log("4. ethers cross-check ok");
   }
 }

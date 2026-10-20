@@ -6,6 +6,86 @@ first tagged release.
 
 ## Unreleased
 
+### ShardStore: an honest upload could be silently discarded
+
+- The "bot-timing" heuristic scored any client with a regular PUT cadence as a bot
+  (a fixed interval has a coefficient of variation of zero, which is the definition
+  of the anomaly it looks for), and a `HIGH` score answered the write with a
+  plausible `201` and stored **nothing**. The client was told the shard was stored,
+  the contract pinned its digest, and the encrypted rows were unrecoverable - the
+  upload looked successful at every layer. A regular cadence is what the SDK's own
+  upload loop produces, so it is not evidence of an attack. The honeypot now needs
+  a *hard* signal as well (a failed auth, a rate hit, a duplicate payload, range
+  abuse); timing alone no longer shadows a write.
+- The in-flight byte budget was checked once, on admission, and a body without
+  `Content-Length` reserved **zero** bytes - so the check passed and was never
+  re-applied while the body arrived. N such connections held N x 64 MiB with a
+  512 MiB budget: the memory guard did not guard memory, and the DA died under
+  every node that had to publish a shard. The budget is now re-checked as the body
+  arrives, and the excess is shed as backpressure (a retryable 503), not as a
+  silent drop.
+- A request whose handler rejected took the whole server down with it (the
+  rejection surfaced as an unhandled rejection, which the process treats as fatal).
+  The rejection is now caught per request and answered as a 500.
+
+### SDK: three ways to lose a shard that was already accepted
+
+- `FileShardStore` swept every `*.tmp` in its directory when it opened, so a second
+  process opening the store deleted the temp file the first one was about to
+  rename. The rename then failed and the shard was never stored - in a store
+  documented for multi-process use ("SDK uploads next to a node reading the same
+  dir"). The sweep now takes only orphans (older than an hour) and leaves a temp
+  that is still in flight alone.
+- Two processes putting the same content-addressed bytes for the first time both
+  passed the "does it exist" check, and the second rename over the existing file
+  threw on Windows. The content is identical by construction, so the store now
+  treats "the file is already there" as success.
+- A range pull was bounded by the *object* cap (64 MiB) instead of the requested
+  window, so a store that ignored `Range` made the client buffer the whole object
+  - twice that in the copy - for a window that may be a kilobyte. The
+  `Content-Range` header is now checked before the body is read, and the read
+  itself is bounded by the window.
+
+### Bot: state could be lost, a button could write "undefined", and the RPC key leaked
+
+- Every watchlist save used one temp path per process, so two chats saved at the
+  same time (the dispatcher runs handlers concurrently) landed in one file, and the
+  rename published a mixture of the two snapshots. The next start read that as
+  corruption, moved it aside and started empty - every chat lost its watchlist and
+  its alert overrides over one interleaved save. The writes are now atomic and
+  serialised per file.
+- A handler that failed answers with a plain string, and the inline-keyboard path
+  read `reply.text` off it - `undefined` - so a failed "refresh" press edited the
+  user's message to the literal text "undefined". The reply is now unwrapped the
+  same way the message path does it.
+- The watch and unwatch buttons render the full task view, which is `/task`-sized
+  work, but they were priced like the cheap `/watch` command. A chat could buy
+  five times the intended RPC amplification - exactly what the per-chat budget
+  exists to stop. The price now comes from what the press does.
+- The alert cursor was rewritten in place on every poll cycle, so a crash left a
+  truncated file; a truncated cursor reads as "no cursor", which restarts the scan
+  with an empty seen-set and an empty digest map - a duplicate-alert storm over the
+  whole window, and the loss of every remembered commit digest. It is written
+  atomically now.
+- The RPC URL was printed in the clear, and a managed RPC URL carries the
+  provider's API key in its path. The endpoint stays visible; the secret does not.
+
+### Site: the lab's trace digest was not the one a node commits
+
+- The leaf the node puts into the trace digest comes from the chain's contribution
+  record: the transport address the contributor submitted (`sha256` of the payload)
+  and the on-chain pin (`keccak256` of the payload). The lab and the golden
+  harness used the row commitment and `keccak(payload)` in those two slots, so the
+  digest the lab printed was not a digest any node would commit - and nothing in
+  the repo noticed, because the lab and the harness agreed with each other and
+  both disagreed with the node.
+- The goldens now model the real contribution: the transport address, the on-chain
+  pin, and the chain's own running `ctRoot`
+  (`keccak256(_EMPTY_ROOT || u32be(leafIndex) || ciphertextCid)`). The node's own
+  test confirms the new digests, the site reproduces them, and the lab now builds
+  the leaf the way the node does. The site grew a SHA-256 for the transport
+  address, cross-checked against `ethers` in CI.
+
 ### Contracts: an aborted task could be re-sealed, reopening the slash path
 
 - `sealTask` gated on `isSealed` alone, and `abort` leaves `isSealed` false — the task was

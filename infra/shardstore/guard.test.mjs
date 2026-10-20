@@ -127,6 +127,25 @@ describe("RiskEngine", () => {
     for (let i = 0; i < 8; i++) r.add("ip", RiskSignal.AUTH_FAIL);
     assert.equal(r.levelOf("ip"), RiskLevel.HIGH);
   });
+  it("тайминг сам по себе не считается нарушением", () => {
+    // Ровные интервалы — это и есть поведение собственного цикла загрузки SDK. Honeypot
+    // отвечает 201 и ничего не пишет, поэтому признать тайминг достаточным основанием
+    // для теневой бани значит выбросить данные честного клиента молча: контракт закрепит
+    // пинит несуществующего шарда, и зашифрованные строки восстановить нельзя.
+    const c = clock();
+    const r = new RiskEngine(cfg(), { now: c.now });
+    for (let i = 0; i < 40; i++) {
+      c.advance(500);
+      r.noteInterval("honest", "put");
+    }
+    assert.equal(r.levelOf("honest"), RiskLevel.HIGH, "по таймингу уровень действительно HIGH");
+    assert.equal(r.hasHardSignal("honest"), false, "но жёсткого сигнала нет");
+
+    // А настоящее нарушение — жёсткий сигнал.
+    r.add("honest", RiskSignal.AUTH_FAIL);
+    assert.equal(r.hasHardSignal("honest"), true);
+    assert.equal(r.hasHardSignal("stranger"), false, "незнакомый субъект не нарушал");
+  });
   it("bot-timing: ровные интервалы — аномалия, живые — нет", () => {
     const c = clock();
     const r = new RiskEngine(cfg(), { now: c.now });

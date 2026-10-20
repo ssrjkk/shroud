@@ -1273,7 +1273,13 @@ mod tests {
         struct Expect {
             bytes: usize,
             commit: String,
-            cid: String,
+            /// The on-chain pin: `keccak256(payload)`.
+            ct_digest: String,
+            /// The transport address the contributor submitted (`sha256(payload)`).
+            transport_cid: String,
+            /// The chain's `ctRoot` after this contribution:
+            /// `keccak256(_EMPTY_ROOT || u32be(leafIndex) || ciphertextCid)`.
+            ct_root: String,
             lanes: Vec<i32>,
             loss_mean_q: String,
             n_rows: u64,
@@ -1288,13 +1294,14 @@ mod tests {
 
         for p in &vectors.pipelines {
             let flat: Vec<f64> = p.rows.iter().flatten().copied().collect();
-            // Shard bytes exactly like the SDK's `NoopEncryptor`, then CID + commitment.
+            // Shard bytes exactly like the SDK's `NoopEncryptor`, then the on-chain pin
+            // (`keccak256` of the payload) and the row commitment.
             let bytes = noop_bytes(p.features, &flat);
             assert_eq!(bytes.len(), p.expect.bytes, "{}: shard length", p.name);
             assert_eq!(
                 format!("{:#x}", keccak256(&bytes)),
-                p.expect.cid,
-                "{}: shard CID",
+                p.expect.ct_digest,
+                "{}: shard ctDigest (the on-chain pin)",
                 p.name
             );
             let mut preimage = b"shroud/noop-row/v1\0".to_vec();
@@ -1315,7 +1322,7 @@ mod tests {
                 chain_id: 31_337,
                 cipher_task: Address::from_str("0x5FbDB2315678afecb367f032d93F642f64180aa3")
                     .expect("cipher task parses"),
-                ct_root: B256::from_str(&p.expect.cid).expect("cid parses"),
+                ct_root: B256::from_str(&p.expect.ct_root).expect("ct root parses"),
                 prev_weights_digest: B256::ZERO,
                 features: p.features,
                 scale: p.scale,
@@ -1327,8 +1334,10 @@ mod tests {
                 prev_weights_bytes: Vec::new(),
                 shards: vec![ShardInput {
                     leaf_index: 0,
-                    cid: B256::from_str(&p.expect.cid).expect("cid parses"),
-                    ct_digest: B256::from_str(&p.expect.commit).expect("ct parses"),
+                    // The leaf the node builds from the chain's contribution record: the
+                    // transport address the contributor submitted, and the on-chain pin.
+                    cid: B256::from_str(&p.expect.transport_cid).expect("transport cid parses"),
+                    ct_digest: B256::from_str(&p.expect.ct_digest).expect("ct digest parses"),
                     bytes,
                 }],
             };

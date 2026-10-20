@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeEvents, eventUid, commandFromVerdict, sendReply, shouldDeliverAlert, loadCursor, saveCursor, MAX_SEEN_DIGESTS, createDispatcher } from "../src/index.js";
+import { dedupeEvents, eventUid, commandFromVerdict, sendReply, shouldDeliverAlert, loadCursor, saveCursor, redactRpcUrl, MAX_SEEN_DIGESTS, createDispatcher } from "../src/index.js";
 import { emptyState, addWatch, setAlertOverride } from "../src/watchlist.js";
 import os from "node:os";
 import path from "node:path";
@@ -232,4 +232,18 @@ test("dispatcher isolates failures and keeps serving", async () => {
 test("dispatcher rejects a non-positive cap", () => {
   assert.throws(() => createDispatcher({ maxInFlight: 0 }), /positive integer/);
   assert.throws(() => createDispatcher({ maxInFlight: 1.5 }), /positive integer/);
+});
+
+test("the RPC URL is never logged with its key", () => {
+  // Managed RPC URLs carry the provider's API key in the path, so printing the URL as
+  // it is writes the key into stdout and into whatever collects it. The endpoint stays
+  // visible - the operator has to know *which* one - and only the secret is masked.
+  const url = "https://eth-mainnet.g.alchemy.com/v2/SuperSecretKey123";
+  const redacted = redactRpcUrl(url);
+  assert.ok(!redacted.includes("SuperSecretKey123"), `the key survived: ${redacted}`);
+  assert.ok(redacted.includes("alchemy.com"), `the endpoint must stay visible: ${redacted}`);
+  // Nothing else leaks either.
+  assert.ok(!redacted.includes("v2/SuperSecretKey123"));
+  // A URL we cannot parse is not printed at all.
+  assert.ok(!redactRpcUrl("not a url").includes("not a url"));
 });

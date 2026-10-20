@@ -332,11 +332,49 @@ test("FileShardStore survives concurrent puts and sweeps stale temps", async () 
     const [r1, r2] = await Promise.all([a.put(payload), a.put(payload)]);
     assert.equal(r1.cid, r2.cid);
     assert.deepEqual(await a.get(r1.cid), payload);
-    await fs.writeFile(join(dir, "deadbeef.12345.tmp"), "orphan");
+    // An orphan is only an orphan once it is old enough: a temp file another process is
+    // writing *right now* carries the same suffix, and deleting it makes that writer's
+    // rename fail - the shard is then never stored and the caller sees a spurious
+    // failure. So the sweep takes orphans, and leaves live temps alone.
+    const orphan = join(dir, "deadbeef.12345.tmp");
+    await fs.writeFile(orphan, "orphan");
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(orphan, old, old);
+    const live = join(dir, "cafebabe.67890.tmp");
+    await fs.writeFile(live, "in flight");
     const b = new FileShardStore(dir);
     assert.deepEqual(await b.get(r1.cid), payload);
     const names = await fs.readdir(dir);
-    assert.ok(!names.some((n) => n.endsWith(".tmp")), `orphan temps left: ${names}`);
+    assert.ok(!names.includes("deadbeef.12345.tmp"), `orphan temps left: ${names}`);
+    assert.ok(names.includes("cafebabe.67890.tmp"), `a live temp was deleted: ${names}`);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("FileShardStore does not lose a shard to another process's sweep", async () => {
+  // The store is documented for multi-process use ("SDK uploads next to a node reading
+  // the same dir"). A second process opening the store must not delete the temp file the
+  // first one is about to rename: the rename then fails, the shard is never stored, and
+  // the caller sees a failure for a write the store had already accepted.
+  const { FileShardStore } = await import("../dist/file-store.js");
+  const dir = await fs.mkdtemp(join(os.tmpdir(), "shroud-filestore-sweep-"));
+  try {
+    const writer = new FileShardStore(dir);
+    const payload = new TextEncoder().encode("sweep-race");
+    const cid = ethers.sha256(payload);
+    // The writer is mid-put: its temp exists, the rename has not happened yet. The temp
+    // name is `<object-path>.<pid>.<nonce>.tmp`.
+    const tempName = `${cid.slice(2)}.99999.deadbeef.tmp`;
+    await fs.writeFile(join(dir, tempName), payload);
+    // A second process opens the store: the sweep must leave the live temp alone.
+    new FileShardStore(dir);
+    const names = await fs.readdir(dir);
+    assert.ok(names.includes(tempName), `the sweep deleted a temp that was still in flight: ${names}`);
+    // The writer's own put still succeeds and stores the shard.
+    const res = await writer.put(payload);
+    assert.equal(res.cid, cid);
+    assert.deepEqual(await writer.get(cid), payload);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -533,6 +571,43 @@ test("HttpShardStore retries 503s with backoff and gives up after the budget", a
     }) as typeof fetch;
     await assert.rejects(() => store.get(cid), /: 404/);
     assert.equal(calls, 1); // deliberate answers are never retried
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("HttpShardStore.getRange refuses an oversized body without buffering it", async () => {
+  // A store that ignores `Range` and streams the whole object would otherwise make the
+  // client hold it - 64 MiB by default, twice that in the copy - for a window that may
+  // be a kilobyte. The read is bounded by the window, so the client stops reading a
+  // few bytes in.
+  const original = globalThis.fetch;
+  const cid = ethers.keccak256(new Uint8Array([1]));
+  let pulled = 0;
+  try {
+    globalThis.fetch = (async () => {
+      // One byte at a time, so the count of bytes the client actually took is visible.
+      // The stream is finite: a client that does not bound its read must still finish.
+      let sent = 0;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (sent >= 100_000) {
+            controller.close();
+            return;
+          }
+          sent += 1;
+          pulled += 1;
+          controller.enqueue(new Uint8Array(1));
+        },
+      });
+      return new Response(stream, { status: 200 });
+    }) as typeof fetch;
+    const store = new HttpShardStore("http://da.invalid");
+    await assert.rejects(() => store.getRange(cid, 0, 8), /ignored the Range header/);
+    assert.ok(
+      pulled < 10_000,
+      `the client read ${pulled} bytes for an 8 byte window: the read is not bounded by the window`
+    );
   } finally {
     globalThis.fetch = original;
   }

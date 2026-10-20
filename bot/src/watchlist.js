@@ -14,10 +14,11 @@
  * that cannot persist only costs continuity, never liveness.
  */
 
-import { writeFile, readFile, mkdir, rename } from "node:fs/promises";
+import { readFile, rename } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { ROOT } from "./config.js";
 import { isTaskId } from "./keyboards.js";
+import { writeAtomic } from "./atomic-write.js";
 
 export const WATCHLIST_FILE = resolve(ROOT, "state", "watchlist.json");
 
@@ -113,13 +114,19 @@ export async function loadWatchlist(file = WATCHLIST_FILE) {
   }
 }
 
-/** Atomic save: tmp file + rename, so a crash mid-write never leaves half JSON. */
+/**
+ * Atomic save: temp file + rename, so a crash mid-write never leaves half JSON.
+ *
+ * The write is serialised per file (see `atomic-write.js`): two chats can be saved at
+ * the same time (the dispatcher runs handlers concurrently), and a shared temp path
+ * means both writes land in one file - the second rename then publishes a mixture of
+ * the two snapshots, which is not valid JSON. The next start reads that as corruption,
+ * moves it aside and starts empty, so *every* chat loses its watchlist and its alert
+ * overrides over one interleaved save.
+ */
 export async function saveWatchlist(state, file = WATCHLIST_FILE) {
   try {
-    await mkdir(dirname(file), { recursive: true });
-    const tmp = `${file}.tmp-${process.pid}`;
-    await writeFile(tmp, JSON.stringify(state, null, 2));
-    await rename(tmp, file);
+    await writeAtomic(file, JSON.stringify(state, null, 2));
   } catch (err) {
     // Persistence loss costs per-chat continuity only; the in-memory state
     // keeps serving for the rest of this run.

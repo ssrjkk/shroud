@@ -11,10 +11,12 @@
  *      instead of replaying the whole chain or skipping the gap.
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+
+import { writeAtomic } from "./atomic-write.js";
 
 import { loadConfig, configuredContracts, ConfigError, ROOT } from "./config.js";
 import { TelegramBot } from "./telegram.js";
@@ -42,6 +44,7 @@ import {
   taskLinkKeyboard,
   rotationKeyboard,
   isTaskId,
+  callbackCost,
 } from "./keyboards.js";
 import {
   createFileStore,
@@ -124,15 +127,47 @@ export async function loadCursor(startBlock, catchupBlocks, file = CURSOR_FILE) 
 /** Cap on remembered event identities: enough for weeks of alerts, small on disk. */
 export const MAX_SEEN_EVENTS = 2000;
 
+/**
+ * The RPC endpoint without its secret.
+ *
+ * Managed RPC URLs carry the provider's API key in the path (`…/v2/<key>`), so
+ * printing the URL as it is writes the key into stdout and into whatever collects it.
+ * The host and the path shape stay visible - the operator still sees *which*
+ * endpoint - and only the last path segment is masked.
+ */
+export function redactRpcUrl(url) {
+  try {
+    const u = new URL(url);
+    const segments = u.pathname.split("/").filter(Boolean);
+    if (segments.length === 0) return `${u.protocol}//${u.host}`;
+    const last = segments[segments.length - 1];
+    const masked = last.length > 4 ? `${last.slice(0, 2)}…${last.slice(-2)}` : "…";
+    segments[segments.length - 1] = masked;
+    u.pathname = `/${segments.join("/")}`;
+    u.search = "";
+    u.username = "";
+    u.password = "";
+    return u.toString();
+  } catch {
+    // Not a URL we can parse: show only the shape, never the tail.
+    return "<rpc url>";
+  }
+}
+
 /** Cap on remembered commit digests: keys are short, values are 32-byte hashes. */
 export const MAX_SEEN_DIGESTS = 5000;
 
 export async function saveCursor(cursor, seen, digests = new Map(), file = CURSOR_FILE) {
   try {
-    await mkdir(dirname(file), { recursive: true });
     const arr = [...seen].slice(-MAX_SEEN_EVENTS);
     const entries = [...digests.entries()].slice(-MAX_SEEN_DIGESTS);
-    await writeFile(
+    // Temp + rename, serialised per file (see `atomic-write.js`): the cursor is rewritten
+    // on every poll cycle, so a crash in the middle of a plain write leaves a truncated
+    // file - and a truncated cursor reads as "no cursor", which restarts the scan from
+    // the catchup window with an empty seen-set and an empty digest map. That is a
+    // duplicate-alert storm over the whole window and the loss of every remembered
+    // commit digest.
+    await writeAtomic(
       file,
       JSON.stringify({ cursor, at: Date.now(), seen: arr, digests: Object.fromEntries(entries) }, null, 2)
     );
@@ -560,12 +595,14 @@ async function main() {
     chain = await ChainReader.connect(config, interfaces);
   } catch (err) {
     console.error(`\nCannot reach the chain: ${err.message}\n`);
-    console.error(`Check RPC_URL (currently ${config.rpcUrl}) and that the node is running.\n`);
+    // The RPC URL often carries the provider's API key in its path, so it is not printed
+    // as it is: the operator needs to know *which* endpoint, not its secret.
+    console.error(`Check RPC_URL (currently ${redactRpcUrl(config.rpcUrl)}) and that the node is running.\n`);
     process.exit(2);
   }
 
   const chainId = await chain.chainId();
-  log("info", config)(`connected to chain ${chainId} at ${config.rpcUrl}`);
+  log("info", config)(`connected to chain ${chainId} at ${redactRpcUrl(config.rpcUrl)}`);
 
   const missing = configuredContracts(config).filter((c) => !c.configured);
   if (missing.length) {
@@ -715,7 +752,13 @@ async function main() {
     }
     let verdict;
     try {
-      verdict = await abuseGuard.guardChat(chatId, CALLBACK_TEXT[parsed.op] ?? "/help");
+      // The press is priced by what it does, not by the command it resembles: the watch
+      // buttons render the full task view, which is `/task`-sized work.
+      verdict = await abuseGuard.guardChat(
+        chatId,
+        CALLBACK_TEXT[parsed.op] ?? "/help",
+        callbackCost(parsed)
+      );
     } catch {
       verdict = { action: "pass" };
     }
@@ -749,7 +792,10 @@ async function main() {
     };
     let edited = null;
     if (messageId !== undefined) {
-      edited = await bot.editMessage(chatId, messageId, reply.text, extra);
+      // `runHandler` answers with a plain string when the handler failed, so the reply is
+      // unwrapped rather than read as an object: `reply.text` on a string is undefined, and
+      // editing the user's message to the literal text "undefined" is worse than useless.
+      edited = await bot.editMessage(chatId, messageId, replyText(reply), extra);
     }
     if (!edited) {
       await sendReply(bot, chatId, reply, config.html);

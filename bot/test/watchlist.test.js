@@ -167,3 +167,36 @@ test("file store starts empty when constructed without history", async () => {
   const store = createFileStore(file);
   assert.deepEqual(store.listWatched(12345), []);
 });
+
+test("concurrent saves leave a readable file, not a mixture of two snapshots", async () => {
+  // Every save used one temp path per process, so two saves that overlapped wrote the
+  // same file: whichever rename landed last published a file the other writer may
+  // still have been writing. The next start reads that as corruption, moves it aside
+  // and starts empty, so *every* chat loses its watchlist over one interleaved save.
+  // The writes are now serialised per file, and this pins the invariant that matters:
+  // what lands on disk is always a readable state.
+  const file = tmpFile();
+  const first = { chats: { "1": { watched: ["11"], alerts: {} } } };
+  const second = { chats: { "2": { watched: ["22"], alerts: {} } } };
+  for (let i = 0; i < 25; i++) {
+    await Promise.all([saveWatchlist(first, file), saveWatchlist(second, file)]);
+  }
+  const raw = await readFile(file, "utf8");
+  assert.doesNotThrow(() => JSON.parse(raw), `the saved file is not valid JSON: ${raw.slice(0, 120)}`);
+  // And the file it left behind loads as a state, not as corruption.
+  const loaded = await loadWatchlist(file);
+  assert.ok(loaded.chats, "the saved state must load");
+});
+
+test("a failed save leaves no temp file behind", async () => {
+  // A leftover `<file>.tmp-*` is a half-written state file in the state directory: the
+  // loader only ever reads the state file itself, so it is not served, but it does
+  // accumulate.
+  const file = tmpFile();
+  await saveWatchlist({ chats: {} }, file);
+  const names = await readdir(path.dirname(file));
+  assert.ok(
+    !names.some((n) => n.startsWith(path.basename(file) + ".tmp-")),
+    `a temp file was left behind: ${names.join(", ")}`
+  );
+});

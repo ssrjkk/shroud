@@ -451,8 +451,13 @@ async function routePut(req, res, url, ip) {
   }
 
   // 5. HIGH + авторизованная запись → honeypot: правдоподобный 201, записи нет.
+  // Только при наличии «жёсткого» сигнала (см. `hasHardSignal`): honeypot отвечает 201 и
+  // ничего не пишет, поэтому честный клиент, попавший под тайминг-сигнал, потерял бы
+  // данные молча — контракт закрепил бы пинит несуществующего шарда, а зашифрованные
+  // строки восстановить было бы нельзя. Регулярная cadence — это ровно то, что делает
+  // собственный цикл загрузки SDK, а не признак злоумышленника.
   const level = risk.levelOf(ip);
-  const shadowed = level === RiskLevel.HIGH;
+  const shadowed = level === RiskLevel.HIGH && risk.hasHardSignal(ip);
 
   // 6. Bot-timing по фактическим PUT.
   risk.noteInterval(ip, "put");
@@ -471,6 +476,20 @@ async function routePut(req, res, url, ip) {
           // вернёт ровно столько, сколько пришло (включая обрыв по 413).
           accounted += c.length;
           inflightBytes += c.length;
+          // Бюджет проверяется и здесь, а не только на входе: тело без Content-Length
+          // резервировало 0, поэтому проверка на входе проходила всегда, и N таких
+          // соединений держали в памяти N x 64 МБ — при бюджете 512 МБ это OOM и
+          // остановка всех нод, которым нужно опубликовать или прочитать шард.
+          // Превышение — это backpressure: 503 с ретраем, а не потеря данных.
+          if (inflightBytes > guard.maxInflightBytes) {
+            aborted = true;
+            metrics.incr("route:put:503");
+            audit.warn("BACKPRESSURE_SHED", { ip, op: "put", inflightBytes, reserve: accounted });
+            send(res, 503, { error: "server busy" }, "application/json", retryAfter(1000));
+            req.destroy();
+            reject(new Error("server busy"));
+            return;
+          }
         }
         if (size > MAX_OBJECT_BYTES) {
           aborted = true;
@@ -750,7 +769,15 @@ const server = (TLS_CERT ? createHttpsServer : createHttpServer)(
   ...(TLS_CERT ? [{ cert: readFileSync(TLS_CERT), key: readFileSync(TLS_KEY) }] : []),
   (req, res) => {
     // Каждый запрос — в своём request-контексте: request_id во всех логах и ответах.
-    requestContext.run({ requestId: newRequestId() }, () => void handle(req, res));
+    // Реджект ловится здесь, а не всплывает как unhandledRejection: падение одного
+    // запроса не должно убивать весь DA-сервис (обработчик ниже выходит с кодом 1).
+    requestContext.run({ requestId: newRequestId() }, () => {
+      handle(req, res).catch((e) => {
+        const msg = e instanceof Error ? e.message : String(e);
+        audit.critical("HANDLER_REJECTED", { error: msg });
+        if (!res.headersSent) send(res, 500, { error: "internal error" });
+      });
+    });
   }
 );
 

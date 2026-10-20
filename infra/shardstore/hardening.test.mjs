@@ -187,6 +187,104 @@ describe("hardening", () => {
     }
   });
 
+  it("(в2) регулярная cadence честного клиента не попадает под honeypot", async () => {
+    // Тот же honeypot, что и в (в), но вызванный только таймингом: ровные интервалы
+    // между PUT — это ровно то, что делает собственный цикл загрузки SDK. Раньше такой
+    // клиент доходил до HIGH и получал правдоподобный 201 без записи: контракт
+    // закреплял пинит несуществующего шарда, и зашифрованные строки было нельзя
+    // восстановить. Теперь для теневой бани нужен ещё и настоящий сигнал нарушения.
+    const port3b = 18088;
+    const dir3b = mkdtempSync(join(tmpdir(), "shardstore-timing-"));
+    const c3b = spawnServer({
+      PORT: String(port3b), DATA_DIR: dir3b, AUTH_TOKEN: TOKEN,
+      GUARD_WRITE_BURST: "1000", GUARD_WRITE_RPS: "1000",
+      GUARD_RISK_HIGH: "5",      // достаточно двух-трёх ровных PUT
+      GUARD_RISK_MEDIUM: "1",
+      GUARD_RISK_MIN_INTERVALS: "3",
+      GUARD_TARPIT_MIN_MS: "1", GUARD_TARPIT_MAX_MS: "2",
+    });
+    const base3b = `http://127.0.0.1:${port3b}`;
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`${base3b}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("timing server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // Ровные интервалы → тайминг-сигнал → HIGH, но жёсткого сигнала нет.
+      let last;
+      for (let i = 0; i < 6; i++) {
+        const body = Buffer.from(`honest-${i}-${Date.now()}`);
+        const put = await fetch(`${base3b}/objects`, { method: "PUT", headers: authed(), body });
+        assert.equal(put.status, 201, `PUT #${i} должен пройти`);
+        const { cid } = await put.json();
+        assert.equal(cid, cidOf(body));
+        // И главное: объект ДЕЙСТВИТЕЛЬНО записан.
+        assert.equal(
+          (await fetch(`${base3b}/objects/${cid}`)).status,
+          200,
+          `объект #${i} обязан лежать в хранилище: клиент не должен терять данные молча`,
+        );
+        last = cid;
+        await new Promise((r) => setTimeout(r, 300)); // ровный интервал
+      }
+      assert.ok(last);
+    } finally {
+      c3b.kill("SIGKILL");
+      rmSync(dir3b, { recursive: true, force: true });
+    }
+  });
+
+  it("(в3) бюджет байтов держится и для тела без Content-Length", async () => {
+    // Тело без заявленной длины резервировало 0 байт, поэтому проверка бюджета на входе
+    // проходила всегда, и N таких соединений держали в памяти N x MAX_OBJECT_BYTES:
+    // при бюджете 512 МБ это OOM и остановка всех нод, которым нужно опубликовать шард.
+    const port3c = 18089;
+    const dir3c = mkdtempSync(join(tmpdir(), "shardstore-budget-"));
+    const c3c = spawnServer({
+      PORT: String(port3c), DATA_DIR: dir3c, AUTH_TOKEN: TOKEN,
+      GUARD_WRITE_BURST: "1000", GUARD_WRITE_RPS: "1000",
+      GUARD_MAX_INFLIGHT_BYTES: "4096",
+      MAX_OBJECT_BYTES: "1048576",
+      GUARD_TARPIT_MIN_MS: "1", GUARD_TARPIT_MAX_MS: "2",
+    });
+    const base3c = `http://127.0.0.1:${port3c}`;
+    try {
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        try {
+          const r = await fetch(`${base3c}/healthz`);
+          if (r.ok) break;
+        } catch { /* wait */ }
+        if (Date.now() > deadline) throw new Error("budget server not up");
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // Тело без Content-Length: fetch отдаёт его chunked-encoding'ом.
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new Uint8Array(64 * 1024));
+          controller.enqueue(new Uint8Array(64 * 1024));
+          controller.close();
+        },
+      });
+      const put = await fetch(`${base3c}/objects`, {
+        method: "PUT", headers: { ...authed(), "content-type": "application/octet-stream" },
+        body: stream, duplex: "half",
+      });
+      assert.equal(
+        put.status,
+        503,
+        "превышение бюджета — это backpressure (503 с ретраем), а не молчаливая потеря",
+      );
+    } finally {
+      c3c.kill("SIGKILL");
+      rmSync(dir3c, { recursive: true, force: true });
+    }
+  });
+
   it("(г) идемпотентность: повтор с тем же ключом — replay без переписи", async () => {
     const port4 = 18085;
     const dir4 = mkdtempSync(join(tmpdir(), "shardstore-idem-"));

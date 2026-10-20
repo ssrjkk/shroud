@@ -115,7 +115,7 @@ export class ChatAbuseGuard {
    *     ответ БЕЗ единого RPC-вызова, нарушитель не знает об изоляции.
    * Вызывающий при "pass" выполняет хендлер и обязан вызвать noteResult().
    */
-  async guardChat(chatId, text) {
+  async guardChat(chatId, text, costOverride) {
     const subject = `chat:${chatId}`;
     let parsed;
     try {
@@ -126,7 +126,10 @@ export class ChatAbuseGuard {
       this.#metrics.incr("abuse:deny-usage");
       return { action: "deny-usage", reply: "usage: /pool · /task <id> · /status · /limits · /help" };
     }
-    const cost = COMMAND_COST[parsed.name] ?? 2; // неизвестная команда: дёшево, ответ — help
+    // The cost is what the action really costs in RPC. It comes from the command the text
+    // names, unless the caller states it outright: a button press can do more than the
+    // command it resembles, and pricing it by resemblance would undercharge it.
+    const cost = costOverride ?? COMMAND_COST[parsed.name] ?? 2; // неизвестная команда: дёшево, ответ — help
     const level = this.#risk.levelOf(subject);
 
     // HIGH: теневая изоляция до любой квоты и любого RPC.

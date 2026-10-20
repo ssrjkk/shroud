@@ -112,6 +112,7 @@
       "<tr><td>scale</td><td>" + S.scale + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.commit")) + "</td><td>" + esc(short(S.ctDigest)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.shard")) + "</td><td>" + esc(short(S.cid)) + "</td></tr>" +
+      "<tr><td>" + esc(t("lab.j.pin")) + "</td><td>" + esc(short(S.pin)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.bytes")) + "</td><td>" + (S.shardBytes ? S.shardBytes.length : "—") + "</td></tr></table>";
     html += "<h4>" + esc(t("lab.j.task")) + "</h4><table class=\"ltable\">" +
       "<tr><td>" + esc(t("lab.j.te")) + "</td><td>" + S.taskId + " / " + S.epoch + " " + esc(t("lab.j.of")) + " " + S.epochs + "</td></tr>" +
@@ -225,10 +226,27 @@
     S.scale = Math.max(1, parseInt($("scale").value, 10) || 1000);
     var bytes = C.encodeNoopShard(S.features, S.rows, S.scale);
     var commit = C.noopRowCommitment(S.rows, S.scale);
-    var cid = keccakHex(bytes);
-    S.shardBytes = bytes; S.ctDigest = commit; S.cid = cid;
-    S.leaves = [{ index: 0, cid: cid, ct: commit }];
-    S.view.enc = { bytes: bytes.length, commit: commit, cid: cid };
+    // The contribution as the chain records it: the transport address the SDK's
+    // store gives the payload (sha256) and the on-chain pin (keccak256). The node
+    // reads both from the chain, and the leaf it puts into the trace digest is
+    // exactly these two values - the row commitment is a third thing and is not
+    // part of the leaf.
+    var cid = "0x" + C.hex(C.sha256Bytes(bytes));
+    var pin = keccakHex(bytes);
+    // The chain's running root over (leafIndex, ciphertextCid).
+    var ctRoot = "0x" + C.hex(C.keccak256Bytes(
+      (function () {
+        var b = new Uint8Array(68);
+        b.set(C.keccak256Bytes(asciiBytes("SHROUD/CTROOT/v1")), 0);
+        b[32] = 0; b[33] = 0; b[34] = 0; b[35] = 0; // leaf index, u32 big-endian
+        var t = cid.slice(2);
+        for (var i = 0; i < 32; i++) b[36 + i] = parseInt(t.substr(i * 2, 2), 16);
+        return b;
+      })()
+    ));
+    S.shardBytes = bytes; S.ctDigest = commit; S.cid = cid; S.pin = pin; S.ctRoot = ctRoot;
+    S.leaves = [{ index: 0, cid: cid, ct: pin }];
+    S.view.enc = { bytes: bytes.length, commit: commit, cid: cid, pin: pin, ctRoot: ctRoot };
     renderEnc(); renderLedger();
     return true;
   }
@@ -293,7 +311,7 @@
     var nextD = C.weightsDigest(S.prevLanes);
     var input = {
       taskId: taskHex, epoch: Math.max(0, S.epoch - 1), chainId: S.chainId,
-      cipherTask: S.cipherTask, ctRoot: S.cid, prevDigest: S.prevDigest,
+      cipherTask: S.cipherTask, ctRoot: S.ctRoot || S.cid, prevDigest: S.prevDigest,
       features: S.features, scale: S.scale, lrQ16: h.lrQ16, l2Q16: h.l2Q16,
       minibatch: h.mb, seed: S.seed, nRows: S.rows.length,
       lossMeanQ: S.lastLoss, leaves: S.leaves, nextDigest: nextD

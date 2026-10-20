@@ -88,8 +88,16 @@ export function callbackCost(parsed) {
       return 5; // same as /task
     case "s":
       return 4; // same as /status
+    case "w":
+    case "u":
+      // The watch buttons are not free: they toggle the watchlist and then render the
+      // *full task view* (task + contributors + commits per contributor + winner +
+      // quorum), which is the work `/task` does. Pricing them like the cheap `/watch`
+      // command (1) let a chat buy five times the intended RPC amplification - exactly
+      // what the per-chat budget exists to stop.
+      return 5;
     default:
-      return 1; // watch/unwatch/toggles touch local state only
+      return 1; // the alert toggles touch local state only
   }
 }
 

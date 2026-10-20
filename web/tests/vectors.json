@@ -1,235 +1,244 @@
 {
- "generated": "2026-10-15",
- "note": "Cross-validated against ethers keccak256, built @shroud/sdk and the node/src/fhe.rs layout. Regenerate only alongside those sources; any drift fails web/tests/equiv.mjs.",
- "keccak": [
-  {
-   "input": "",
-   "inHex": "",
-   "digest": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
-  },
-  {
-   "input": "abc",
-   "inHex": "616263",
-   "digest": "0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
-  },
-  {
-   "input": "xxxxxxxxxxxxxxxxxxxx...len=135",
-   "inHex": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
-   "digest": "0x16570bdb055e663ea1cb57ac6f09194f4bc7b7070847971fc0b86710366dc34f"
-  },
-  {
-   "input": "yyyyyyyyyyyyyyyyyyyy...len=136",
-   "inHex": "79797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979",
-   "digest": "0x299eb9c75467c19fbc1653d67b1f49ff3bb50fc9c1c9ce98c205e5ac6a05b9c8"
-  },
-  {
-   "input": "zzzzzzzzzzzzzzzzzzzz...len=137",
-   "inHex": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
-   "digest": "0x32fe0c7ccc0a26485fc1555eb4075da8b6c66da403bdf0fedb664a4a876d7a98"
-  },
-  {
-   "input": "qqqqqqqqqqqqqqqqqqqq...len=272",
-   "inHex": "7171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171",
-   "digest": "0xc8f8c826fcceab4dc34a827191eb9fc840243a02ae9ebba98b310701e552d5be"
-  },
-  {
-   "input": "00ff0180",
-   "inHex": "3030666630313830",
-   "digest": "0x868ae091cd0eb5339c158eee98fbc0719984e691f3f9b3cb1b2fc73265a36eec"
-  }
- ],
- "pipelines": [
-  {
-   "name": "housing",
-   "features": 3,
-   "rows": [
-    [
-     1.2,
-     3,
-     2.1
-    ],
-    [
-     1.8,
-     3,
-     2.8
-    ],
-    [
-     2,
-     2,
-     3
-    ],
-    [
-     1.1,
-     4,
-     2.4
-    ],
-    [
-     2.4,
-     3,
-     3.6
-    ],
-    [
-     1.6,
-     2,
-     2.5
-    ],
-    [
-     2.9,
-     4,
-     4.2
-    ],
-    [
-     1.4,
-     3,
-     2.3
-    ]
-   ],
-   "scale": 1000,
-   "lrQ16": 3276,
-   "l2Q16": 0,
-   "minibatch": 8,
-   "seed": 42,
-   "expect": {
-    "bytes": 211,
-    "commit": "0x36439ba0c36114c4917613a479ad725d2eb9ab495e070dd427f7d5501cb1afec",
-    "cid": "0x47ab2fcd4d844b6194bf38a90275c1c6715e73d0451576061854f3aefba6feaf",
-    "lanes": [
-     276,
-     436,
-     143
-    ],
-    "lossMeanQ": "8643750",
-    "nRows": 8,
-    "weightsDigest": "0xd3258281143f0c12ae5fb30df61c11ac075c4154cb9ae82262ea8429e7adbbed",
-    "traceDigest": "0x36051505918174aff94803fb5f1d501bd73dff4616e3470204864773854b0b9d",
-    "proofRef": "0x53544152c0ed547fd38cf6957a778edd421e2ca6f2263e1965c9198ca03062ff"
-   }
-  },
-  {
-   "name": "medical",
-   "features": 4,
-   "rows": [
-    [
-     0.8,
-     1.2,
-     0.5,
-     1.1
-    ],
-    [
-     1.4,
-     0.9,
-     1.1,
-     2
-    ],
-    [
-     0.6,
-     1.8,
-     0.4,
-     1.3
-    ],
-    [
-     2,
-     1.1,
-     1.6,
-     2.9
-    ],
-    [
-     1.1,
-     1.4,
-     0.9,
-     1.9
-    ],
-    [
-     1.9,
-     2,
-     1.2,
-     3.1
-    ]
-   ],
-   "scale": 1000,
-   "lrQ16": 3276,
-   "l2Q16": 0,
-   "minibatch": 8,
-   "seed": 42,
-   "expect": {
-    "bytes": 211,
-    "commit": "0xd37d507d8b29eba089b3d482212cbbed45de098e41e2594bad2d4f6fa59f0015",
-    "cid": "0x8a304fbda7b3d3da62cc89aaa9b3c6ee7146b5b7165e0e9322b2fd85bfaf1ea4",
-    "lanes": [
-     151,
-     145,
-     111,
-     102
-    ],
-    "lossMeanQ": "4755000",
-    "nRows": 6,
-    "weightsDigest": "0xa9eec897bf8810f3323f18e04f5f0e0f7953ff9624f5d69e1e51cc36270e90bd",
-    "traceDigest": "0xe7de561ac490dfe1a80027e9f203b6a5d34585b4a1d452aebf599b290421f290",
-    "proofRef": "0x5354415233835b278832b49aadc14ea735389f08aae5cefdddcafdb3e8f9bb67"
-   }
-  },
-  {
-   "name": "credit",
-   "features": 5,
-   "rows": [
-    [
-     1,
-     0.5,
-     1.2,
-     0.8,
-     2.2
-    ],
-    [
-     2.1,
-     1,
-     0.9,
-     1.4,
-     3.8
-    ],
-    [
-     0.7,
-     1.6,
-     1.8,
-     0.6,
-     2.9
-    ],
-    [
-     1.8,
-     0.8,
-     1.1,
-     1.9,
-     4.1
-    ],
-    [
-     1.2,
-     1.2,
-     1,
-     1,
-     3
-    ]
-   ],
-   "scale": 1000,
-   "lrQ16": 3276,
-   "l2Q16": 0,
-   "minibatch": 8,
-   "seed": 42,
-   "expect": {
-    "bytes": 219,
-    "commit": "0x9176a84f887e457358f6deb6b4da5d35136ecd3d3ddf870a737574cf3e43d1af",
-    "cid": "0x5dd2670cf5859b98371609220f7857c4a8a57a7349a0daf0b66ba511ff679bf2",
-    "lanes": [
-     231,
-     164,
-     187,
-     196,
-     159
-    ],
-    "lossMeanQ": "10700000",
-    "nRows": 5,
-    "weightsDigest": "0xaf7ac57a8491d84e9e5f9b70a75e0a3081615ffbffce2cd66e281ca9606d51e7",
-    "traceDigest": "0xc906cbb6b87a6784cf2485b3292f19108f0508f39b3cf8c73f01c8d21a1ccafe",
-    "proofRef": "0x53544152081b5b9d78a44858422da0b278902bf84a4cc417a4d1508b5d81e882"
-   }
-  }
- ]
+  "generated": "2026-10-20",
+  "note": "Cross-validated against ethers keccak256, built @shroud/sdk and the node/src/fhe.rs layout. Regenerate only alongside those sources; any drift fails web/tests/equiv.mjs.",
+  "keccak": [
+    {
+      "input": "",
+      "inHex": "",
+      "digest": "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+    },
+    {
+      "input": "abc",
+      "inHex": "616263",
+      "digest": "0x4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+    },
+    {
+      "input": "xxxxxxxxxxxxxxxxxxxx...len=135",
+      "inHex": "787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+      "digest": "0x16570bdb055e663ea1cb57ac6f09194f4bc7b7070847971fc0b86710366dc34f"
+    },
+    {
+      "input": "yyyyyyyyyyyyyyyyyyyy...len=136",
+      "inHex": "79797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979797979",
+      "digest": "0x299eb9c75467c19fbc1653d67b1f49ff3bb50fc9c1c9ce98c205e5ac6a05b9c8"
+    },
+    {
+      "input": "zzzzzzzzzzzzzzzzzzzz...len=137",
+      "inHex": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+      "digest": "0x32fe0c7ccc0a26485fc1555eb4075da8b6c66da403bdf0fedb664a4a876d7a98"
+    },
+    {
+      "input": "qqqqqqqqqqqqqqqqqqqq...len=272",
+      "inHex": "7171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171717171",
+      "digest": "0xc8f8c826fcceab4dc34a827191eb9fc840243a02ae9ebba98b310701e552d5be"
+    },
+    {
+      "input": "00ff0180",
+      "inHex": "3030666630313830",
+      "digest": "0x868ae091cd0eb5339c158eee98fbc0719984e691f3f9b3cb1b2fc73265a36eec"
+    }
+  ],
+  "pipelines": [
+    {
+      "name": "housing",
+      "features": 3,
+      "rows": [
+        [
+          1.2,
+          3,
+          2.1
+        ],
+        [
+          1.8,
+          3,
+          2.8
+        ],
+        [
+          2,
+          2,
+          3
+        ],
+        [
+          1.1,
+          4,
+          2.4
+        ],
+        [
+          2.4,
+          3,
+          3.6
+        ],
+        [
+          1.6,
+          2,
+          2.5
+        ],
+        [
+          2.9,
+          4,
+          4.2
+        ],
+        [
+          1.4,
+          3,
+          2.3
+        ]
+      ],
+      "scale": 1000,
+      "lrQ16": 3276,
+      "l2Q16": 0,
+      "minibatch": 8,
+      "seed": 42,
+      "expect": {
+        "bytes": 211,
+        "commit": "0x36439ba0c36114c4917613a479ad725d2eb9ab495e070dd427f7d5501cb1afec",
+        "ctDigest": "0x47ab2fcd4d844b6194bf38a90275c1c6715e73d0451576061854f3aefba6feaf",
+        "transportCid": "0x9ba151628c113fa866362c42a356cb6eab7b6e65e90d66c3dde0db9aa15597ab",
+        "ctRoot": "0xaf4043be43fdb2e57905f3aa227b26ff05af2fdb00ba5d55f2bc6db532068be1",
+        "cid": "0x47ab2fcd4d844b6194bf38a90275c1c6715e73d0451576061854f3aefba6feaf",
+        "lanes": [
+          276,
+          436,
+          143
+        ],
+        "lossMeanQ": "8643750",
+        "nRows": 8,
+        "weightsDigest": "0xd3258281143f0c12ae5fb30df61c11ac075c4154cb9ae82262ea8429e7adbbed",
+        "traceDigest": "0xd19bf3d4d1182e751a158a5ce81e049c48c75c75fa0b784ef8958cfbff07d253",
+        "proofRef": "0x53544152d38ffc28025ab8cecd38c1d4c34389ffe90f942b92cec9e364311688"
+      }
+    },
+    {
+      "name": "medical",
+      "features": 4,
+      "rows": [
+        [
+          0.8,
+          1.2,
+          0.5,
+          1.1
+        ],
+        [
+          1.4,
+          0.9,
+          1.1,
+          2
+        ],
+        [
+          0.6,
+          1.8,
+          0.4,
+          1.3
+        ],
+        [
+          2,
+          1.1,
+          1.6,
+          2.9
+        ],
+        [
+          1.1,
+          1.4,
+          0.9,
+          1.9
+        ],
+        [
+          1.9,
+          2,
+          1.2,
+          3.1
+        ]
+      ],
+      "scale": 1000,
+      "lrQ16": 3276,
+      "l2Q16": 0,
+      "minibatch": 8,
+      "seed": 42,
+      "expect": {
+        "bytes": 211,
+        "commit": "0xd37d507d8b29eba089b3d482212cbbed45de098e41e2594bad2d4f6fa59f0015",
+        "ctDigest": "0x8a304fbda7b3d3da62cc89aaa9b3c6ee7146b5b7165e0e9322b2fd85bfaf1ea4",
+        "transportCid": "0xb36fc64f8ec99ab32473567aae568b7effd4da737e1e6c4680305751ec1d69d3",
+        "ctRoot": "0xfca17f7aa5454bcdc6fb8fbaa0788fb5910f31c1f2171e9c33370b81baedb2d0",
+        "cid": "0x8a304fbda7b3d3da62cc89aaa9b3c6ee7146b5b7165e0e9322b2fd85bfaf1ea4",
+        "lanes": [
+          151,
+          145,
+          111,
+          102
+        ],
+        "lossMeanQ": "4755000",
+        "nRows": 6,
+        "weightsDigest": "0xa9eec897bf8810f3323f18e04f5f0e0f7953ff9624f5d69e1e51cc36270e90bd",
+        "traceDigest": "0x0a7fa04fb323fd5f40c277472db4d95cc3f4b00b6fbe791e7564293ea0e1ac04",
+        "proofRef": "0x53544152991de580b4139e3eafab2746f3b99460ef2cf326697e3220a93777f3"
+      }
+    },
+    {
+      "name": "credit",
+      "features": 5,
+      "rows": [
+        [
+          1,
+          0.5,
+          1.2,
+          0.8,
+          2.2
+        ],
+        [
+          2.1,
+          1,
+          0.9,
+          1.4,
+          3.8
+        ],
+        [
+          0.7,
+          1.6,
+          1.8,
+          0.6,
+          2.9
+        ],
+        [
+          1.8,
+          0.8,
+          1.1,
+          1.9,
+          4.1
+        ],
+        [
+          1.2,
+          1.2,
+          1,
+          1,
+          3
+        ]
+      ],
+      "scale": 1000,
+      "lrQ16": 3276,
+      "l2Q16": 0,
+      "minibatch": 8,
+      "seed": 42,
+      "expect": {
+        "bytes": 219,
+        "commit": "0x9176a84f887e457358f6deb6b4da5d35136ecd3d3ddf870a737574cf3e43d1af",
+        "ctDigest": "0x5dd2670cf5859b98371609220f7857c4a8a57a7349a0daf0b66ba511ff679bf2",
+        "transportCid": "0x4363d49453c1be037171d94bdc010b50a15b819cff05d2245570ab60823ac38d",
+        "ctRoot": "0x45ab8783fb7f45562ca98f462ac884cdf991bc13752c39c2c7df54e077d7d1ab",
+        "cid": "0x5dd2670cf5859b98371609220f7857c4a8a57a7349a0daf0b66ba511ff679bf2",
+        "lanes": [
+          231,
+          164,
+          187,
+          196,
+          159
+        ],
+        "lossMeanQ": "10700000",
+        "nRows": 5,
+        "weightsDigest": "0xaf7ac57a8491d84e9e5f9b70a75e0a3081615ffbffce2cd66e281ca9606d51e7",
+        "traceDigest": "0x13431645ac619c8d281e059e3dd25ab06d44f9957c57804ab15e595d882a7356",
+        "proofRef": "0x5354415242d6850cb02dc55960ecbc09c8f5a53f7fdce817055ecc62aeef04f3"
+      }
+    }
+  ]
 }

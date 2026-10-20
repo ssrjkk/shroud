@@ -81,7 +81,8 @@ test("callbackCost prices refreshes like their command equivalents", () => {
   assert.equal(callbackCost(parseCallback("p:2")), 15);
   assert.equal(callbackCost(parseCallback("t:42")), 5);
   assert.equal(callbackCost(parseCallback("s")), 4);
-  assert.equal(callbackCost(parseCallback("w:1")), 1);
+  assert.equal(callbackCost(parseCallback("w:1")), 5);
+  assert.equal(callbackCost(parseCallback("u:1")), 5);
   assert.equal(callbackCost(parseCallback("a:mm")), 1);
   assert.equal(callbackCost(null), 1);
 });

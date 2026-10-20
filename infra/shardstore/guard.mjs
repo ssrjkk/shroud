@@ -265,7 +265,7 @@ export const RiskSignal = Object.freeze({
 export const RiskLevel = Object.freeze({ LOW: "low", MEDIUM: "medium", HIGH: "high" });
 
 export class RiskEngine {
-  #scores = new Map(); // subject -> { score, updatedAt }
+  #scores = new Map(); // subject -> { score, updatedAt, hard }
   #intervals = new Map(); // subject+action -> number[] последних меток
   #cfg; #now;
   constructor(cfg, { now = () => Date.now() } = {}) { this.#cfg = cfg; this.#now = now; }
@@ -288,13 +288,31 @@ export class RiskEngine {
         const oldest = this.#scores.keys().next();
         if (!oldest.done) this.#scores.delete(oldest.value);
       }
-      s = { score: 0, updatedAt: at };
+      s = { score: 0, updatedAt: at, hard: 0 };
       this.#scores.set(subject, s);
     }
     const dt = Math.max(0, (at - s.updatedAt) / 1000);
     s.score = s.score * Math.exp(-this.#cfg.riskLambdaPerSec * dt) + this.#weight(signal);
     s.updatedAt = at;
+    // Timing regularity is weak evidence: a fixed upload cadence is what the SDK's own
+    // loop produces. Only a real violation counts as a hard signal, and the shadowban
+    // needs one (see `hasHardSignal`).
+    if (signal !== RiskSignal.FAST_BURST) s.hard = (s.hard ?? 0) + 1;
     return { score: s.score, level: this.#levelOf(s.score) };
+  }
+  /**
+   * Whether this subject has shown a signal other than its timing.
+   *
+   * The honeypot answers a write with a plausible `201` and stores nothing, so a
+   * legitimate client that trips it loses data silently: the contract pins a digest
+   * for a shard that was never stored, and the encrypted rows are unrecoverable. A
+   * regular cadence is not evidence of that - an automated uploader looks exactly
+   * like a bot on the timing signal alone - so the shadowban waits for a hard signal
+   * (a failed auth, a rate hit, a duplicate payload, range abuse) to stand on.
+   */
+  hasHardSignal(subject) {
+    const s = this.#scores.get(subject);
+    return !!s && (s.hard ?? 0) > 0;
   }
   levelOf(subject, at = this.#now()) {
     const s = this.#scores.get(subject);

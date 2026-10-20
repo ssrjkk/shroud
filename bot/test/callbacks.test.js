@@ -132,18 +132,21 @@ test("watch commands validate before touching state", async () => {
 });
 
 /**
- * Callback pricing parity: button presses are priced through the abuse guard
- * via synthetic command texts (see CALLBACK_TEXT in index.js), while
- * `callbackCost` documents the same mapping. Two price lists for one action
- * drift silently — this pins them together across every opcode.
+ * Callback pricing parity: a button press is priced by the work it does.
+ *
+ * The price comes from `callbackCost`, and the guard charges exactly that. The two
+ * lists used to drift silently - `callbackCost` was never consulted at runtime, so a
+ * button could be priced by the command it *resembles* rather than by the work it
+ * does. The watch buttons are the case that matters: they render the full task view,
+ * which is `/task`-sized work, but they resemble the cheap `/watch` command.
  */
-test("callbackCost matches the abuse-guard price of the equivalent command", () => {
+test("callbackCost matches the abuse-guard price of the work the button does", () => {
   const cfg = loadAbuseConfig({});
   const cases = [
     ["p:2", "/pool"],
     ["t:42", "/task 42"],
-    ["w:42", "/watch 42"],
-    ["u:42", "/watch 42"],
+    ["w:42", "/task 42"],
+    ["u:42", "/task 42"],
     ["s", "/status"],
     ["a:disp", "/alerts"],
   ];

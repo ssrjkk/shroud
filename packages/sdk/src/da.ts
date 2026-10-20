@@ -394,13 +394,51 @@ export class HttpShardStore implements ShardStore {
         if (res.status !== 200 && res.status !== 206) {
           throw new Error(`shard store range GET failed for ${cid}: ${res.status}`);
         }
-        // Bounded like every other read: a range pull that ignored the cap would let one
-        // malicious chunk eat memory proportional to the stream, not to the window.
-        const body = await this.readCapped(
-          res,
-          this.maxObjectBytes,
-          `range ${offset}..${offset + length - 1} of ${cid}`
-        );
+        // The `Content-Range` header is read *before* the body: it says which window the
+        // store is answering, so a store that answers the wrong one is refused without
+        // buffering a byte. RFC 9110 requires the header on every 206, and the reference
+        // server always sends it, so a missing header is a hard failure, not leniency.
+        if (res.status === 206) {
+          const contentRange = res.headers.get("content-range");
+          if (!contentRange) {
+            throw new Error(
+              `shard store answered 206 for range ${offset}..${offset + length - 1} of ${cid} ` +
+                `without a content-range header`
+            );
+          }
+          const matched = /^bytes (\d+)-(\d+)\/(?:\d+|\*)$/.exec(contentRange);
+          const start = matched ? Number(matched[1]) : Number.NaN;
+          const end = matched ? Number(matched[2]) : Number.NaN;
+          // The answer has to lie inside the requested window. A short final chunk is
+          // normal - it ends before the window does - but it may not start elsewhere.
+          if (start !== offset || end > offset + length - 1 || end < start) {
+            throw new Error(
+              `shard store answered content-range ${JSON.stringify(contentRange)} for range ` +
+                `${offset}..${offset + length - 1} of ${cid}`
+            );
+          }
+        }
+        // The body is bounded by the *window*, not by the object cap: a store that
+        // ignores `Range` and streams the whole object would otherwise make the client
+        // hold it - 64 MiB by default, twice that in the copy - for a window that may be
+        // a kilobyte. One byte past the window is enough to see the overshoot, and the
+        // stream is cancelled there.
+        const window = length + 1;
+        let body: Uint8Array;
+        try {
+          body = await this.readCapped(
+            res,
+            window,
+            `range ${offset}..${offset + length - 1} of ${cid}`
+          );
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (!msg.includes(`${window} byte cap`)) throw e;
+          throw new Error(
+            `shard store sent more than the ${length} byte window for range ` +
+              `${offset}..${offset + length - 1} of ${cid}; it ignored the Range header`
+          );
+        }
 
         // A `200` means the server ignored `Range` and sent the whole object, which is only the
         // answer to this request when the window *is* the object from its start. Accepting anything
