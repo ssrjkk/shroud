@@ -2,7 +2,7 @@ name: bot
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths: ["bot/**", ".github/workflows/bot.yml"]
   pull_request:
     paths: ["bot/**", ".github/workflows/bot.yml"]
