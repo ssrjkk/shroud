@@ -118,6 +118,38 @@ export async function signRedeemSlice(
 }
 
 /* ================================================================== */
+/*                    Node registration proof-of-possession             */
+/* ================================================================== */
+
+/**
+ * The message a node's proof-of-possession signature covers.
+ *
+ * `CipherTask.registerNodeWithPop` recomputes it as
+ * `keccak256(abi.encode(taskId, blsPubKey, node, chainId, cipherTask))` and checks
+ * the EIP-191 personal-signature over it. The BLS key is otherwise self-declared:
+ * binding it to the node's own key proves one live signer per identity and makes
+ * key theft repudiable.
+ *
+ * It is exported so the exact bytes can be pinned - the same string is written down
+ * in the contract, in the contracts' suite and here, and a change to one of them
+ * alone would make every registration the SDK submits fail.
+ */
+export function popDigest(
+  taskId: bigint,
+  blsPubKey: Hex,
+  node: string,
+  chainId: bigint,
+  cipherTask: string
+): Hex {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint256", "bytes32", "address", "uint256", "address"],
+      [taskId, blsPubKey, node, chainId, cipherTask]
+    )
+  ) as Hex;
+}
+
+/* ================================================================== */
 /*                    ERC-1271 slice authorisation                     */
 /* ================================================================== */
 

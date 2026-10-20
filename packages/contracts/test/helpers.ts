@@ -82,6 +82,35 @@ export function sliceDomain(vaultAddress: string, chainId: number | bigint) {
   };
 }
 
+/**
+ * The message a node's proof-of-possession signature covers.
+ *
+ * `CipherTask.registerNodeWithPop` recomputes it as
+ * `keccak256(abi.encode(taskId, blsPubKey, node, chainId, cipherTask))` and checks
+ * the EIP-191 personal-signature over it. The same message is written down in the
+ * contract, here and in the SDK; the golden below ties the two off-chain copies
+ * together, so a change to one of them alone fails a test instead of every
+ * registration in production.
+ */
+export function popDigest(
+  taskId: bigint,
+  blsPubKey: string,
+  node: string,
+  chainId: bigint,
+  cipherTask: string
+): string {
+  return ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint256", "bytes32", "address", "uint256", "address"],
+      [taskId, blsPubKey, node, chainId, cipherTask]
+    )
+  );
+}
+
+/** The value both off-chain copies must produce, for fixed inputs. */
+export const POP_DIGEST_GOLDEN =
+  "0xa684df548ed9881d80b95265b33646c1d204638498a40051b2149609fa32440b";
+
 export const REDEEM_TYPEHASH = ethers.keccak256(
   ethers.toUtf8Bytes("Redeem(uint256 channelId,address streamer,address node,uint128 maxCumulative,uint64 unlockAt,uint256 deadline)")
 );

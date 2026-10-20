@@ -10,7 +10,7 @@ import { Contract, ethers, type Interface, type Signer, type Provider } from "et
 import CipherTaskAbi from "./abi/CipherTask.json" with { type: "json" };
 import PaymentVaultAbi from "./abi/PaymentVault.json" with { type: "json" };
 import type { Hex, PreparedShard, TaskParams, RedeemSlice } from "./types.js";
-import { domainSeparator, encodeSliceSignature, redeemDigest, signRedeemSlice, SLICE_DEADLINE, SLICE_INDEX } from "./eip712.js";
+import { domainSeparator, encodeSliceSignature, popDigest, redeemDigest, signRedeemSlice, SLICE_DEADLINE, SLICE_INDEX } from "./eip712.js";
 
 /**
  * The task id a mined `createTask` produced, read from its `TaskCreated` event.
@@ -211,12 +211,7 @@ export class CipherTaskClient {
     const chain = normalizeUint(chainId, "chainId");
     const node = await signer.getAddress();
     const target = this.contract.target as string;
-    const inner = ethers.keccak256(
-      ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "bytes32", "address", "uint256", "address"],
-        [tid, blsPubKey, node, chain, target]
-      )
-    );
+    const inner = popDigest(tid, blsPubKey, node, chain, target);
     const sig = await signer.signMessage(ethers.getBytes(inner));
     const contract = this.contract.connect(signer) as Contract;
     const tx = await contract.registerNodeWithPop(tid, blsPubKey, sig);

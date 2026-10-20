@@ -91,6 +91,12 @@ first tagged release.
   test only proved that the SDK agreed with itself. It now also pins the bytes
   the chain accepted — the node's golden, replayed against a real
   `PaymentVault.redeem`.
+- The node-registration proof-of-possession message was the same story: the
+  contract, the contracts' suite and the SDK each wrote it down, and each
+  compared it only with itself. The message is now a named function on both
+  off-chain sides (`popDigest`) and the two are pinned to one golden — a change
+  to one of them alone would otherwise make every registration the SDK submits
+  fail with `InvalidPopSignature`.
 
 ### Gates: the SDK's domain separator is pinned to the vault's
 

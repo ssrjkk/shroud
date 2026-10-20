@@ -3,7 +3,7 @@ import { expect } from "chai";
 import { ethers } from "hardhat";
 
 import { CipherTask, DecryptionGate, MockBLS, MockStarkVerifier, PaymentVault, TestToken } from "../typechain-types";
-import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, popDigest, POP_DIGEST_GOLDEN, proofFor, proofRef } from "./helpers";
 import { deployLinked } from "../scripts/libraries";
 
 /**
@@ -259,6 +259,21 @@ describe("Hardening", () => {
   });
 
   describe("node registration proof-of-possession", () => {
+    it("builds the message the SDK pins", () => {
+      // The message is written down in the contract, here and in the SDK. This golden
+      // ties the two off-chain copies together, so a change to one of them alone fails
+      // a test instead of every registration in production.
+      expect(
+        popDigest(
+          1n,
+          "0x0000000000000000000000000000000000000000000000000000000000000001",
+          "0x0000000000000000000000000000000000000002",
+          31337n,
+          "0x0000000000000000000000000000000000000003"
+        )
+      ).to.equal(POP_DIGEST_GOLDEN);
+    });
+
     async function popSig(
       fx: Fx,
       id: bigint,
@@ -266,12 +281,7 @@ describe("Hardening", () => {
       signer: typeof fx.node
     ): Promise<string> {
       const net = await ethers.provider.getNetwork();
-      const inner = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["uint256", "bytes32", "address", "uint256", "address"],
-          [id, blsKey, signer.address, net.chainId, await fx.task.getAddress()]
-        )
-      );
+      const inner = popDigest(id, blsKey, signer.address, net.chainId, await fx.task.getAddress());
       return signer.signMessage(ethers.getBytes(inner));
     }
 

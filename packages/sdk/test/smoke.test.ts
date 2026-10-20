@@ -17,7 +17,7 @@ import { ethers } from "ethers";
 
 import { MemoryShardStore, HttpShardStore, assertSafeCid } from "../dist/index.js";
 import { NoopEncryptor, noopRowCommitment, pinPayload } from "../dist/index.js";
-import { REDEEM_TYPEHASH, domainSeparator } from "../dist/index.js";
+import { REDEEM_TYPEHASH, domainSeparator, popDigest } from "../dist/index.js";
 import {
   decodeSliceSignature,
   encodeSliceSignature,
@@ -1281,6 +1281,24 @@ test("DecryptionGateClient refuses a missing or malformed gate address", async (
   assert.throws(() => new Gate("not-an-address", stub), /gate address/);
   const ok = new Gate("0x0000000000000000000000000000000000000001", stub);
   assert.ok(ok.contract, "valid address constructs");
+});
+
+test("the proof-of-possession message matches the contract's", () => {
+  // `CipherTask.registerNodeWithPop` recomputes this message and checks the EIP-191
+  // signature over it. The same message is written down in the contract, in the
+  // contracts' suite and here; a change to one of them alone would make every
+  // registration the SDK submits fail with InvalidPopSignature, and neither suite
+  // would notice on its own.
+  assert.equal(
+    popDigest(
+      1n,
+      "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "0x0000000000000000000000000000000000000002",
+      31337n,
+      "0x0000000000000000000000000000000000000003"
+    ),
+    "0xa684df548ed9881d80b95265b33646c1d204638498a40051b2149609fa32440b"
+  );
 });
 
 test("registerNodeWithPop validates its inputs before touching the signer", async () => {
