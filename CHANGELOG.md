@@ -32,6 +32,19 @@ first tagged release.
   new high-severity advisory in either tree passed the build and waited for the
   weekly Dependabot scan. Both jobs run the gate now.
 
+### Gates: the site's finding count can no longer drift from the threat model
+
+- The site tells the reader that the threat model carries "N findings", and the
+  number was written by hand. It had already drifted twice — findings were added
+  to the model and the site kept quoting the old count, so the page understated
+  the model's coverage. `web/tests/findings.mjs` now counts the findings in
+  `docs/04-threat-model.md`, checks that the numbering is contiguous (a hole
+  means a finding was deleted without renumbering the rest), checks that every
+  finding carries a status, and checks that every number the site quotes equals
+  the model's. The site workflow runs it, and a change to the threat model now
+  triggers that workflow — otherwise the check would be skipped exactly when the
+  drift happens.
+
 ### ShardStore: an honest upload could be silently discarded
 
 - The "bot-timing" heuristic scored any client with a regular PUT cadence as a bot

@@ -4,10 +4,13 @@ on:
   push:
     branches: [main]
     # `node/**` (not just the layout pins): any engine change re-checks the site math
-    # against the golden vectors both sides pin.
-    paths: ["web/**", "node/**", ".github/workflows/site.yml"]
+    # against the golden vectors both sides pin. The threat model is named
+    # explicitly (not `docs/**`): the site quotes its finding count, so a change
+    # to the model must re-check that the quote still matches — but an unrelated
+    # doc edit should not redeploy the site.
+    paths: ["web/**", "node/**", "docs/04-threat-model.md", ".github/workflows/site.yml"]
   pull_request:
-    paths: ["web/**", "node/**", ".github/workflows/site.yml"]
+    paths: ["web/**", "node/**", "docs/04-threat-model.md", ".github/workflows/site.yml"]
   workflow_dispatch:
 
 # Pages deployment needs these; PRs from forks cannot deploy, so the deploy
@@ -72,6 +75,8 @@ jobs:
         run: node web/tests/i18n.mjs
       - name: check navigation across pages
         run: node web/tests/nav.mjs
+      - name: check the site's finding count matches the threat model
+        run: node web/tests/findings.mjs
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
