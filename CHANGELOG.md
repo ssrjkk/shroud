@@ -6,6 +6,16 @@ first tagged release.
 
 ## Unreleased
 
+### Dependabot: version updates off, security updates on
+
+- Dependabot was scheduled weekly on seven ecosystems, so every Monday it re-created the
+  branch-and-pull-request mess this repository is deliberately kept out of. Version updates
+  are now switched off (`open-pull-requests-limit: 0`); vulnerability alerts and security
+  updates keep working, and every JavaScript CI job gates on `npm audit --audit-level=high`,
+  so a new high or critical advisory fails the build rather than waiting for a scan.
+- The trade is recorded in `docs/05` §7b: routine version bumps no longer arrive on their
+  own and have to be taken by hand.
+
 ### Bot: the client aborted its own long poll
 
 - The Telegram client's request deadline (15 s) was shorter than the long-poll

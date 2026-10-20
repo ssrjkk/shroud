@@ -99,6 +99,15 @@ Re-checked 2026-10-20: **zero open Dependabot advisories**, one dismissed (the
 `elliptic` item below). `npm audit` in `packages/contracts` reports 16 low and
 nothing above it — all of them in the same Hardhat 2 dev toolchain.
 
+Changed 2026-10-20: Dependabot's **version** updates are switched off
+(`open-pull-requests-limit: 0` in `.github/dependabot.yml`). This repository is kept to one
+branch and zero open pull requests, and a scheduled bump re-created exactly that mess every
+Monday. The security half is untouched: vulnerability alerts stay on, security updates are
+not counted against that limit, and every JavaScript CI job now gates on
+`npm audit --audit-level=high` - so a new high or critical advisory fails the build instead
+of waiting for a scan. The consequence to be aware of: **routine version bumps no longer
+arrive on their own**; they have to be taken by hand.
+
 Resolved 2026-10-17: 29 of the 30 via flat `overrides` in
 `packages/contracts/package.json` (`cookie 0.7.0`, `tmp 0.2.7`,
 `undici 6.28.1`, `diff 8.0.3`, `serialize-javascript 7.0.5`, `uuid 11.1.1`,

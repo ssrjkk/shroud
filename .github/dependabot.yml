@@ -1,12 +1,23 @@
 version: 2
 # @author ssrjkk | shroud
+#
+# Version updates are switched off on purpose: this repository is kept to one
+# branch and zero open pull requests, and a scheduled bump re-creates exactly
+# that mess every Monday. The security half of Dependabot keeps working -
+# `open-pull-requests-limit: 0` stops *version* updates from opening pull
+# requests, and a security update does not count against that limit. On top of
+# that, every JavaScript job gates on `npm audit --audit-level=high`, so a new
+# high or critical advisory fails the build rather than waiting for a scan.
+#
+# To take updates again: set the limit back to 3 (5 for github-actions) on the
+# ecosystems you want, and open the pull requests by hand.
 updates:
   - package-ecosystem: "npm"
     directory: "/bot"
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "npm"
@@ -22,7 +33,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "npm"
@@ -38,7 +49,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "npm"
@@ -54,7 +65,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "docker"
@@ -67,7 +78,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "docker"
@@ -80,7 +91,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "cargo"
@@ -96,7 +107,7 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     labels:
       - "dependencies"
       - "ci"
