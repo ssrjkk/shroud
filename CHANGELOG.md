@@ -79,6 +79,19 @@ first tagged release.
   new high-severity advisory in either tree passed the build and waited for the
   weekly Dependabot scan. Both jobs run the gate now.
 
+### Gates: the SDK's EIP-712 pins now cover the typehash and the slice blob
+
+- The redeem typehash is written down in three places: the contract's public
+  constant, the contracts' off-chain copy, and the SDK's. A change to one of
+  them alone would make every signature that side produces fail at the vault —
+  and neither suite would notice on its own, because each compared the string
+  only with itself. The vault's own constant is now compared against the
+  contracts' copy, and the SDK pins the same bytes.
+- The ERC-1271 slice blob is three big-endian words, and the SDK's round-trip
+  test only proved that the SDK agreed with itself. It now also pins the bytes
+  the chain accepted — the node's golden, replayed against a real
+  `PaymentVault.redeem`.
+
 ### Gates: the SDK's domain separator is pinned to the vault's
 
 - The SDK recomputes the vault's EIP-712 domain separator locally and submits the

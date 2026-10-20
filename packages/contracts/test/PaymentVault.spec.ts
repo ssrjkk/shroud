@@ -4,7 +4,7 @@ import type { Signer } from "ethers";
 import { ethers } from "hardhat";
 
 import { PaymentVault, TestToken } from "../typechain-types";
-import { redeemDigest, sliceDomain } from "./helpers";
+import { REDEEM_TYPEHASH, redeemDigest, sliceDomain } from "./helpers";
 
 /**
  * `PaymentVault` governance and the EOA-streamer redemption path.
@@ -213,6 +213,18 @@ describe("PaymentVault", () => {
   });
 
   describe("EOA streamer", () => {
+    it("publishes the redeem typehash the SDK pins", async () => {
+      // The vault exposes its typehash as a public constant, so the off-chain copy the
+      // contracts' suite signs with can be compared against the contract's own bytes -
+      // and the SDK pins the same value. All three are one string, and a change to one
+      // of them alone would make every signature it produces fail at the vault.
+      const fx = await fixture();
+      expect(await fx.vault.REDEEM_TYPEHASH()).to.equal(
+        "0x20e2c2a7ab380f42d7209f07a774351700bf5dd2487e96dcfd4e1858e5763cd4"
+      );
+      expect(REDEEM_TYPEHASH).to.equal("0x20e2c2a7ab380f42d7209f07a774351700bf5dd2487e96dcfd4e1858e5763cd4");
+    });
+
     it("computes the domain separator the SDK pins", () => {
       // The SDK recomputes this separator locally and hands the digest to the vault, so
       // the two must agree byte for byte. The live redeem below signs with this helper's

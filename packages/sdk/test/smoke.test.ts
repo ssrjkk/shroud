@@ -129,6 +129,13 @@ test("REDEEM_TYPEHASH matches the PaymentVault type string", () => {
     REDEEM_TYPEHASH,
     ethers.id("Redeem(uint256 channelId,address streamer,address node,uint128 maxCumulative,uint64 unlockAt,uint256 deadline)")
   );
+  // The same typehash is written down in three places: the contract's public
+  // constant, the contracts' off-chain copy and this one. The contracts' suite
+  // redeems a real channel with its copy, so the contract's own value is pinned
+  // there; this pins the SDK's to the same bytes. A change to the string on one
+  // side only would make every signature that side produces fail at the vault,
+  // and neither suite would notice on its own.
+  assert.equal(REDEEM_TYPEHASH, "0x20e2c2a7ab380f42d7209f07a774351700bf5dd2487e96dcfd4e1858e5763cd4");
 });
 
 test("a contract-streamer slice is three big-endian words, nothing else", () => {
@@ -141,6 +148,20 @@ test("a contract-streamer slice is three big-endian words, nothing else", () => 
   assert.equal(blob, `0x${word(7n)}${word(0n)}${word(1_000_000n)}`);
   assert.equal(ethers.dataLength(blob), SLICE_SIGNATURE_BYTES);
   assert.deepEqual(decodeSliceSignature(blob), { channelId: 7n, sliceIndex: 0n, amount: 1_000_000n });
+  // The blob itself, byte for byte, is what the chain accepted. The round trip above
+  // only proves that the SDK agrees with itself; this proves it agrees with the
+  // contract, which decodes three big-endian words. The golden is the node's
+  // (node/src/chain/slice.rs): channelId = 1, sliceIndex = 0, amount = 50_000_000,
+  // replayed against a real PaymentVault.redeem on a chain deployed from these
+  // contracts. A change to the encoding here would otherwise pass every SDK test
+  // and fail every redemption in production.
+  assert.equal(
+    encodeSliceSignature(1n, 0n, 50_000_000n),
+    "0x" +
+      "0000000000000000000000000000000000000000000000000000000000000001" +
+      "0000000000000000000000000000000000000000000000000000000000000000" +
+      "0000000000000000000000000000000000000000000000000000000002faf080"
+  );
 
   // The rules `CipherTask` enforces by truncating to uint128 have to be enforced here by refusing.
   assert.throws(() => encodeSliceSignature(7n, 0n, 1n << 128n), /uint128/);
