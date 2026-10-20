@@ -2,7 +2,7 @@ name: shardstore
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths: ["infra/shardstore/**", ".github/workflows/shardstore.yml"]
   pull_request:
     paths: ["infra/shardstore/**", ".github/workflows/shardstore.yml"]
