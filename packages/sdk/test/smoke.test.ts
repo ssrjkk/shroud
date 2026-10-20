@@ -1307,6 +1307,25 @@ test("domainSeparator is deterministic", () => {
   assert.equal(a, b);
 });
 
+test("the domain separator matches the vault's, byte for byte", () => {
+  // The SDK recomputes the vault's EIP-712 domain separator locally and submits the
+  // digest to `PaymentVault.redeem`, which checks it against the separator the vault
+  // computed in its constructor. A divergence would make every slice redemption the
+  // SDK submits fail with InvalidSignature - and nothing in the repo would notice,
+  // because the contracts' suite computes its own separator and the SDK's only
+  // checked that its own was stable. The golden is the same value the contracts'
+  // suite pins from the other side.
+  assert.equal(
+    domainSeparator("0x0000000000000000000000000000000000000001", 31337n),
+    "0x7daba0f7c50d1c8fd8026e05236fc6a200ce2bacc02f5c91de5630ce317cc423"
+  );
+  // A different chain id is a different domain: the separator is not chain-agnostic.
+  assert.notEqual(
+    domainSeparator("0x0000000000000000000000000000000000000001", 1n),
+    "0x7daba0f7c50d1c8fd8026e05236fc6a200ce2bacc02f5c91de5630ce317cc423"
+  );
+});
+
 test("the noop shard matches the node's shroud/noop/v1 layout byte for byte", async () => {
   // The Rust golden vector (node/src/fhe.rs `site_vectors_pin_the_digest_layout`, the
   // same one web/tests/vectors.json carries): features = 3, 8 rows. The header is

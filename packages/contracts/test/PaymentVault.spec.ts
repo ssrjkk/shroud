@@ -213,6 +213,18 @@ describe("PaymentVault", () => {
   });
 
   describe("EOA streamer", () => {
+    it("computes the domain separator the SDK pins", () => {
+      // The SDK recomputes this separator locally and hands the digest to the vault, so
+      // the two must agree byte for byte. The live redeem below signs with this helper's
+      // value and the vault accepts it, which pins the formula; this pins the value, which
+      // is what ties the SDK's copy to it. If either side changed, one of the two tests
+      // would fail - and a divergence would show up in production as every slice
+      // redemption rejected with InvalidSignature.
+      expect(
+        sliceDomain("0x0000000000000000000000000000000000000001", 31337n).domainSeparator
+      ).to.equal("0x7daba0f7c50d1c8fd8026e05236fc6a200ce2bacc02f5c91de5630ce317cc423");
+    });
+
     /**
      * A channel's streamer is always whoever called `openTaskChannel`, i.e. the task manager. With
      * `CipherTask` in that role the slice is an ERC-1271 blob (covered in `CipherTask.spec.ts`);

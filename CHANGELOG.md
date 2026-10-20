@@ -67,6 +67,17 @@ first tagged release.
   new high-severity advisory in either tree passed the build and waited for the
   weekly Dependabot scan. Both jobs run the gate now.
 
+### Gates: the SDK's domain separator is pinned to the vault's
+
+- The SDK recomputes the vault's EIP-712 domain separator locally and submits the
+  digest to `PaymentVault.redeem`, which checks it against the separator the vault
+  computed in its constructor. A divergence would make every slice redemption the
+  SDK submits fail with `InvalidSignature` — and nothing in the repo would notice:
+  the contracts' suite computes its own separator, and the SDK's only test checked
+  that its own was stable. Both sides now pin the same golden value, and the
+  live redeem in the contracts' suite ties that value to the contract's own
+  behaviour.
+
 ### Gates: the site's finding count can no longer drift from the threat model
 
 - The site tells the reader that the threat model carries "N findings", and the
