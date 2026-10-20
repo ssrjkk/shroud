@@ -19,7 +19,7 @@ import {
   assertCid, assertPath, parseRangeHeader, assertDeclaredLength,
   assertBearerToken, assertIdempotencyKey, Metrics, AuditLog,
   maskSecrets, CircuitBreaker, CbState, withResilience, startSweeper,
-  requestContext, withRequest, currentRequestId,
+  requestContext, withRequest, currentRequestId, guardedRequest,
 } from "./guard.mjs";
 
 function clock(start = 1_000_000) {
@@ -375,5 +375,18 @@ describe("CircuitBreaker", () => {
     assert.match(lines[0], /GUARD_FALLBACK/);
     const ok = await withResilience("t", async () => 7, { fallback: 0, audit });
     assert.deepEqual(ok, { ok: true, value: 7 });
+  });
+  it("guardedRequest: отказ хендлера — это отказ запроса, а не смерть процесса", async () => {
+    // Node treats an unhandled rejection as fatal, so a handler that threw left
+    // its rejection unhandled: one malformed request stopped the store whole.
+    const failures = [];
+    const value = await guardedRequest(async () => { throw new Error("boom"); }, (e) => failures.push(e));
+    assert.equal(value, undefined);
+    assert.equal(failures.length, 1);
+    assert.match(failures[0].message, /boom/);
+    // A handler that works is passed through, and nothing is reported.
+    const ok = await guardedRequest(async () => "done", () => failures.push(new Error("nope")));
+    assert.equal(ok, "done");
+    assert.equal(failures.length, 1);
   });
 });

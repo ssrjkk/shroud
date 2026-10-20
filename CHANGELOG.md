@@ -6,7 +6,42 @@ first tagged release.
 
 ## Unreleased
 
-### Threat model: seven real defects were missing from the auditors' map
+### Threat model: the map now carries every defect that was fixed
+
+- F-40…F-46 covered the seven defects of the last pass. The fixes of the pass
+  before that were not in the map either, and the map is what an auditor reads
+  first: the shard store's per-request catch, the SDK's range pull that buffered
+  the whole object, the SDK's file store that deleted a live temp file, the
+  bot's watchlists that two chats could lose between them, the bot's watch
+  buttons that were priced like the cheap command, the bot's alert cursor that
+  was rewritten in place, the provider's API key that could reach the log and
+  the chat, and the lab that taught a digest convention no node commits. They are
+  now F-47…F-54, each with the failure it allowed and the regression that pins
+  it. The site's finding count follows: 54.
+
+### The provider's key: the redaction had two holes, and the errors were never scrubbed
+
+- The RPC URL is printed so the operator can see *which* endpoint is
+  misconfigured — and a managed RPC URL carries the provider's API key in it.
+  The redaction masked the **last** path segment only, so a key in any other
+  position (a gateway that puts something after it), in the query string, in the
+  fragment, or in the URL's own credentials was printed in full. Every path
+  segment that is not an API-version token is masked now, and the query, the
+  fragment and the credentials are dropped.
+- The messages the bot prints and sends were never scrubbed at all: an error
+  that quoted the RPC URL carried the key into the log and into the chat, where
+  it stays in the chat's history. Every error the bot logs or returns is now
+  scrubbed of the key, including the read errors `/status` surfaces.
+
+### The shard store's last-resort net is now a tested invariant
+
+- A request whose handler rejected took the server down with it: the rejection
+  surfaced as an unhandled rejection, which Node treats as fatal. The net is now
+  a library primitive (`guardedRequest`) rather than a `try`/`catch` buried in
+  the request path, so the invariant is pinned by a unit test instead of by
+  reading the server.
+
+### Gates: the site's finding count can no longer drift from the threat model
 
 - The threat model carried F-01…F-39 and none of the seven defects fixed in this
   pass was in it — so the map an auditor reads did not describe the tree. They are

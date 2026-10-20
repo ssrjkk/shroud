@@ -22,6 +22,7 @@ import { loadConfig, configuredContracts, ConfigError, ROOT } from "./config.js"
 import { TelegramBot } from "./telegram.js";
 import { ChatAbuseGuard, loadAbuseConfig } from "./abuse.mjs";
 import { ChainReader, makeInterfaces, poolPage } from "./chain.js";
+import { redactRpcUrl, scrubRpcSecret } from "./redact.js";
 import {
   renderStatus,
   renderPool,
@@ -128,31 +129,14 @@ export async function loadCursor(startBlock, catchupBlocks, file = CURSOR_FILE) 
 export const MAX_SEEN_EVENTS = 2000;
 
 /**
- * The RPC endpoint without its secret.
+ * The RPC endpoint without its secret, and the scrubber for any text that quotes
+ * it.
  *
- * Managed RPC URLs carry the provider's API key in the path (`…/v2/<key>`), so
- * printing the URL as it is writes the key into stdout and into whatever collects it.
- * The host and the path shape stay visible - the operator still sees *which*
- * endpoint - and only the last path segment is masked.
+ * Re-exported from `redact.js` so the public surface of this module does not
+ * change: the operator-facing helpers live in one place, and the bot's entry
+ * point still hands them out.
  */
-export function redactRpcUrl(url) {
-  try {
-    const u = new URL(url);
-    const segments = u.pathname.split("/").filter(Boolean);
-    if (segments.length === 0) return `${u.protocol}//${u.host}`;
-    const last = segments[segments.length - 1];
-    const masked = last.length > 4 ? `${last.slice(0, 2)}…${last.slice(-2)}` : "…";
-    segments[segments.length - 1] = masked;
-    u.pathname = `/${segments.join("/")}`;
-    u.search = "";
-    u.username = "";
-    u.password = "";
-    return u.toString();
-  } catch {
-    // Not a URL we can parse: show only the shape, never the tail.
-    return "<rpc url>";
-  }
-}
+export { redactRpcUrl, scrubRpcSecret };
 
 /** Cap on remembered commit digests: keys are short, values are 32-byte hashes. */
 export const MAX_SEEN_DIGESTS = 5000;
@@ -594,7 +578,7 @@ async function main() {
   try {
     chain = await ChainReader.connect(config, interfaces);
   } catch (err) {
-    console.error(`\nCannot reach the chain: ${err.message}\n`);
+    console.error(`\nCannot reach the chain: ${scrubRpcSecret(err.message, config.rpcUrl)}\n`);
     // The RPC URL often carries the provider's API key in its path, so it is not printed
     // as it is: the operator needs to know *which* endpoint, not its secret.
     console.error(`Check RPC_URL (currently ${redactRpcUrl(config.rpcUrl)}) and that the node is running.\n`);
@@ -707,13 +691,17 @@ async function main() {
           // one bad RPC read is worse than one that says "that failed".
           // err.message is escaped: replies go out with parse_mode HTML and a raw
           // "<" from an RPC/proxy error would make Telegram reject the send (400).
-          return { text: `could not complete /${name}: ${htmlEscape(err.message)}`, markup: undefined };
+          // It is scrubbed too: the reply lands in a chat, and an error that quotes
+          // the RPC URL would put the provider's key in the chat's history.
+          const message = htmlEscape(scrubRpcSecret(err.message, config.rpcUrl));
+          return { text: `could not complete /${name}: ${message}`, markup: undefined };
         }
       });
     } catch (err) {
       // A failing command must not kill the process: an ops bot that crashes on
       // one bad RPC read is worse than one that says "that failed".
-      return { text: `could not complete: ${htmlEscape(err.message)}`, markup: undefined };
+      const message = htmlEscape(scrubRpcSecret(err.message, config.rpcUrl));
+      return { text: `could not complete: ${message}`, markup: undefined };
     }
   }
 
@@ -779,7 +767,7 @@ async function main() {
       );
     } catch (err) {
       await bot.answerCallbackQuery(query.id, "that failed — try again");
-      log("error", config)("callback failed:", err.message);
+      log("error", config)("callback failed:", scrubRpcSecret(err.message, config.rpcUrl));
       return;
     }
     // In-place edit keeps the chat tidy; when Telegram rejects the edit

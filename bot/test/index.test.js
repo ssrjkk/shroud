@@ -14,6 +14,7 @@ import { emptyState, addWatch, setAlertOverride } from "../src/watchlist.js";
 import os from "node:os";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
+import fs from "node:fs";
 
 test("eventUid binds a log to its transaction hash and index", () => {
   assert.equal(eventUid({ txHash: "0xabc", logIndex: 3 }), "0xabc:3");
@@ -154,6 +155,33 @@ test("cursor round-trips digests across a restart", async () => {
   assert.equal(back.cursor, 123);
   assert.ok(back.seen.has("0xabc:3"));
   assert.equal(back.digests.get("1/2/0xabc"), "0xdigest1");
+});
+
+test("a failed cursor write leaves the previous cursor readable", async () => {
+  // The cursor is rewritten on every poll cycle. Written in place, a crash left a
+  // truncated file, and a truncated cursor reads as "no cursor": the scan restarts
+  // with an empty seen-set and an empty digest map - a duplicate-alert storm over the
+  // whole window, and the loss of every remembered commit digest. The write is
+  // temp-then-rename, so a write that fails leaves the old cursor whole.
+  const file = cursorFile();
+  await saveCursor(123, new Set(["0xabc:3"]), new Map(), file);
+  const before = fs.readFileSync(file, "utf8");
+
+  // A path whose parent is a regular file: the write cannot land.
+  const blocker = cursorFile();
+  fs.writeFileSync(blocker, "not a directory");
+  const broken = path.join(blocker, "cursor.json");
+  await saveCursor(999, new Set(["0xdead:1"]), new Map(), broken);
+
+  const back = await loadCursor(1000, 100, file);
+  assert.equal(back.cursor, 123);
+  assert.ok(back.seen.has("0xabc:3"));
+  assert.equal(fs.readFileSync(file, "utf8"), before, "the previous cursor must be untouched");
+  // No temp file of ours is left behind by the failed write.
+  const prefix = path.basename(file) + ".tmp-";
+  const leftovers = fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith(prefix));
+  assert.deepEqual(leftovers, [], "temp files left behind: " + leftovers.join(", "));
+  fs.rmSync(blocker, { force: true });
 });
 
 test("cursor loads files written before digests existed", async () => {

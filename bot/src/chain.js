@@ -15,6 +15,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { Interface, JsonRpcProvider, FetchRequest, Contract, id as keccakId, getAddress } from "ethers";
 import { ROOT } from "./config.js";
+import { scrubRpcSecret } from "./redact.js";
 
 const ABI_DIR = resolve(ROOT, "..", "packages", "sdk", "src", "abi");
 
@@ -223,7 +224,9 @@ export class ChainReader {
   #noteReadError(where, err) {
     this.#lastReadError = {
       where,
-      message: err?.message ?? String(err),
+      // Scrubbed: this message is surfaced to the operator by /status, and an error
+      // that quotes the RPC URL would put the provider's key into a chat.
+      message: scrubRpcSecret(err?.message ?? String(err), this.#config.rpcUrl),
       at: Date.now(),
     };
   }

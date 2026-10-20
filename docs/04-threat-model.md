@@ -638,6 +638,76 @@ that are actually there. Regression: *"the weights envelope header matches the f
 carries"* and, in the `prover` build, *"the decoder reads exactly rows times features
 frames"*.
 
+### F-47 — One rejected request could stop the whole shard store — **Mitigated**
+A request whose handler rejected took the server down with it: the rejection surfaced as an
+unhandled rejection, and Node treats that as fatal. One malformed request — or one internal
+bug on a rare path — stopped the store, and with it every node that had to publish or fetch
+a shard. The handler's rejection is now caught per request and answered as a 500.
+Regression: `infra/shardstore/guard.test.mjs` — *"a rejected handler is a failed request,
+not a dead process"*.
+
+### F-48 — The SDK's range pull could buffer the whole object (ADV8) — **Mitigated**
+A range pull was bounded by the *object* cap (64 MiB) instead of the requested window, so a
+store that ignored `Range` made the client buffer the whole object — twice that in the copy
+— for a window that may be a kilobyte. The `Content-Range` header is now checked before the
+body is read, and the read itself is bounded by the window. Regression:
+`packages/sdk/test/smoke.test.ts` — *"HttpShardStore.getRange refuses an oversized body
+without buffering it"*.
+
+### F-49 — The SDK's file store could delete a shard that was being written (ADV8) — **Mitigated**
+`FileShardStore` swept every `*.tmp` in its directory when it opened, so a second process
+opening the store deleted the temp file the first one was about to rename; the rename then
+failed and the shard was never stored — in a store documented for multi-process use ("SDK
+uploads next to a node reading the same dir"). The sweep takes only orphans now (older than
+an hour) and leaves a temp that is still in flight alone. Two processes putting the same
+content-addressed bytes both passed the "does it exist" check, and the second rename over the
+existing file threw on Windows; the content is identical by construction, so "the file is
+already there" is success now. Regression: `packages/sdk/test/smoke.test.ts` — *"FileShardStore
+survives concurrent puts and sweeps stale temps"*.
+
+### F-50 — Two chats saving at once could lose every chat's watchlist (ADV1) — **Mitigated**
+Every watchlist save used one temp path per process, so two saves at the same time (the
+dispatcher runs handlers concurrently) landed in one file, and the rename published a mixture
+of the two snapshots. The next start read that as corruption, moved it aside and started
+empty — every chat lost its watchlist and its alert overrides over one interleaved save. The
+writes are atomic and serialised per file now. Regression: `bot/test/watchlist.test.js` —
+*"concurrent saves leave a readable file, not a mixture of two snapshots"*.
+
+### F-51 — The bot's watch buttons were priced like the cheap command (ADV1) — **Mitigated**
+The watch and unwatch buttons render the full task view, which is `/task`-sized work, but
+they were priced like the cheap `/watch` command. A chat could buy five times the intended
+RPC amplification — exactly what the per-chat budget exists to stop. The price now comes
+from what the press does. Regression: `bot/test/callbacks.test.js` — *"callbackCost matches
+the abuse-guard price of the work the button does"*.
+
+### F-52 — The bot's alert cursor was rewritten in place (ADV1) — **Mitigated**
+The cursor was rewritten in place on every poll cycle, so a crash left a truncated file; a
+truncated cursor reads as "no cursor", which restarts the scan with an empty seen-set and an
+empty digest map — a duplicate-alert storm over the whole window, and the loss of every
+remembered commit digest. It is written atomically now. Regression:
+`bot/test/index.test.js` — *"a failed cursor write leaves the previous cursor readable"*.
+
+### F-53 — The provider's API key could reach the log and the chat (ADV8) — **Mitigated**
+The RPC URL was printed in the clear, and a managed RPC URL carries the provider's API key in
+its path. The first fix masked the last path segment only, so a key in any other position (a
+gateway that puts something after it), in the query, in the fragment, or in the URL's own
+credentials was printed in full; and any error message that quoted the URL carried the key
+into the log and into the Telegram chat. Every path segment that is not an API-version token
+is masked now, the query, the fragment and the credentials are dropped, and every message
+the bot prints or sends is scrubbed of the key. Regression: `bot/test/redact.test.js` and
+`bot/test/index.test.js` — *"the RPC URL is never logged with its key"*.
+
+### F-54 — The lab taught a digest convention that no node commits (ADV2) — **Mitigated**
+The leaf the node puts into the trace digest comes from the chain's contribution record: the
+transport address the contributor submitted (`sha256` of the payload) and the on-chain pin
+(`keccak256` of the payload). The lab and the golden harness used the row commitment and
+`keccak(payload)` in those two slots, so the digest the lab printed was not a digest any
+node would commit — and nothing noticed, because the lab and the harness agreed with each
+other and both disagreed with the node. The leaf is built from the chain's record now, and
+the site, the harness and the node pin the same golden vector. Regression:
+`web/tests/equiv.mjs` — *"the lab leaf matches the golden digest"*, and
+`node/src/fhe.rs` — *"site_vectors_pin_the_digest_layout"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.

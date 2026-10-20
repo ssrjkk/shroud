@@ -585,6 +585,26 @@ export function newRequestId() { return randomUUID(); }
 export function withRequest(id, fn) { return requestContext.run({ requestId: id ?? newRequestId() }, fn); }
 export function currentRequestId() { return requestContext.getStore()?.requestId ?? null; }
 
+/**
+ * Run a request handler so that a rejection is a failed request, not a dead process.
+ *
+ * Node treats an unhandled rejection as fatal, and a request handler that threw
+ * left its rejection unhandled: one malformed request stopped the store, and
+ * with it every node that had to publish or fetch a shard. The rejection is
+ * caught here and handed to `onFailure`, which answers 500.
+ *
+ * The return value is the handler's, or `undefined` when it failed — the caller
+ * answers the request, so the value is not what carries the outcome.
+ */
+export async function guardedRequest(run, onFailure) {
+  try {
+    return await run();
+  } catch (e) {
+    onFailure?.(e);
+    return undefined;
+  }
+}
+
 const SECRET_KEY_RE = /(authorization|cookie|set-cookie|token|api[-_]?key|secret|password|passwd|private[-_]?key|seed|mnemonic|bearer)/i;
 
 export function maskSecrets(value, seen = new Set()) {

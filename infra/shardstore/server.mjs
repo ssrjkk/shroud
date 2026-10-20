@@ -36,7 +36,7 @@ import {
   tarpitDelayMs, honeypotPut, IdempotencyStore, FloodDetector, SanitizeError,
   assertCid, assertPath, parseRangeHeader, assertDeclaredLength, assertBearerToken,
   assertIdempotencyKey, Metrics, AuditLog, CircuitBreaker, withResilience,
-  requestContext, newRequestId, currentRequestId, startSweeper,
+  requestContext, newRequestId, currentRequestId, startSweeper, guardedRequest,
 } from "./guard.mjs";
 import { keccak256Hex } from "./keccak.mjs";
 
@@ -842,15 +842,24 @@ async function handle(req, res) {
 
   try {
     // Жёсткий дедлайн хендлера: зависший маршрут не держит сокет вечно.
-    const done = (async () => {
-      if (req.method === "GET" && url.pathname === "/healthz") return routeHealth(req, res);
-      if (req.method === "PUT" && url.pathname === "/objects") return routePut(req, res, url, ip);
-      if (req.method === "DELETE" && url.pathname.startsWith("/objects/")) return routeDelete(req, res, url, ip);
-      if (req.method === "GET" && url.pathname.startsWith("/objects/")) return routeGet(req, res, url, ip);
-      // Неизвестный маршрут — тоже через санитайзер (троллинг путями).
-      try { assertPath(url.pathname, guard.maxPathLen); } catch { return send(res, 404, { error: "not found" }); }
-      return send(res, 404, { error: "not found" });
-    })();
+    // Отказ маршрута — отказ запроса, а не смерть процесса: unhandled rejection
+    // в Node фатален, и один такой запрос останавливал хранилище целиком.
+    const done = guardedRequest(
+      async () => {
+        if (req.method === "GET" && url.pathname === "/healthz") return routeHealth(req, res);
+        if (req.method === "PUT" && url.pathname === "/objects") return routePut(req, res, url, ip);
+        if (req.method === "DELETE" && url.pathname.startsWith("/objects/")) return routeDelete(req, res, url, ip);
+        if (req.method === "GET" && url.pathname.startsWith("/objects/")) return routeGet(req, res, url, ip);
+        // Неизвестный маршрут — тоже через санитайзер (троллинг путями).
+        try { assertPath(url.pathname, guard.maxPathLen); } catch { return send(res, 404, { error: "not found" }); }
+        return send(res, 404, { error: "not found" });
+      },
+      (e) => {
+        audit.critical("HANDLER_FAILED", { ip, method: req.method, error: e.message });
+        metrics.incr("handler:500");
+        send(res, 500, { error: "internal error" });
+      }
+    );
     const timeout = sleep(guard.handlerTimeoutMs).then(() => "timeout");
     const winner = await Promise.race([done.then(() => "done"), timeout]);
     if (winner === "timeout") {
@@ -860,6 +869,7 @@ async function handle(req, res) {
       try { req.destroy(); } catch { /* уже мёртв */ }
     }
   } catch (e) {
+    // Всё, что вне тела маршрута (сам путь таймаута): тоже отказ запроса.
     audit.critical("HANDLER_FAILED", { ip, method: req.method, error: e.message });
     metrics.incr("handler:500");
     send(res, 500, { error: "internal error" });
