@@ -2,7 +2,7 @@ name: sdk
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     # contracts/ is included on purpose: the smoke tests cross-check the embedded
     # ABIs against the compiled contracts, so a Solidity change with a stale
     # `src/abi/` snapshot must fail here even if packages/sdk/** is untouched
