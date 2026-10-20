@@ -6,7 +6,7 @@ name: codeql
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       ["packages/**", "bot/**", "infra/shardstore/**", "web/**", ".github/workflows/codeql.yml"]
   pull_request:
