@@ -2,7 +2,7 @@ name: rust
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     # `web/**` (not just `web/tests/**`): the site math (`web/assets/crypto.js`) must
     # reproduce this engine byte-for-byte, so any site change re-verifies the Rust side.
     paths: ["node/**", "web/**", "packages/contracts/**", ".github/workflows/rust.yml"]
