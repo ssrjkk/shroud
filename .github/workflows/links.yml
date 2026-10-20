@@ -16,6 +16,7 @@ jobs:
   branch-links:
     name: no pinned default-branch links
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       # The default branch is read from the event, not hard-coded: the branch was renamed
@@ -37,6 +38,7 @@ jobs:
   lychee:
     name: external links alive
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       # The site's own Pages URLs are checked against the repository, not against the
