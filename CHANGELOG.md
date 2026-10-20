@@ -58,7 +58,9 @@ first tagged release.
   *row* count, and with one frame per lane where the decoder expects `rows * features`
   frames. Every tfhe epoch therefore failed to load its own previous weights ("truncated
   ciphertext length"): the backend could never start an epoch, never commit, never dispute.
-  The encoder writes a row count now, and a round-trip test covers it.
+  The framing now agrees on both sides - the row count is derived from the lane count, and
+  the header and the frame count are pinned by tests on both sides of the contract (the
+  framing test needs no FHE stack at all, so it runs in every build).
 - The tfhe L2 shrinkage was derived from the *gradient* step, which divides by the
   quantisation scale and the minibatch. The reference engine shrinks by
   `l2_q16 * w / 2^16` and nothing else, so the tfhe backend's regularisation was `S` times

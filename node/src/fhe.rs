@@ -430,6 +430,38 @@ fn derive_l2(l2_q16: u32) -> Result<u32> {
     })
 }
 
+/// The row count an envelope's header must carry.
+///
+/// The decoder reads `features` and `rows` and then expects `rows * features` frames,
+/// while an envelope holds one frame per lane. So the row count is `lanes / features`:
+/// the weights are one row of `features` lanes. Writing the *lane* count here instead
+/// leaves the decoder looking for `features` times too many frames, and every epoch
+/// then fails with "truncated ciphertext length".
+#[cfg(any(feature = "prover", test))]
+fn envelope_rows(lanes: usize, features: u32) -> u32 {
+    let per_row = features.max(1) as usize;
+    (lanes / per_row) as u32
+}
+
+/// Frame opaque payloads into an envelope: the magic, the `features`/`rows` header the
+/// decoder reads back, then each frame length-prefixed.
+///
+/// Deliberately free of any `tfhe` type: the framing is where the weights envelope and
+/// its decoder used to disagree, and keeping it here means the agreement is compiled and
+/// tested in every build rather than only in the ones that pull in the FHE stack.
+#[cfg(any(feature = "prover", test))]
+fn encode_frames(magic: &[u8], features: u32, rows: u32, frames: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(magic);
+    out.extend_from_slice(&features.to_le_bytes());
+    out.extend_from_slice(&rows.to_le_bytes());
+    for frame in frames {
+        out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
+        out.extend_from_slice(frame);
+    }
+    out
+}
+
 #[cfg(feature = "prover")]
 mod tfhe_backend {
     //! Homomorphic epoch execution over real `tfhe-rs` ciphertexts.
@@ -466,8 +498,8 @@ mod tfhe_backend {
     use tfhe::{CompressedServerKey, FheUint32, ServerKey};
 
     use super::{
-        derive_l2, derive_step, EpochInputs, EpochOutput, Weights, STEP_SHIFT, TFHE_SHARD_MAGIC,
-        TFHE_WEIGHTS_MAGIC,
+        derive_l2, derive_step, encode_frames, envelope_rows, EpochInputs, EpochOutput, Weights,
+        STEP_SHIFT, TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC,
     };
     use crate::error::{Error, FheError, Result, ShardError};
 
@@ -616,19 +648,9 @@ mod tfhe_backend {
         ///
         /// The header is `features` then `rows`, exactly what `decode_envelope` reads back, and
         /// the frames that follow are `rows * features` of them. The weights are one row of
-        /// `features` lanes, so they are written with `rows = 1` - writing the *lane* count
-        /// here instead would leave the decoder looking for `features` times too many frames
-        /// and fail every epoch with "truncated ciphertext length".
-        fn encode_envelope(
-            magic: &[u8],
-            features: u32,
-            rows: u32,
-            lanes: &[FheUint32],
-        ) -> Result<Vec<u8>> {
-            let mut out = Vec::new();
-            out.extend_from_slice(magic);
-            out.extend_from_slice(&features.to_le_bytes());
-            out.extend_from_slice(&rows.to_le_bytes());
+        /// `features` lanes, so the row count is `envelope_rows`.
+        fn encode_envelope(magic: &[u8], features: u32, lanes: &[FheUint32]) -> Result<Vec<u8>> {
+            let mut frames = Vec::with_capacity(lanes.len());
             for ct in lanes {
                 let mut frame = Vec::new();
                 tfhe::safe_serialization::safe_serialize(ct, &mut frame, DESERIALIZE_LIMIT)
@@ -637,10 +659,14 @@ mod tfhe_backend {
                             "tfhe backend: ciphertext fails to serialise: {e}"
                         )))
                     })?;
-                out.extend_from_slice(&(frame.len() as u32).to_le_bytes());
-                out.extend_from_slice(&frame);
+                frames.push(frame);
             }
-            Ok(out)
+            Ok(encode_frames(
+                magic,
+                features,
+                envelope_rows(lanes.len(), features),
+                &frames,
+            ))
         }
     }
 
@@ -778,7 +804,7 @@ mod tfhe_backend {
 
             // One row of `features` lanes: the decoder reads `rows` and then expects
             // `rows * features` frames.
-            let weights_bytes = Self::encode_envelope(TFHE_WEIGHTS_MAGIC, inputs.features, 1, &w)?;
+            let weights_bytes = Self::encode_envelope(TFHE_WEIGHTS_MAGIC, inputs.features, &w)?;
             // Ciphertext bytes are randomised by PBS: the digest pins this run's outputs.
             // See the module docs for why cross-node byte equality does not hold here.
             let weights_digest = keccak256(&weights_bytes);
@@ -809,11 +835,7 @@ mod tfhe_backend {
     #[cfg(test)]
     mod tests {
         use super::super::{TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC};
-        // `encrypt_trivial` is a trait method from the prelude; the type is imported by name,
-        // exactly as the backend itself does.
         use crate::error::{Error, FheError};
-        use tfhe::prelude::*;
-        use tfhe::FheUint32;
 
         #[test]
         fn key_loading_refuses_without_material() {
@@ -846,19 +868,32 @@ mod tfhe_backend {
         }
 
         #[test]
-        fn the_weights_envelope_round_trips_through_its_own_decoder() {
-            // The bug this guards: the encoder wrote the *lane* count where the decoder reads
-            // a *row* count, and then wrote one frame per lane while the decoder expected
-            // `rows * features` of them. Every tfhe epoch therefore failed to load its own
-            // previous weights with "truncated ciphertext length" - the backend could never
-            // start, never commit and never dispute.
-            let lanes: Vec<FheUint32> = (0..3u32).map(FheUint32::encrypt_trivial).collect();
-            let bytes =
-                super::TfheBackend::encode_envelope(TFHE_WEIGHTS_MAGIC, 3, 1, &lanes).unwrap();
-            let decoded =
-                super::TfheBackend::decode_envelope(&bytes, TFHE_WEIGHTS_MAGIC, "tfhe weights", 3)
-                    .expect("the envelope the node writes must decode again");
-            assert_eq!(decoded.len(), lanes.len());
+        fn the_decoder_reads_exactly_rows_times_features_frames() {
+            // The other half of the same contract, from the decoder's side: with
+            // `features = 2` and `rows = 1` it must look for two frames. If it looked for
+            // a different number it would stop at the end of the buffer and report a
+            // truncation - which is the failure mode the weights envelope had.
+            let mut env = Vec::from(TFHE_WEIGHTS_MAGIC);
+            env.extend_from_slice(&2u32.to_le_bytes()); // features
+            env.extend_from_slice(&1u32.to_le_bytes()); // rows
+            for _ in 0..2 {
+                env.extend_from_slice(&4u32.to_le_bytes());
+                env.extend_from_slice(&[0u8; 4]);
+            }
+            // `FheUint32` is not `Debug`, so the error is unwrapped by hand rather than
+            // through `expect_err`.
+            let err = match super::TfheBackend::decode_envelope(&env, TFHE_WEIGHTS_MAGIC, "x", 2) {
+                Ok(_) => panic!("a frame of zeroes is not a ciphertext"),
+                Err(e) => e,
+            };
+            let reason = match err {
+                Error::ShardStore(crate::error::ShardError::Malformed { reason, .. }) => reason,
+                other => panic!("expected a malformed envelope, got {other:?}"),
+            };
+            assert!(
+                reason.contains("fails to deserialise"),
+                "the decoder must read both frames and fail on their content, got: {reason}"
+            );
         }
     }
 }
@@ -944,6 +979,35 @@ mod tests {
     fn step_derivation_rejects_unrepresentable_rates() {
         assert!(derive_step(u32::MAX, 1, 1).is_err());
         assert!(derive_step(65_536, 0, 8).is_err());
+    }
+
+    #[test]
+    fn the_weights_envelope_header_matches_the_frames_it_carries() {
+        // The bug this guards: the encoder wrote the *lane* count where the decoder reads
+        // a *row* count, and then wrote one frame per lane while the decoder expected
+        // `rows * features` of them. Every tfhe epoch therefore failed to load its own
+        // previous weights ("truncated ciphertext length"): the backend could never start,
+        // never commit and never dispute.
+        //
+        // The weights are one row of `features` lanes, so the header must say one row -
+        // and the frame count the decoder will expect has to be the frame count that is
+        // actually there.
+        let features = 3u32;
+        let frames = vec![vec![1u8, 2, 3], vec![4, 5, 6], vec![7, 8, 9]];
+        let rows = envelope_rows(frames.len(), features);
+        assert_eq!(rows, 1, "three lanes of three features are one row");
+
+        let bytes = encode_frames(TFHE_WEIGHTS_MAGIC, features, rows, &frames);
+        let at = TFHE_WEIGHTS_MAGIC.len();
+        let read_features = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let read_rows = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap());
+        assert_eq!(read_features, features);
+        assert_eq!(read_rows, rows);
+        assert_eq!(
+            read_rows as usize * features as usize,
+            frames.len(),
+            "the decoder reads `rows` and then expects `rows * features` frames"
+        );
     }
 
     #[test]
