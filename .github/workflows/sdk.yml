@@ -17,7 +17,6 @@ jobs:
     name: build + test + typecheck
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    timeout-minutes: 20
     defaults:
       run:
         working-directory: packages/sdk
@@ -57,4 +56,3 @@ jobs:
       - run: node --test test/live-relayer.test.ts
         env:
           SHROUD_LIVE_RELAYER: "1"
-        timeout-minutes: 10
