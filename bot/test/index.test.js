@@ -241,7 +241,14 @@ test("the RPC URL is never logged with its key", () => {
   const url = "https://eth-mainnet.g.alchemy.com/v2/SuperSecretKey123";
   const redacted = redactRpcUrl(url);
   assert.ok(!redacted.includes("SuperSecretKey123"), `the key survived: ${redacted}`);
-  assert.ok(redacted.includes("alchemy.com"), `the endpoint must stay visible: ${redacted}`);
+  // Хост сравнивается целиком, а не подстрокой: «alchemy.com» может встретиться
+  // где угодно внутри URL, и проверка подстрокой прошла бы и для чужого хоста
+  // («https://evil.test/?x=alchemy.com»). Разбор URL сравнивает именно host.
+  assert.equal(
+    new URL(redacted).hostname,
+    "eth-mainnet.g.alchemy.com",
+    `the endpoint must stay visible: ${redacted}`,
+  );
   // Nothing else leaks either.
   assert.ok(!redacted.includes("v2/SuperSecretKey123"));
   // A URL we cannot parse is not printed at all.
