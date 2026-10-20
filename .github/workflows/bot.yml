@@ -31,4 +31,7 @@ jobs:
       - run: npx hardhat compile
         working-directory: packages/contracts
       - run: npm ci
+      # The bot runs on a server with the operator's token; a new high/critical advisory in
+      # its tree must fail the build instead of waiting for the weekly Dependabot scan.
+      - run: npm audit --audit-level=high
       - run: npm test

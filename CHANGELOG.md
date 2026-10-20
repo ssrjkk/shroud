@@ -6,6 +6,32 @@ first tagged release.
 
 ## Unreleased
 
+### Threat model: seven real defects were missing from the auditors' map
+
+- The threat model carried F-01…F-39 and none of the seven defects fixed in this
+  pass was in it — so the map an auditor reads did not describe the tree. They are
+  now F-40…F-46, each with the failure it allowed and the regression that pins it:
+  an aborted task that could be re-sealed (reopening the slash path), a gate that
+  could be opened behind the orchestrator's back (bricking the task), a DA that
+  could silently discard an honest upload, a DA whose memory guard did not guard
+  memory, a node that read the epoch claim by a rule the contract does not have
+  (so an honest node never disputed), an SGD update that could wrap, and a tfhe
+  backend that could not run an epoch at all.
+- The site's finding count follows: it quoted 39 findings, and the model now
+  carries 46.
+
+### Gates: the SDK's shard layout is pinned, and advisories fail the SDK and the bot
+
+- The SDK's `noop` shard encoder was never checked against the node's decoder, so
+  a change on either side that the other did not follow would produce a shard
+  that uploads cleanly and then fails in every node's decoder — or worse, decodes
+  into different rows. The SDK now pins its bytes against the node's golden (the
+  same vector the site's equivalence gate and the node's own test use).
+- `npm audit --audit-level=high` gated the contracts job only. The SDK is a
+  published package and the bot runs on a server with the operator's token, so a
+  new high-severity advisory in either tree passed the build and waited for the
+  weekly Dependabot scan. Both jobs run the gate now.
+
 ### ShardStore: an honest upload could be silently discarded
 
 - The "bot-timing" heuristic scored any client with a regular PUT cadence as a bot

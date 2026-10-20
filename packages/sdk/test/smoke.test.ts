@@ -1307,6 +1307,27 @@ test("domainSeparator is deterministic", () => {
   assert.equal(a, b);
 });
 
+test("the noop shard matches the node's shroud/noop/v1 layout byte for byte", async () => {
+  // The Rust golden vector (node/src/fhe.rs `site_vectors_pin_the_digest_layout`, the
+  // same one web/tests/vectors.json carries): features = 3, 8 rows. The header is
+  // "shroud/noop/v1\0" + features + "\0" + rows + "\0", then the rows as f64 little-endian.
+  //
+  // The node decodes this layout, so a change on either side that the other does not
+  // follow produces a shard that uploads cleanly and then fails in every node's decoder -
+  // or worse, decodes into different rows. Nothing else in the SDK pins it.
+  const { NoopEncryptor } = await import("../dist/index.js");
+  const rows = [
+    1.2, 3, 2.1, 1.8, 3, 2.8, 2, 2, 3, 1.1, 4, 2.4, 2.4, 3, 3.6, 1.6, 2, 2.5, 2.9, 4, 4.2, 1.4, 3, 2.3,
+  ];
+  const enc = await new NoopEncryptor().encryptRows(rows, 3);
+  assert.equal(enc.ciphertext.length, 211, "the shard length must match the node's golden");
+  assert.equal(
+    ethers.keccak256(enc.ciphertext).toLowerCase(),
+    "0x47ab2fcd4d844b6194bf38a90275c1c6715e73d0451576061854f3aefba6feaf",
+    "the shard bytes must match the node's golden (the on-chain ctDigest)"
+  );
+});
+
 test("weights files match the node's shroud/weights/v1 layout byte for byte", async () => {
   const { encodeWeights, decodeWeights, weightsDigest, zeroWeights } = await import(
     "../dist/weights.js"

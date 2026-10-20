@@ -566,6 +566,78 @@ quiet control of the training trajectory; only the buyer and update manager may 
 `reclaimUnspentEpochs` was buyer-only, stranding the refund behind a key the task may no longer
 use; the update manager — which already controls the epoch loop — may call it too.
 
+### F-40 — An aborted task could be re-sealed, reopening the slash path (ADV4) — **Mitigated**
+`sealTask` gated on `isSealed` alone, and `abort` leaves `isSealed` false — the task was never
+sealed. So once the contribution window had expired, **anyone** could seal an aborted task and
+move it out of `Aborted`. That reopened the two things the abort deliberately closed: the slash
+path on a contributor the abort had already refunded (their bond went to the treasury, and the
+contract cannot undo it), and the release of that bond (`releaseContributionBond` treats a
+non-aborted task as not releasable, and `abort` refuses a sealed task, so the money was stuck).
+`sealTask` now refuses a terminal task. Regression: *"never re-seals an aborted task: the abort
+is terminal"*.
+
+### F-41 — The gate could be opened behind the orchestrator's back, bricking the task (ADV4) — **Mitigated**
+`DecryptionGate.requestReveal` was callable by anyone holding a committee signature. The gate's
+`open` flag and the task's `Settling → Revealing` transition are one state machine, so opening
+the gate directly took the flag while the task was still `Settling`; the buyer's own
+`CipherTask.requestReveal` then hit the gate's `AlreadyOpen` guard and reverted, rolling the
+transition back with it. The task could never reach `Disclosed`, and `withdraw` — the buyer's exit
+— was unreachable for good, with no way to reset the gate. The gate is now opened by the
+orchestrator and by nothing else, which is what its own documentation already claimed.
+Regression: *"the gate cannot be opened behind the orchestrator's back: the reveal stays
+reachable"*.
+
+### F-42 — The DA could silently discard an honest upload (ADV8) — **Mitigated**
+The shard store's "bot-timing" heuristic scored any client with a regular PUT cadence as a bot
+(a fixed interval has a coefficient of variation of zero, which is the definition of the anomaly
+it looks for), and a `HIGH` score answered the write with a plausible `201` and stored
+**nothing**. The client was told the shard was stored, the contract pinned its digest, and the
+encrypted rows were unrecoverable — the upload looked successful at every layer, and a regular
+cadence is exactly what the SDK's own upload loop produces. The honeypot now requires a *hard*
+signal as well (a failed auth, a rate hit, a duplicate payload, range abuse); timing alone no
+longer shadows a write. Regression: `infra/shardstore/hardening.test.mjs` — *"a regular
+cadence of an honest client does not land in the honeypot"*.
+
+### F-43 — The DA's memory guard did not guard memory (ADV8) — **Mitigated**
+The in-flight byte budget was checked once, on admission, and a body without `Content-Length`
+reserved **zero** bytes — so the check passed and was never re-applied while the body arrived.
+N such connections held N × 64 MiB under a 512 MiB budget, and the store died under every
+node that had to publish a shard. The budget is now re-checked as the body arrives and the
+excess is shed as backpressure (a retryable 503), not as a silent drop. Regression:
+`infra/shardstore/hardening.test.mjs` — *"the byte budget holds for a body without
+Content-Length"*.
+
+### F-44 — The node read the epoch claim by a rule the contract does not have (ADV2) — **Mitigated**
+`commitEpoch` writes `claimed[taskId][epoch]` exactly once: the **first** verified commit takes
+the winner seat and keeps it ("ties resolve by commit order, not by address"). The node read the
+claim as the *lowest-address* committer's digest — a rule that does not exist in the contract,
+and which the node's own comment described as if it did. A peer that committed first and this
+node second therefore left the node believing the claim was its own, so it filed **no dispute**
+while the peer kept the reward for an epoch the node had honestly computed. The fold now tracks
+the claim as the first commit it folded, and reports an unknown claim as unknown rather than
+guessing it. Regression: *"a commit after a peer claim files a dispute even with a lower
+address"*.
+
+### F-45 — The SGD update could wrap, so two honest nodes could disagree (ADV2) — **Mitigated**
+`apply_update` multiplied `lr_q16 * acc` unchecked, in the one module whose contract is "all
+arithmetic is checked `i128`; anything that does not fit is an error, never a wrap". The loss
+check bounds `err · err`, not `err · x`, so an accumulator the epoch accepted could still
+overflow the product: debug builds panicked, release builds wrapped silently and produced a
+weight update no other node reproduces — the build-dependent divergence the module exists to
+prevent, which shows up as a lost epoch and a peer disputing an honest node. The update is
+checked now, and an update that does not fit is an error. Regression: *"a step that does not fit
+is an error, not a wrap"*.
+
+### F-46 — The tfhe backend could not run an epoch at all (ADV2) — **Mitigated**
+The tfhe weights envelope wrote the *lane* count where its own decoder reads a *row* count, and
+wrote one frame per lane where the decoder expects `rows × features` frames. Every tfhe epoch
+therefore failed to load its own previous weights ("truncated ciphertext length"): the backend
+could never start an epoch, never commit and never dispute. The encoder writes a row count now,
+and the framing is pinned on both sides — the header the decoder reads back against the frames
+that are actually there. Regression: *"the weights envelope header matches the frames it
+carries"* and, in the `prover` build, *"the decoder reads exactly rows times features
+frames"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.
