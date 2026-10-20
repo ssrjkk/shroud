@@ -17,6 +17,7 @@ jobs:
     name: build + test + typecheck
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: packages/sdk
@@ -40,6 +41,7 @@ jobs:
   relayer-live:
     name: live relayer encryption (Sepolia)
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: packages/sdk
