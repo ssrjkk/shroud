@@ -56,3 +56,4 @@ jobs:
       - run: node --test test/live-relayer.test.ts
         env:
           SHROUD_LIVE_RELAYER: "1"
+        timeout-minutes: 10
