@@ -2,7 +2,7 @@ name: site
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     # `node/**` (not just the layout pins): any engine change re-checks the site math
     # against the golden vectors both sides pin.
     paths: ["web/**", "node/**", ".github/workflows/site.yml"]
