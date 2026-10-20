@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 # Pages deployment needs these; PRs from forks cannot deploy, so the deploy
-# job is master-only below while build still validates every PR.
+# job is main-only below while build still validates every PR.
 permissions:
   contents: read
   pages: write
@@ -22,7 +22,7 @@ concurrency:
   # concurrently-open PR cancel every other one, so a batch of Dependabot PRs
   # all report the site job as `cancelled` (and therefore red) even though the
   # site itself is fine. Per-ref keeps the intended behaviour where it matters —
-  # a new push to master cancels the older master deploy — while letting
+  # a new push to main cancels the older main deploy — while letting
   # unrelated PRs build in parallel.
   group: pages-${{ github.ref }}
   cancel-in-progress: true
@@ -77,7 +77,7 @@ jobs:
 
   deploy:
     name: deploy to GitHub Pages
-    if: github.ref == 'refs/heads/master'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-24.04
     environment:

@@ -97,24 +97,28 @@ first tagged release.
 
 ### Repository: one branch, no open PRs, green CI
 
-- `fix/unified` is merged into `master` (fast-forward, no conflicts). `master` now
-  carries the node build fix, the documentation that matches the fail-closed
-  defaults, the node/web/SDK corrections, and the regenerated SDK ABI snapshots.
-- The SDK ABI snapshots on `master` had drifted from the compiled contracts:
+- The default branch is now `main` (renamed from `master`), and the eight workflows
+  follow it. The rename left two gaps, both closed here: `site.yml`'s deploy job still
+  gated on `refs/heads/master`, so a push to `main` would never have deployed the site,
+  and the release documentation still named `master` as the branch a release is cut from.
+- `fix/unified` is merged into the mainline (fast-forward, no conflicts). It carries the
+  node build fix, the documentation that matches the fail-closed defaults, the node/web/SDK
+  corrections, and the regenerated SDK ABI snapshots.
+- The SDK ABI snapshots had drifted from the compiled contracts:
   `committeeSeed`, `isCommitteeEligible`, `committeeSize`, `NotCommitteeMember`,
   `taskBondTotal`, `topUpNodeBond` and `NodeBondToppedUp` were missing after #40
   added them. `sdk.yml` never caught it because its `paths` filter only covered
   `packages/sdk/**` — a Solidity change could not fail the ABI-drift test. The
   filter now includes `packages/contracts/src/**`, and the snapshots are
   regenerated to match.
-- Every open PR is closed and every branch other than `master` is deleted
+- Every open PR is closed and every branch other than `main` is deleted
   (local and remote). The Dependabot branches go with their PRs; Dependabot will
-  re-propose on its next weekly run, against a `master` that now builds.
+  re-propose on its next weekly run, against a `main` that now builds.
 - `feat/tg-bot-ux` was deleted rather than merged: it is the earlier version of
-  the inline-keyboard/watchlist feature that is already in `master` and was
+  the inline-keyboard/watchlist feature that is already on the mainline and was
   reworked there (`watchlist.js` 227 lines against 130, `keyboards.js` 154
   against 112, `index.js` 921 against 597, and longer versions of all three
-  test files). `fix/rust-ci` was already contained in `master`.
+  test files). `fix/rust-ci` was already contained in the mainline.
 
 ### CI: the link check raced the Pages deployment
 
@@ -138,7 +142,7 @@ first tagged release.
   Dependabot PRs therefore showed `package static site` and `deploy to GitHub Pages`
   as red even though the site itself builds fine, which made it look like the site
   was broken when nothing was wrong with it. The group is now per-ref
-  (`pages-${{ github.ref }}`): a new push to master still cancels the older master
+  (`pages-${{ github.ref }}`): a new push to main still cancels the older main
   deploy, and unrelated PRs no longer cancel each other.
 - The red was not the whole story, and the distinction matters: PR #43 failed for a
   real reason (the SDK's embedded ABI snapshot did not match the compiled

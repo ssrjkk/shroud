@@ -5,7 +5,7 @@
 - Release lines: `v0.1.0-testnet` (faucet funds only), later `v1.x` (never before
   an external audit with fixed findings — see `AUDIT_SCOPE.md`).
 - Release candidates: `v0.1.0-testnet-rc.1`, `-rc.2`, … Cut as a `release/…` branch
-  from a green `master`; the branch is frozen except for release-blockers, each
+  from a green `main`; the branch is frozen except for release-blockers, each
   re-cut as a new `-rc.N`.
 - Tags are annotated and signed (`git tag -s`). The tag message names the evidence
   pack (CI run IDs + artifact checksums). histoire lives in `CHANGELOG.md`:

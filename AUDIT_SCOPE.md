@@ -2,7 +2,7 @@
 
 What an external auditor is asked to review, which invariants must hold, and which
 questions are already open. Frozen per release: this file describes the tree at the
-tagged commit, not `master` in motion.
+tagged commit, not `main` in motion.
 
 ## In scope
 

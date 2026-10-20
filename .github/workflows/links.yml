@@ -18,13 +18,21 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - name: fail on /tree/main/ or /blob/main/
+      # The default branch is read from the event, not hard-coded: the branch was renamed
+      # from `master` to `main`, and a check that names one of them goes stale (or blocks
+      # legitimate links) the next time it moves. The rule is the same either way - source
+      # links track the default branch through `/HEAD/`, never a literal name, so a rename
+      # cannot strand every footer at once.
+      - name: fail on links that pin the default branch
         run: |
-          if grep -rnE '(tree|blob)/main/' web/ README.md *.md docs/; then
-            echo "source links must use /tree/HEAD/ or /blob/HEAD/, never /main/"
+          default_branch="${DEFAULT_BRANCH:-main}"
+          if grep -rnE "(tree|blob)/${default_branch}/" web/ README.md *.md docs/; then
+            echo "source links must use /tree/HEAD/ or /blob/HEAD/, never /${default_branch}/"
             exit 1
           fi
-          echo "branch links OK: no pinned /main/ references"
+          echo "branch links OK: no pinned /${default_branch}/ references"
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
 
   lychee:
     name: external links alive

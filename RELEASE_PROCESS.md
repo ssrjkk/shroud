@@ -1,6 +1,6 @@
 # Release process
 
-How a `master` commit becomes a testnet release candidate. Every step leaves an
+How a `main` commit becomes a testnet release candidate. Every step leaves an
 artifact; a step with no artifact did not happen.
 
 ## 1. Freeze
@@ -10,7 +10,7 @@ git checkout -b release/v0.1.0-testnet-rc.1
 ```
 
 From here: release-blockers only. Docs typos ride along; behaviour changes re-cut
-the RC. Open security-sensitive PRs (if any) stay out until merged to `master`
+the RC. Open security-sensitive PRs (if any) stay out until merged to `main`
 and re-cut.
 
 ## 2. Evidence pack
@@ -50,4 +50,4 @@ the logs attach to the draft release.
 ## 5. Promote or abandon
 
 Green rebuild + no new findings → `v0.1.0-testnet` (signed, same pack).
-Anything else → fix on `master`, re-cut `-rc.N+1`. Never rewrite a pushed RC.
+Anything else → fix on `main`, re-cut `-rc.N+1`. Never rewrite a pushed RC.
