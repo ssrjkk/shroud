@@ -2,7 +2,7 @@ name: contracts
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths: ["packages/contracts/**", "packages/sdk/scripts/devnet-check.mjs", "packages/sdk/package.json", ".github/workflows/contracts.yml"]
   pull_request:
     paths: ["packages/contracts/**", "packages/sdk/scripts/devnet-check.mjs", "packages/sdk/package.json", ".github/workflows/contracts.yml"]
