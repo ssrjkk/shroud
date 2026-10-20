@@ -16,7 +16,14 @@ test("the key does not survive when it is not the last path segment", () => {
   // (the old rule) printed the key in clear.
   const redacted = redactRpcUrl(`https://gateway.example.com/${KEY}/v2/extra`);
   assert.ok(!redacted.includes(KEY), `the key survived: ${redacted}`);
-  assert.ok(redacted.includes("gateway.example.com"), `the endpoint must stay visible: ${redacted}`);
+  // Хост сравнивается разобранным URL, а не подстрокой: «alchemy.com»
+  // может стоять где угодно внутри строки, и проверка подстрокой прошла бы
+  // и для чужого хоста («https://evil.test/?x=alchemy.com»).
+  assert.equal(
+    new URL(redacted).hostname,
+    "gateway.example.com",
+    `the endpoint must stay visible: ${redacted}`,
+  );
 });
 
 test("the key does not survive in the query or the fragment", () => {
@@ -34,8 +41,16 @@ test("the URL's own credentials do not survive", () => {
 
 test("the endpoint and the API version stay visible", () => {
   const redacted = redactRpcUrl(`https://eth-mainnet.g.alchemy.com/v2/${KEY}`);
-  assert.ok(redacted.includes("alchemy.com"), `the endpoint must stay visible: ${redacted}`);
-  assert.ok(redacted.includes("v2"), `the API version must stay visible: ${redacted}`);
+  // Хост сравнивается разобранным URL, а не подстрокой: «alchemy.com»
+  // может стоять где угодно внутри строки, и проверка подстрокой прошла бы
+  // и для чужого хоста («https://evil.test/?x=alchemy.com»).
+  const parsed = new URL(redacted);
+  assert.equal(
+    parsed.hostname,
+    "eth-mainnet.g.alchemy.com",
+    `the endpoint must stay visible: ${redacted}`,
+  );
+  assert.ok(parsed.pathname.startsWith("/v2/"), `the API version must stay visible: ${redacted}`);
   assert.ok(!redacted.includes(KEY), `the key survived: ${redacted}`);
 });
 
@@ -49,7 +64,10 @@ test("a message that quotes the RPC URL is scrubbed", () => {
   const message = `request to ${url} failed`;
   const scrubbed = scrubRpcSecret(message, url);
   assert.ok(!scrubbed.includes(KEY), `the key survived: ${scrubbed}`);
-  assert.ok(scrubbed.includes("alchemy.com"), `the endpoint must stay visible: ${scrubbed}`);
+  // Хост достаётся из сообщения и разбирается: сама по себе подстрока
+  // «alchemy.com» не говорит о том, чей это хост.
+  const host = scrubbed.match(/https?:\/\/([^/\s]+)/)?.[1];
+  assert.equal(host, "eth-mainnet.g.alchemy.com", `the endpoint must stay visible: ${scrubbed}`);
 });
 
 test("a provider that echoes the key back does not leak it", () => {
