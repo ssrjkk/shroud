@@ -56,13 +56,36 @@ pub struct SgdOutput {
 ///
 /// The conversions clamp rather than wrap: a step that does not fit is reported by
 /// the `i32` range check at the end of the epoch, never silently folded.
-pub fn apply_update(w: &mut [i64], grad: &mut [i128], m: u64, lr_q16: u32, s: i128) {
-    let denom = 65_536i128 * s * i128::from(m);
+pub fn apply_update(w: &mut [i64], grad: &mut [i128], m: u64, lr_q16: u32, s: i128) -> Result<()> {
+    let overflow = |stage: &'static str| CoreError::Overflow { stage };
+    // The denominator is checked like everything else here, and a zero denominator (a zero
+    // scale, or an empty batch) is an error rather than a division by zero.
+    let denom = 65_536i128
+        .checked_mul(s)
+        .and_then(|d| d.checked_mul(i128::from(m)))
+        .ok_or_else(|| overflow("update denominator"))?;
+    if denom == 0 {
+        return Err(overflow("update denominator"));
+    }
     for (lane, acc) in w.iter_mut().zip(grad.iter_mut()) {
-        let delta = (i128::from(lr_q16) * *acc) / denom;
-        *lane = clamp_i64(i128::from(*lane) - delta);
+        // `lr_q16 * acc` is the one product that can leave `i128`: the accumulator holds a
+        // sum of `err * x` over the batch and the learning rate multiplies it on top. The
+        // loss check only bounds `err * err`, not `err * x`, so the product can exceed the
+        // range on inputs the rest of the epoch accepted. A wrap here would make the update
+        // depend on build details - exactly what this module exists to prevent - so it is
+        // an error instead.
+        let scaled = i128::from(lr_q16)
+            .checked_mul(*acc)
+            .ok_or_else(|| overflow("update"))?;
+        let delta = scaled / denom;
+        *lane = clamp_i64(
+            i128::from(*lane)
+                .checked_sub(delta)
+                .ok_or_else(|| overflow("update"))?,
+        );
         *acc = 0;
     }
+    Ok(())
 }
 
 /// Run one full epoch over already-decoded shards.
@@ -121,7 +144,7 @@ pub fn run_epoch(
             in_batch += 1;
             n_rows += 1;
             if in_batch as usize >= params.minibatch {
-                apply_update(&mut w, &mut grad, in_batch, params.lr_q16, s);
+                apply_update(&mut w, &mut grad, in_batch, params.lr_q16, s)?;
                 in_batch = 0;
             }
         }
@@ -135,14 +158,21 @@ pub fn run_epoch(
         });
     }
     if in_batch > 0 {
-        apply_update(&mut w, &mut grad, in_batch, params.lr_q16, s);
+        apply_update(&mut w, &mut grad, in_batch, params.lr_q16, s)?;
     }
     // L2 shrinkage, once per epoch. Clamped into i64: the final i32
     // range check below turns an out-of-lane result into an error.
     if params.l2_q16 != 0 {
         for lane in w.iter_mut() {
-            let shrink = (i128::from(params.l2_q16) * i128::from(*lane)) / 65_536;
-            *lane = clamp_i64(i128::from(*lane) - shrink);
+            let shrink = i128::from(params.l2_q16)
+                .checked_mul(i128::from(*lane))
+                .ok_or_else(|| overflow("l2 shrinkage"))?
+                / 65_536;
+            *lane = clamp_i64(
+                i128::from(*lane)
+                    .checked_sub(shrink)
+                    .ok_or_else(|| overflow("l2 shrinkage"))?,
+            );
         }
     }
     let loss_mean = loss / i128::from(n_rows);
@@ -178,6 +208,33 @@ mod tests {
         let out = run_epoch(&params(), 2, &[0, 0], &shards).unwrap();
         assert_eq!(out.n_rows, 2);
         assert!(out.weights[0] > 0, "slope must move positive");
+    }
+
+    #[test]
+    fn a_step_that_does_not_fit_is_an_error_not_a_wrap() {
+        // `lr_q16 * acc` is the product that can leave `i128`: the accumulator holds a sum of
+        // `err * x` and the learning rate multiplies it on top. The loss check bounds `err *
+        // err`, not `err * x`, so an accumulator that the epoch accepted can still overflow
+        // here. A wrap would make the update depend on build details - the one thing this
+        // module exists to prevent - so it is an error.
+        let mut w = vec![0i64];
+        let mut grad = vec![i128::MAX];
+        let out = apply_update(&mut w, &mut grad, 1, u32::MAX, 10_000);
+        assert!(
+            matches!(out, Err(CoreError::Overflow { .. })),
+            "an update that does not fit must be an error, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_zero_scale_is_an_error_not_a_division_by_zero() {
+        let mut w = vec![1i64];
+        let mut grad = vec![1i128];
+        let out = apply_update(&mut w, &mut grad, 1, 327, 0);
+        assert!(
+            matches!(out, Err(CoreError::Overflow { .. })),
+            "a zero denominator must be an error, got {out:?}"
+        );
     }
 
     #[test]

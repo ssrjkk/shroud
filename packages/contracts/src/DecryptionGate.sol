@@ -70,6 +70,7 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
     error CommitteeNotInitialized();
     error CipherTaskAlreadySet();
     error NotOwner(address caller);
+    error NotCipherTask(address caller);
     error InvalidBLS();
     error TaskNotSettled(uint256 taskId, ICipherTask.TaskStatus status);
     error AlreadyOpen(uint256 taskId);
@@ -91,6 +92,18 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner(msg.sender);
+        _;
+    }
+
+    /// @dev The gate is opened by the orchestrator and by nothing else. The task's status
+    ///      (`Settling` -> `Revealing`) and the gate's `open` flag are one state machine, and the
+    ///      buyer drives it through `CipherTask.requestReveal`. If the gate could also be opened
+    ///      directly, that call would take the `open` flag while the task was still `Settling` -
+    ///      and the buyer's own `requestReveal` would then hit the `AlreadyOpen` guard and revert,
+    ///      rolling its `Settling` -> `Revealing` transition back with it. The task could never
+    ///      reach `Disclosed` and `withdraw` would be unreachable for good.
+    modifier onlyCipherTask() {
+        if (msg.sender != address(cipherTask)) revert NotCipherTask(msg.sender);
         _;
     }
 
@@ -158,7 +171,8 @@ contract DecryptionGate is IDecryptionGate, ReentrancyGuard, Pausable {
 
     /// @notice Open a reveal window. Requires (a) the task to be settled, (b) a valid BLS
     ///         aggregate signature over `revealMessage(taskId, weightsCid)`.
-    function requestReveal(uint256 taskId, bytes32 weightsCid, bytes calldata blsAggregateSig) external whenNotPaused nonReentrant {
+    /// @dev Only the bound orchestrator may call this. See `onlyCipherTask` for why.
+    function requestReveal(uint256 taskId, bytes32 weightsCid, bytes calldata blsAggregateSig) external whenNotPaused nonReentrant onlyCipherTask {
         ICipherTask.TaskStatus status = cipherTask.tasks(taskId).status;
         if (status != ICipherTask.TaskStatus.Settling && status != ICipherTask.TaskStatus.Revealing) {
             revert TaskNotSettled(taskId, status);

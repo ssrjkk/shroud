@@ -286,6 +286,25 @@ export class CipherTaskClient {
   async escrowToken(): Promise<string> {
     return String(await this.contract.escrowToken());
   }
+
+  /**
+   * Ask the committee to open the reveal window for a settled task.
+   *
+   * The reveal is requested here, on the orchestrator, and not on the gate: the gate may only
+   * be opened by the orchestrator, because the task's `Settling -> Revealing` transition and
+   * the gate's `open` flag are one state machine. Opening the gate directly would take the
+   * flag while the task was still `Settling`, and this call would then revert - leaving the
+   * task unable to reach `Disclosed` and its buyer unable to withdraw.
+   *
+   * The orchestrator pins the output CID itself, so the caller only supplies the committee's
+   * aggregate signature over that task and that CID.
+   */
+  async requestReveal(taskId: bigint, blsAggregateSig: Hex): Promise<string> {
+    const tx = await this.contract.requestReveal(taskId, blsAggregateSig);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for requestReveal");
+    return tx.hash;
+  }
 }
 
 export class PaymentVaultClient {

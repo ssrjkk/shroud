@@ -6,6 +6,75 @@ first tagged release.
 
 ## Unreleased
 
+### Contracts: an aborted task could be re-sealed, reopening the slash path
+
+- `sealTask` gated on `isSealed` alone, and `abort` leaves `isSealed` false — the task was
+  never sealed. So once the contribution window had expired, **anyone** could seal an aborted
+  task, which moved it out of `Aborted`. That reopened the two things the abort deliberately
+  closed: `slashContributionBond` (whose `AlreadyTerminal` guard no longer trips, so a
+  buyer could burn an honest contributor's bond into the treasury) and
+  `releaseContributionBond` (the bond is no longer releasable, and the task cannot be
+  re-aborted either — `abort` on a `Sealed` task is refused by the same guard, so the tokens
+  sit in the contract with no way out). `sealTask` now refuses a terminal task.
+
+### Contracts: the gate could be opened behind the orchestrator's back, bricking the task
+
+- `DecryptionGate.requestReveal` was callable by anyone holding a committee signature. The
+  gate's `open` flag and the task's `Settling -> Revealing` transition are one state
+  machine, and opening the gate directly took the flag while the task was still `Settling`.
+  The buyer's own `CipherTask.requestReveal` then hit the gate's `AlreadyOpen` guard and
+  reverted — rolling the status transition back with it. The task could never reach
+  `Disclosed` and `withdraw` was unreachable for good, with no way to reset the gate.
+- The gate is now opened by the orchestrator and by nothing else, which is what its own
+  documentation already claimed ("contract-restricted"). The SDK's reveal entry point moves
+  with it: `CipherTaskClient.requestReveal` asks the task (which pins the output CID and
+  asks the gate), and `DecryptionGateClient` keeps the reads and the committee member's
+  partial submission.
+
+### Node: the fold read the epoch's claim by the wrong rule, so an honest node stayed quiet
+
+- The claim the contract holds is the **first** committer's digest: `commitEpoch` writes
+  `claimed[taskId][epoch]` exactly once, and the first verified commit takes the winner
+  seat and keeps it ("ties resolve by commit order, not by address"). The node read it as
+  the *lowest-address* committer's digest — a rule that does not exist in the contract, and
+  which the node's own comment described as if it did.
+- The consequence cost money: a peer that committed first and this node second left the
+  node believing the claim was its own, so it filed no dispute — while the peer kept the
+  reward for an epoch this node had honestly computed. The fold now tracks the claim as the
+  first commit it folded, and reports an unknown claim as unknown rather than guessing it.
+  The worker's own check (which reads the winner from the chain) was always right; the
+  decision to file a dispute at all was not.
+
+### Node: the SGD update could wrap, and the tfhe backend could not run at all
+
+- `apply_update` multiplied `lr_q16 * acc` unchecked, in the one module whose contract is
+  "all arithmetic is checked `i128`; anything that does not fit is an error, never a
+  wrap". The loss check bounds `err * err`, not `err * x`, so an accumulator the epoch
+  accepted could still overflow the product: debug builds panicked, release builds wrapped
+  silently and produced a weight update no other node reproduces — the build-dependent
+  divergence the module exists to prevent. The update is checked now, and an update that
+  does not fit is an error.
+- The tfhe weights envelope was written with the *lane* count where its own decoder reads a
+  *row* count, and with one frame per lane where the decoder expects `rows * features`
+  frames. Every tfhe epoch therefore failed to load its own previous weights ("truncated
+  ciphertext length"): the backend could never start an epoch, never commit, never dispute.
+  The encoder writes a row count now, and a round-trip test covers it.
+- The tfhe L2 shrinkage was derived from the *gradient* step, which divides by the
+  quantisation scale and the minibatch. The reference engine shrinks by
+  `l2_q16 * w / 2^16` and nothing else, so the tfhe backend's regularisation was `S` times
+  weaker than configured — at the default scale of 10 000, no regularisation at all. The L2
+  step has its own derivation, and the two backends now shrink by the same amount. The
+  derivations moved out of the `prover`-gated module, so they are compiled and tested in
+  every build rather than only in the ones that pull in the FHE stack.
+
+### SDK: the configured and the declared key were compared case-sensitively
+
+- Hex is case-insensitive, and the on-chain comparison goes through the ABI, which does not
+  care about case — but the constructor's own check did, so a caller passing an EIP-55
+  checksum-cased hash for the key their encryptor already declares was refused with "the
+  pin check would attest to a key the shard is not encrypted under". The comparison is
+  case-insensitive now, like the SDK's three other hash comparisons.
+
 ### Release tooling: the evidence pack did not produce what the release process promised
 
 - `RELEASE_PROCESS.md` lists `ci.txt` (the CI run IDs covering the tagged commit) and

@@ -334,6 +334,44 @@ describe("CipherTask", () => {
       await time.increase(3601);
       await expect(task.connect(carol).sealTask(id)).to.emit(task, "TaskSealed");
     });
+
+    it("never re-seals an aborted task: the abort is terminal", async () => {
+      // `sealTask` gates on `isSealed`, which an abort leaves false (the task was never
+      // sealed). Without a status check the task could be sealed again after the window
+      // expired, moving it out of `Aborted` - and that reopens two things the abort
+      // deliberately closed: the slash path on a contributor who had already been
+      // refunded, and the release of that contributor's bond.
+      const fx = await deployFixture();
+      const { task, token, buyer, alice, outsider, treasury } = fx;
+      const bondReq = 1_000_000n;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+      await task.connect(buyer).setContributionBondRequirement(id, bondReq);
+      await token.mint(alice.address, bondReq);
+      await token.connect(alice).approve(await task.getAddress(), bondReq);
+      await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(11), proofFor(1), bytes32Of(7), 1_000);
+
+      // The buyer aborts: the task is terminal and the escrow is refunded.
+      await task.connect(buyer).abort(id, reason4("changed_mind"));
+      expect(await task.statusOf(id)).to.equal(10n); // Aborted
+
+      // After the contribution window anyone may seal an open task - but not a terminal one.
+      await time.increase(86_400 + 1);
+      await expect(task.connect(outsider).sealTask(id)).to.be.revertedWithCustomError(task, "AlreadyTerminal");
+      expect(await task.statusOf(id)).to.equal(10n); // still Aborted
+
+      // The abort left the contributor's bond posted and releasable, and it must stay so:
+      // a re-seal would make the release revert and hand the buyer a slash to burn it.
+      const aliceBefore = await token.balanceOf(alice.address);
+      await task.releaseContributionBond(id, alice.address);
+      expect(await token.balanceOf(alice.address)).to.equal(aliceBefore + bondReq);
+      // And the slash path stays closed for a task the buyer already aborted.
+      await expect(task.connect(buyer).slashContributionBond(id, alice.address)).to.be.revertedWithCustomError(
+        task,
+        "AlreadyTerminal"
+      );
+      expect(await token.balanceOf(treasury.address)).to.equal(0n);
+    });
   });
 
   describe("epoch orchestration", () => {
@@ -947,13 +985,17 @@ describe("CipherTask", () => {
 
     it("refuses a reveal of a CID that is not the committed output", async () => {
       const { fx, id } = await settled();
-      // `CipherTask.requestReveal` pins the CID itself, so the `OutputNotRegistered` guard is
-      // exercised directly on the gate - which is where a caller-supplied CID could actually
-      // diverge from the accepted weights. The message is read from the gate rather than rebuilt
-      // here, so the test cannot drift from the contract's own encoding.
+      // The gate pins the CID itself (`OutputNotRegistered`), and only the orchestrator may
+      // open it at all (`NotCipherTask`). Both are now enforced on the same call: a caller
+      // outside the orchestrator cannot name any CID, and the orchestrator names the pinned
+      // one. The gate's own comparison stays as defence in depth against a future caller
+      // that could pass a different CID.
       const wrongCid = bytes32Of("somebody-elses-weights");
       await fx.bls.approve(await fx.gate.revealMessage(id, wrongCid));
-      await expect(fx.gate.requestReveal(id, wrongCid, "0x01")).to.be.revertedWithCustomError(fx.gate, "OutputNotRegistered");
+      await expect(fx.gate.requestReveal(id, wrongCid, "0x01")).to.be.revertedWithCustomError(fx.gate, "NotCipherTask");
+      // The orchestrator asks for the committed CID, so a signature over another one does
+      // not open the window.
+      await expect(fx.task.connect(fx.buyer).requestReveal(id, "0x01")).to.be.revertedWithCustomError(fx.gate, "InvalidBLS");
     });
 
     it("opens on a valid aggregate signature and only counts distinct committee members", async () => {
@@ -1269,8 +1311,9 @@ describe("CipherTask", () => {
       const message = await gate.revealMessage(id, cid);
 
       await expect(bls.connect(outsider).approve(message)).to.be.revertedWithCustomError(bls, "NotOwner");
-      // So an outsider cannot open a reveal for a task they have no business touching.
-      await expect(gate.requestReveal(id, cid, "0x01")).to.be.revertedWithCustomError(gate, "InvalidBLS");
+      // So an outsider cannot open a reveal for a task they have no business touching -
+      // and neither can a committee member: only the orchestrator opens the gate.
+      await expect(gate.requestReveal(id, cid, "0x01")).to.be.revertedWithCustomError(gate, "NotCipherTask");
     });
   });
 
@@ -1413,8 +1456,34 @@ describe("CipherTask", () => {
       expect((await task.tasks(id)).status).to.equal(9n); // Disclosed
     });
 
-    it("revealCompleted is false for a task that never requested a reveal", async () => {
+    it("the gate cannot be opened behind the orchestrator's back: the reveal stays reachable", async () => {
+      // The bug this guards: `DecryptionGate.requestReveal` was callable by anyone holding a
+      // committee signature, so the gate could be opened while the task was still `Settling`.
+      // The buyer's `CipherTask.requestReveal` then hit the gate's `AlreadyOpen` guard and
+      // reverted - rolling the `Settling -> Revealing` transition back with it - so the task
+      // could never reach `Disclosed` and `withdraw` was unreachable for good. The gate is
+      // opened by the orchestrator, which is the only thing that can move the task's status.
       const { fx, id } = await settled();
+      const { task, bls, gate, buyer, committee } = fx;
+      const [cid] = await task.acceptedWeights(id);
+      await bls.approve(await gate.revealMessage(id, cid));
+
+      // Opening the gate behind the orchestrator's back is refused, whoever asks.
+      await expect(gate.connect(committee).requestReveal(id, cid, "0x01")).to.be.revertedWithCustomError(
+        gate,
+        "NotCipherTask"
+      );
+      expect((await task.tasks(id)).status).to.equal(7n); // still Settling
+
+      // The buyer's path is the only one, and it leads all the way to Disclosed.
+      await expect(task.connect(buyer).requestReveal(id, "0x01")).to.emit(task, "RevealRequested");
+      expect((await task.tasks(id)).status).to.equal(8n); // Revealing
+      await gate.connect(committee).submitPartialDecryption(id, bytes32Of(1));
+      await expect(task.connect(buyer).withdraw(id)).to.emit(task, "RevealCompleted");
+      expect((await task.tasks(id)).status).to.equal(9n); // Disclosed
+    });
+
+    it("revealCompleted is false for a task that never requested a reveal", async () => {      const { fx, id } = await settled();
       expect(await fx.gate.revealCompleted(id)).to.equal(false);
       expect(await fx.gate.partialCount(id)).to.equal(0n);
     });

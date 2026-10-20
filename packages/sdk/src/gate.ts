@@ -4,7 +4,13 @@
  * The SDK historically exported the gate ABI but wrapped nothing: reveal monitoring had to
  * use raw contract calls, so integrators could not tell a "reveal in flight" task from a
  * "reveal combinable" one without reading storage. Every method here is a thin, named read
- * over the committed output CID, plus the two writes a buyer/committee member needs.
+ * over the committed output CID, plus the write a committee member needs.
+ *
+ * Opening the reveal window is *not* one of them: the gate may only be opened by the
+ * orchestrator, because the task's status and the gate's `open` flag are one state machine.
+ * Ask for the reveal through `CipherTaskClient.requestReveal` (the buyer, update manager or
+ * contract owner calls the task, which pins the output CID and asks the gate), and use this
+ * client to watch the window and to submit partial decryptions as a committee member.
  */
 import { Contract, ethers, type Signer, type Provider } from "ethers";
 import DecryptionGateAbi from "./abi/DecryptionGate.json" with { type: "json" };
@@ -57,15 +63,9 @@ export class DecryptionGateClient {
     return this.contract.isCommitteeMember(account);
   }
 
-  /** Open a reveal window (buyer/update manager/owner) with the committee aggregate signature. */
-  async requestReveal(taskId: bigint, weightsCid: Hex, blsAggregateSig: Hex): Promise<string> {
-    const tx = await this.contract.requestReveal(taskId, weightsCid, blsAggregateSig);
-    const receipt = await tx.wait();
-    if (!receipt) throw new Error("no receipt for requestReveal");
-    return tx.hash;
-  }
-
-  /** Submit this member's partial decryption commitment for `taskId`. */
+  /**
+   * Submit this member's partial decryption commitment for `taskId`.
+   */
   async submitPartialDecryption(taskId: bigint, partialDecryption: Hex): Promise<string> {
     const tx = await this.contract.submitPartialDecryption(taskId, partialDecryption);
     const receipt = await tx.wait();

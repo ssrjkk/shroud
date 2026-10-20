@@ -924,6 +924,48 @@ test("ShroudSdk rejects a networkParams config with nothing to compare against",
   );
 });
 
+test("the configured and the declared key are compared case-insensitively", () => {
+  // Hex is case-insensitive: the same bytes32 written with EIP-55 casing is the same key.
+  // The on-chain comparison goes through the ABI and does not care about case, so the local
+  // one must not either - a checksum-cased hash for the key the encryptor already declares
+  // is the same key, not a different one, and refusing it would be a false rejection of a
+  // valid configuration.
+  const declared = ethers.id("network-key");
+  const upperCased = declared.toUpperCase().replace("0X", "0x");
+  const stub = networkParamsProvider(declared, 1n, false);
+  const encryptor = {
+    providesConfidentiality: true,
+    publicKeyHash: declared,
+    encryptRows: async () => ({
+      ciphertext: new Uint8Array([1]),
+      rowCommitment: noopRowCommitment(new Float64Array([1])),
+    }),
+  };
+  const build = (configured: Hex) =>
+    new ShroudSdk({
+      cipherTask: "0x0000000000000000000000000000000000000001",
+      paymentVault: "0x0000000000000000000000000000000000000002",
+      networkParams: "0x0000000000000000000000000000000000000003",
+      signer: stub.signer,
+      provider: stub.provider,
+      chainId: 31337n,
+      encryptor,
+      fhePublicKeyHash: configured,
+    });
+
+  // The same key, differently cased: accepted.
+  assert.doesNotThrow(() => build(upperCased));
+
+  // A genuinely different key: still refused, and both hashes are named.
+  assert.throws(
+    () => build(ethers.id("rogue-key")),
+    (e: Error) => {
+      assert.match(e.message, /encrypts under/);
+      return true;
+    }
+  );
+});
+
 /**
  * A provider that answers only the three `NetworkParams` view calls and refuses everything else.
  *

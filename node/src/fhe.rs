@@ -373,6 +373,63 @@ fn metrics_bytes(
     .into_bytes()
 }
 
+/// Fixed-point shift of the public learning-rate step (`STEP = round(lr·2^32/(S·m))`).
+///
+/// Compiled where it is used: the `prover` backend, and the tests that pin the
+/// derivation. A build with neither has no use for it, and an unused item is a
+/// warning, not a hint.
+#[cfg(any(feature = "prover", test))]
+const STEP_SHIFT: u32 = 32;
+
+/// Shift-based public learning-rate derivation, computed once in the clear.
+///
+/// The update is `w -= (grad_acc * STEP) >> 32` with
+/// `STEP = round(lr_q16 * 2^32 / (2^16 * S * m))`. `STEP` must fit in a u32 lane;
+/// hyperparameters that do not fit are a configuration error, reported before any gas
+/// is spent.
+///
+/// Deliberately outside the `prover`-gated backend: this is plain arithmetic, and keeping it
+/// here means it is compiled and tested in every build rather than only in the ones that
+/// pull in the FHE stack.
+#[cfg(any(feature = "prover", test))]
+fn derive_step(lr_q16: u32, scale: u32, minibatch: usize) -> Result<u32> {
+    let denom = (1u128 << 16) * u128::from(scale) * (minibatch as u128);
+    if denom == 0 {
+        return Err(Error::Fhe(FheError::Backend(
+            "tfhe backend: scale and minibatch must be non-zero".into(),
+        )));
+    }
+    let step = ((u128::from(lr_q16) << STEP_SHIFT) + denom / 2) / denom;
+    u32::try_from(step).map_err(|_| {
+        Error::Fhe(FheError::Backend(format!(
+            "tfhe backend: learning-rate step {step} exceeds the u32 lane; \
+             lower fhe.lr_q16 or raise the quantisation scale"
+        )))
+    })
+}
+
+/// Shift-based L2 shrinkage step, computed once in the clear.
+///
+/// The shrinkage is `w -= (w * L2) >> 32` with `L2 = round(l2_q16 * 2^32 / 2^16)`,
+/// i.e. `w -= l2_q16 * w / 2^16` - the same rule the reference engine applies
+/// (`node/crates/shroud-core/src/sgd.rs`).
+///
+/// Deliberately not `derive_step`: the scale and the minibatch belong to the *gradient*
+/// step (`w -= lr_q16 * Σ(err·x) / (2^16 · S · m)`), not to the shrinkage. Dividing by
+/// the scale as well would make the tfhe backend's regularisation `S` times weaker
+/// than the reference engine's - at the default scale of 10 000, no regularisation at
+/// all, while the operator asked for `fhe.l2_q16`.
+#[cfg(any(feature = "prover", test))]
+fn derive_l2(l2_q16: u32) -> Result<u32> {
+    let denom = 1u128 << 16;
+    let step = ((u128::from(l2_q16) << STEP_SHIFT) + denom / 2) / denom;
+    u32::try_from(step).map_err(|_| {
+        Error::Fhe(FheError::Backend(format!(
+            "tfhe backend: L2 step {step} exceeds the u32 lane; lower fhe.l2_q16"
+        )))
+    })
+}
+
 #[cfg(feature = "prover")]
 mod tfhe_backend {
     //! Homomorphic epoch execution over real `tfhe-rs` ciphertexts.
@@ -408,35 +465,14 @@ mod tfhe_backend {
     use tfhe::safe_serialization::safe_deserialize;
     use tfhe::{CompressedServerKey, FheUint32, ServerKey};
 
-    use super::{EpochInputs, EpochOutput, Weights, TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC};
+    use super::{
+        derive_l2, derive_step, EpochInputs, EpochOutput, Weights, STEP_SHIFT, TFHE_SHARD_MAGIC,
+        TFHE_WEIGHTS_MAGIC,
+    };
     use crate::error::{Error, FheError, Result, ShardError};
 
     /// Maximum serialised object this backend will deserialise (server keys are GB-scale).
     const DESERIALIZE_LIMIT: u64 = 8 << 30;
-    /// Fixed-point shift of the public learning-rate step (`STEP = round(lr·2^32/(S·m))`).
-    const STEP_SHIFT: u32 = 32;
-
-    /// Shift-based public learning-rate derivation, computed once in the clear.
-    ///
-    /// The update is `w -= (grad_acc * STEP) >> 32` with
-    /// `STEP = round(lr_q16 * 2^32 / (2^16 * S * m))`. `STEP` must fit in a u32 lane;
-    /// hyperparameters that do not fit are a configuration error, reported before any gas
-    /// is spent.
-    fn derive_step(lr_q16: u32, scale: u32, minibatch: usize) -> Result<u32> {
-        let denom = (1u128 << 16) * u128::from(scale) * (minibatch as u128);
-        if denom == 0 {
-            return Err(Error::Fhe(FheError::Backend(
-                "tfhe backend: scale and minibatch must be non-zero".into(),
-            )));
-        }
-        let step = ((u128::from(lr_q16) << STEP_SHIFT) + denom / 2) / denom;
-        u32::try_from(step).map_err(|_| {
-            Error::Fhe(FheError::Backend(format!(
-                "tfhe backend: learning-rate step {step} exceeds the u32 lane; \
-                 lower fhe.lr_q16 or raise the quantisation scale"
-            )))
-        })
-    }
 
     struct CachedKey {
         mtime: std::time::SystemTime,
@@ -577,11 +613,22 @@ mod tfhe_backend {
         }
 
         /// Frame ciphertexts into an envelope for the content-addressed store.
-        fn encode_envelope(magic: &[u8], features: u32, lanes: &[FheUint32]) -> Result<Vec<u8>> {
+        ///
+        /// The header is `features` then `rows`, exactly what `decode_envelope` reads back, and
+        /// the frames that follow are `rows * features` of them. The weights are one row of
+        /// `features` lanes, so they are written with `rows = 1` - writing the *lane* count
+        /// here instead would leave the decoder looking for `features` times too many frames
+        /// and fail every epoch with "truncated ciphertext length".
+        fn encode_envelope(
+            magic: &[u8],
+            features: u32,
+            rows: u32,
+            lanes: &[FheUint32],
+        ) -> Result<Vec<u8>> {
             let mut out = Vec::new();
             out.extend_from_slice(magic);
             out.extend_from_slice(&features.to_le_bytes());
-            out.extend_from_slice(&(lanes.len() as u32).to_le_bytes());
+            out.extend_from_slice(&rows.to_le_bytes());
             for ct in lanes {
                 let mut frame = Vec::new();
                 tfhe::safe_serialization::safe_serialize(ct, &mut frame, DESERIALIZE_LIMIT)
@@ -630,11 +677,7 @@ mod tfhe_backend {
             let l2_ct = if inputs.l2_q16 == 0 {
                 None
             } else {
-                Some(FheUint32::encrypt_trivial(derive_step(
-                    inputs.l2_q16,
-                    inputs.scale,
-                    1,
-                )?))
+                Some(FheUint32::encrypt_trivial(derive_l2(inputs.l2_q16)?))
             };
 
             // Previous encrypted weights are required: there is no genesis path, because
@@ -733,7 +776,9 @@ mod tfhe_backend {
                 }
             }
 
-            let weights_bytes = Self::encode_envelope(TFHE_WEIGHTS_MAGIC, inputs.features, &w)?;
+            // One row of `features` lanes: the decoder reads `rows` and then expects
+            // `rows * features` frames.
+            let weights_bytes = Self::encode_envelope(TFHE_WEIGHTS_MAGIC, inputs.features, 1, &w)?;
             // Ciphertext bytes are randomised by PBS: the digest pins this run's outputs.
             // See the module docs for why cross-node byte equality does not hold here.
             let weights_digest = keccak256(&weights_bytes);
@@ -763,21 +808,12 @@ mod tfhe_backend {
 
     #[cfg(test)]
     mod tests {
-        use super::super::TFHE_SHARD_MAGIC;
-        use super::derive_step;
+        use super::super::{TFHE_SHARD_MAGIC, TFHE_WEIGHTS_MAGIC};
+        // `encrypt_trivial` is a trait method from the prelude; the type is imported by name,
+        // exactly as the backend itself does.
         use crate::error::{Error, FheError};
-
-        #[test]
-        fn step_derivation_is_exact_for_sane_hyperparameters() {
-            // lr=1, S=2^14, m=8: STEP = round(2^16·2^32/(2^16·2^14·8)) = 2^48/2^33 = 32768.
-            assert_eq!(derive_step(65_536, 16_384, 8).unwrap(), 32_768);
-        }
-
-        #[test]
-        fn step_derivation_rejects_unrepresentable_rates() {
-            assert!(derive_step(u32::MAX, 1, 1).is_err());
-            assert!(derive_step(65_536, 0, 8).is_err());
-        }
+        use tfhe::prelude::*;
+        use tfhe::FheUint32;
 
         #[test]
         fn key_loading_refuses_without_material() {
@@ -807,6 +843,22 @@ mod tfhe_backend {
             bad.extend_from_slice(&2u32.to_le_bytes());
             bad.extend_from_slice(&u32::MAX.to_le_bytes());
             assert!(super::TfheBackend::decode_envelope(&bad, TFHE_SHARD_MAGIC, "x", 2).is_err());
+        }
+
+        #[test]
+        fn the_weights_envelope_round_trips_through_its_own_decoder() {
+            // The bug this guards: the encoder wrote the *lane* count where the decoder reads
+            // a *row* count, and then wrote one frame per lane while the decoder expected
+            // `rows * features` of them. Every tfhe epoch therefore failed to load its own
+            // previous weights with "truncated ciphertext length" - the backend could never
+            // start, never commit and never dispute.
+            let lanes: Vec<FheUint32> = (0..3u32).map(FheUint32::encrypt_trivial).collect();
+            let bytes =
+                super::TfheBackend::encode_envelope(TFHE_WEIGHTS_MAGIC, 3, 1, &lanes).unwrap();
+            let decoded =
+                super::TfheBackend::decode_envelope(&bytes, TFHE_WEIGHTS_MAGIC, "tfhe weights", 3)
+                    .expect("the envelope the node writes must decode again");
+            assert_eq!(decoded.len(), lanes.len());
         }
     }
 }
@@ -881,6 +933,42 @@ mod tests {
     // every value-use lives in tests, so they live here. Mirrors tfhe_backend.
     use alloy::primitives::keccak256;
     use shroud_core::fixed::quantize;
+
+    #[test]
+    fn step_derivation_is_exact_for_sane_hyperparameters() {
+        // lr=1, S=2^14, m=8: STEP = round(2^16·2^32/(2^16·2^14·8)) = 2^48/2^33 = 32768.
+        assert_eq!(derive_step(65_536, 16_384, 8).unwrap(), 32_768);
+    }
+
+    #[test]
+    fn step_derivation_rejects_unrepresentable_rates() {
+        assert!(derive_step(u32::MAX, 1, 1).is_err());
+        assert!(derive_step(65_536, 0, 8).is_err());
+    }
+
+    #[test]
+    fn the_l2_step_is_the_reference_engines_rule() {
+        // The reference engine shrinks by `l2_q16 * w / 2^16` (see
+        // `shroud-core/src/sgd.rs`). The tfhe backend must shrink by the same amount, so
+        // the step is `l2_q16 * 2^32 / 2^16` and carries neither the quantisation scale
+        // nor the minibatch: those belong to the gradient step. Deriving it from
+        // `derive_step` divided by the scale as well, which made the regularisation
+        // 10 000 times weaker than configured at the default scale.
+        // The step is `l2_q16 * 2^16`, and it has to fit the u32 lane: `l2_q16 = 2^16`
+        // would need 2^32 and is refused rather than wrapped.
+        assert_eq!(derive_l2(65).unwrap(), 65 << 16);
+        assert!(derive_l2(65_536).is_err());
+        // The reference rule for a concrete lane: `w -= l2_q16 * w / 2^16`.
+        let l2_q16 = 65u32;
+        let w = 1_000_000i64;
+        let reference = (l2_q16 as i64 * w) / 65_536;
+        let step = derive_l2(l2_q16).unwrap() as i64;
+        let tfhe = (w * step) >> 32;
+        assert_eq!(
+            tfhe, reference,
+            "both backends must shrink by the same amount"
+        );
+    }
 
     /// Build a `shroud/noop/v1` payload exactly like the SDK's `NoopEncryptor`.
     fn noop_bytes(features: u32, rows: &[f64]) -> Vec<u8> {

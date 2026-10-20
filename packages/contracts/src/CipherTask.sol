@@ -405,9 +405,17 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     /// @notice Seal the dataset so `ctRoot` freezes. Callable by the buyer/update manager once
     ///         `minContributors` is met, or by anyone once `contributionWindow` has expired.
+    /// @dev An aborted task is terminal and cannot be sealed: `abort` leaves `isSealed` false
+    ///      (the task was never sealed), so without this check the task could be sealed again
+    ///      after the window expired - moving it out of `Aborted` and reopening the two things
+    ///      the abort deliberately closed: the slash path on a contributor who had already been
+    ///      refunded, and the release of that contributor's bond.
     function sealTask(uint256 taskId) external whenNotPaused nonReentrant {
         Task storage t = _tasks[taskId];
         if (t.isSealed) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Sealed);
+        if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
+            revert AlreadyTerminal(taskId, t.status);
+        }
         if (t.contributors == 0) revert NoContributions(taskId);
         if (t.contributors < t.params.minContributors) {
             revert BelowMinContributors(taskId, t.params.minContributors, t.contributors);

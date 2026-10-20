@@ -103,6 +103,14 @@ pub struct EpochState {
     /// Commits by node. The contract accepts one per node per epoch, so a second entry for the
     /// same node is either a replay (same digest) or a state bug (different digest).
     pub commits: BTreeMap<Address, CommitRecord>,
+    /// The digest the contract holds as this epoch's claim: the *first* committer's.
+    ///
+    /// `commitEpoch` writes `claimed[taskId][epoch]` exactly once. The first verified commit
+    /// takes the winner seat and keeps it - ties resolve by commit order, not by address - so
+    /// the claim belongs to the earliest committer and the address order of `commits` says
+    /// nothing about it. `None` until that first commit is folded, and it stays `None` for a
+    /// node that joined the epoch late and never saw it: an unknown claim must not be guessed.
+    pub claim: Option<B256>,
     /// Re-execution digests reported by disputing nodes, and who reported them.
     pub disputes: BTreeMap<Address, B256>,
     /// Reward channel the settlement opened for the winner, if any.
@@ -115,16 +123,20 @@ pub struct EpochState {
 }
 
 impl EpochState {
-    /// The digest the contract holds as this epoch's claim.
+    /// The digest the contract holds as this epoch's claim, if this node saw it.
     ///
-    /// `commitEpoch` writes `_claimedDigest` every time the committer takes the winner slot, and
-    /// it takes the slot when it is the first commit **or when its address is lower than the
-    /// incumbent's** (the `incumbent == address(0) || msg.sender < incumbent` branch in
-    /// `CipherTask::commitEpoch`). So the claim belongs to the lowest-address committer, not the
-    /// earliest one. Reading it as "first come" would have a node dispute a digest the chain is
-    /// not holding, and `reportDispute` reverts exactly that case.
+    /// `commitEpoch` writes `claimed[taskId][epoch]` exactly once: the first verified commit
+    /// takes the winner seat and keeps it (ties resolve by commit order, not by address). So
+    /// the claim is the *earliest* committer's digest, and reading it as "the lowest address
+    /// among the committers" is wrong in a way that costs money: a node that took the claim
+    /// slot second would see its own digest as the claim, stay quiet, and lose an epoch it
+    /// had honestly computed while the peer kept the reward.
+    ///
+    /// `None` when the claim is unknown - the node joined the epoch after its first commit was
+    /// made. The chain is the authority there (`epochWinner` plus the winner's commit), which
+    /// is what the worker reads before it acts on a disagreement.
     pub fn claimed_digest(&self) -> Option<B256> {
-        self.commits.first_key_value().map(|(_, c)| c.trace_digest)
+        self.claim
     }
 }
 
@@ -552,6 +564,12 @@ impl NodeState {
                         verified: true,
                     },
                 );
+                if first_for_epoch {
+                    // The first verified commit takes the winner seat and keeps it, so this is
+                    // the digest the contract holds as the claim. Every later committer is a
+                    // challenger, however low its address.
+                    e.claim = Some(*trace_digest);
+                }
 
                 // `finalizeEpoch` is permissionless on chain: anybody may close the epoch, and
                 // nobody implies the node cannot. So this is queued *before* the operator
@@ -589,7 +607,13 @@ impl NodeState {
                 }
 
                 if let Some(ours) = e.commits.get(&me) {
-                    if ours.verified && ours.trace_digest != *trace_digest {
+                    // A peer committed. The claim is the *first* committer's digest, so the peer
+                    // holds it only if it committed first. If the claim is ours, the peer is a
+                    // challenger and reporting our own digest would be reporting the claim
+                    // itself - the contract rejects that (`DisputeAgreesWithClaim`), and the
+                    // worker's gate skips it too.
+                    let claim_is_ours = e.claimed_digest() == Some(ours.trace_digest);
+                    if ours.verified && !claim_is_ours && ours.trace_digest != *trace_digest {
                         work.push(Work::FileDispute {
                             task_id: *task_id,
                             epoch: *epoch,
@@ -1272,15 +1296,15 @@ mod tests {
         let s = state();
         s.mark_registered(U256::from(7), true);
         opened(&s, 7, 0);
-        // We commit first, so ours is the claim until the lower address takes it.
-        committed(&s, 7, 0, NODE, 0xaa);
+        // The peer commits first, so it holds the claim: `commitEpoch` gives the winner slot
+        // to the first verified commit and keeps it there, whatever the addresses are.
+        committed(&s, 7, 0, OTHER, 0xbb);
         s.take_work();
-        // A peer commits a different digest. Our commit is verified by inclusion —
+        // We commit a different digest. Our commit is verified by inclusion —
         // `commitEpoch` emits `EpochCommitted` only after the verifier said yes, and a revert
-        // takes the log with it — so there is nothing to wait for: the claim (the lower
-        // address, the peer's `0xbb`) disagrees with our verified `0xaa`, and `reportDispute`
-        // is callable.
-        let work = committed(&s, 7, 0, OTHER, 0xbb);
+        // takes the log with it — so there is nothing to wait for: the claim (the peer's
+        // `0xbb`) disagrees with our verified `0xaa`, and `reportDispute` is callable.
+        let work = committed(&s, 7, 0, NODE, 0xaa);
         assert_eq!(
             work,
             vec![Work::FileDispute {
@@ -1309,6 +1333,24 @@ mod tests {
                 // peer's claim.
                 our_digest: B256::repeat_byte(0xaa)
             }]
+        );
+    }
+
+    #[test]
+    fn the_claim_holder_does_not_dispute_its_own_claim() {
+        // We commit first, so the claim is ours and stays ours: a peer that commits later is
+        // a challenger, and reporting our own digest would be reporting the claim itself -
+        // the contract rejects that (`DisputeAgreesWithClaim`). The peer disputes us, not the
+        // other way round.
+        let s = state();
+        s.mark_registered(U256::from(8), true);
+        opened(&s, 8, 0);
+        committed(&s, 8, 0, NODE, 0xaa);
+        s.take_work();
+        let work = committed(&s, 8, 0, OTHER, 0xbb);
+        assert!(
+            !work.iter().any(|w| matches!(w, Work::FileDispute { .. })),
+            "the claim holder has nothing to dispute: {work:?}"
         );
     }
 
@@ -1951,15 +1993,60 @@ mod tests {
     }
 
     #[test]
-    fn claimed_digest_is_the_lowest_address_committer() {
+    fn the_claim_is_the_first_committer_not_the_lowest_address() {
+        // The contract's rule: the first verified commit takes the winner seat and keeps it
+        // (`incumbent == address(0)`), so the claim is the *earliest* committer's digest. The
+        // address order of the map is not commit order - and reading the claim that way would
+        // have this node believe a peer's claim was its own and lose the epoch silently.
         let mut e = EpochState::default();
         e.commits.insert(NODE, commit(0xaa));
         e.commits.insert(OTHER, commit(0xbb));
-        // `BTreeMap` orders by address, which is not insertion order — and that is the point:
-        // `commitEpoch` takes the winner slot when `incumbent == address(0) || sender < incumbent`,
-        // so the claim on chain belongs to the *lowest* address among the committers. Here that is
-        // `OTHER` (`0x11..`), whose commit was inserted second.
-        assert_eq!(e.claimed_digest(), Some(B256::repeat_byte(0xbb)));
+        e.claim = Some(B256::repeat_byte(0xaa));
+        assert_eq!(e.claimed_digest(), Some(B256::repeat_byte(0xaa)));
+    }
+
+    #[test]
+    fn an_unknown_claim_is_not_guessed() {
+        // A node that joined the epoch after its first commit was made has not seen the claim.
+        // Reporting the lowest address's digest instead would be a guess, and the guess decides
+        // whether this node files a dispute at all.
+        let mut e = EpochState::default();
+        e.commits.insert(NODE, commit(0xaa));
+        e.commits.insert(OTHER, commit(0xbb));
+        assert_eq!(e.claimed_digest(), None);
+    }
+
+    #[test]
+    fn a_commit_after_a_peer_claim_files_a_dispute_even_with_a_lower_address() {
+        // The claim the contract holds is the first committer's digest. Here the peer (0xbb)
+        // commits first and we (0x99) commit second: the chain holds the peer's digest, ours
+        // differs, and a dispute is exactly what the honest node has to file. Reading the claim
+        // as "the lowest address among the committers" would have found our own digest instead
+        // and stayed quiet - and the peer would have kept the reward.
+        let peer = Address::repeat_byte(0xbb);
+        let s = state();
+        let task = U256::from(31);
+        sealed(&s, 31);
+        s.apply(&ChainEvent::EpochCommitted {
+            task_id: task,
+            epoch: 0,
+            node: peer,
+            trace_digest: B256::repeat_byte(0x11),
+        });
+        let work = s.apply(&ChainEvent::EpochCommitted {
+            task_id: task,
+            epoch: 0,
+            node: NODE,
+            trace_digest: B256::repeat_byte(0x22),
+        });
+        assert!(
+            work.contains(&Work::FileDispute {
+                task_id: task,
+                epoch: 0,
+                our_digest: B256::repeat_byte(0x22),
+            }),
+            "a commit that disagrees with the claim must be disputed, got {work:?}"
+        );
     }
 
     #[test]

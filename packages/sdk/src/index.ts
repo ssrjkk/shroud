@@ -137,9 +137,12 @@ export class ShroudSdk {
     this.configuredChainId = normalizeChainId(cfg.chainId);
     // The key the client is *told* it uses and the key the encryptor *actually* uses have to agree
     // before either is compared with the chain, otherwise the pin check verifies a string that is
-    // not the one the ciphertext depends on.
+    // not the one the ciphertext depends on. Hex is case-insensitive - the same bytes32 written
+    // with EIP-55 casing is the same key - and the on-chain comparison goes through the ABI,
+    // which does not care about case, so this comparison must not care either. A checksum-cased
+    // hash for the key the encryptor already declares is the same key, not a different one.
     const declared = this.encryptor.publicKeyHash;
-    if (cfg.fhePublicKeyHash && declared && cfg.fhePublicKeyHash !== declared) {
+    if (cfg.fhePublicKeyHash && declared && cfg.fhePublicKeyHash.toLowerCase() !== declared.toLowerCase()) {
       throw new Error(
         `cfg.fhePublicKeyHash is ${cfg.fhePublicKeyHash} but the configured encryptor encrypts under ` +
           `${declared}; the pin check would attest to a key the shard is not encrypted under`
