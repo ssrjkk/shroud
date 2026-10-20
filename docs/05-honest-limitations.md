@@ -95,6 +95,10 @@ were and are clean — `npm audit --omit=dev` in `packages/sdk` reports zero, th
 `clippy -D warnings`, Solidity by the Hardhat suite + fuzz). Secret scanning is
 clean (zero alerts).
 
+Re-checked 2026-10-20: **zero open Dependabot advisories**, one dismissed (the
+`elliptic` item below). `npm audit` in `packages/contracts` reports 16 low and
+nothing above it — all of them in the same Hardhat 2 dev toolchain.
+
 Resolved 2026-10-17: 29 of the 30 via flat `overrides` in
 `packages/contracts/package.json` (`cookie 0.7.0`, `tmp 0.2.7`,
 `undici 6.28.1`, `diff 8.0.3`, `serialize-javascript 7.0.5`, `uuid 11.1.1`,

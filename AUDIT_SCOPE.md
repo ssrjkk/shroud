@@ -40,7 +40,9 @@ tagged commit, not `main` in motion.
 5. `node.enforce_key_pin` is on by default (a node without `fhe.public_key_hash` +
    `contracts.network_params` refuses to boot; devnet opts out explicitly). The check is at
    startup, not per epoch, so a mid-epoch rotation is caught only at the next restart.
-6. Thirty open Dependabot alerts, all Hardhat dev-toolchain transitives (see `docs/05` §7b).
+6. One dismissed Dependabot advisory, `elliptic<=6.6.1`, a dev-toolchain transitive of
+   Hardhat 2 with no patched version (see `docs/05` §7b). The other 29 were closed by
+   pinned `overrides`; the open count is zero.
 
 ## Questions for auditors
 
