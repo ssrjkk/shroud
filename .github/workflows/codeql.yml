@@ -7,11 +7,13 @@ name: codeql
 on:
   push:
     branches: [main]
+    # `infra/**` rather than `infra/shardstore/**`: the devnet's helper scripts are
+    # JavaScript too, and nothing else scans them.
     paths:
-      ["packages/**", "bot/**", "infra/shardstore/**", "web/**", ".github/workflows/codeql.yml"]
+      ["packages/**", "bot/**", "infra/**", "web/**", ".github/workflows/codeql.yml"]
   pull_request:
     paths:
-      ["packages/**", "bot/**", "infra/shardstore/**", "web/**", ".github/workflows/codeql.yml"]
+      ["packages/**", "bot/**", "infra/**", "web/**", ".github/workflows/codeql.yml"]
   schedule:
     - cron: "0 6 * * 1"
   workflow_dispatch:

@@ -6,6 +6,19 @@ first tagged release.
 
 ## Unreleased
 
+### Gates: the threat model's regression references must name a real test
+
+- Every finding carries the test that pins it, and that reference is the
+  difference between a finding and a claim: an auditor who cannot find the
+  test has to take the finding on trust. The references were checked by eye —
+  and four of them were paraphrases rather than the tests' own names, so a
+  renamed test would have left a reference that pointed at nothing while
+  looking exactly as authoritative. `scripts/regression-refs.mjs` now checks
+  that the named file exists and contains the quoted name, and the four
+  paraphrases are the tests' verbatim names (two of the ShardStore's tests are
+  named in Russian, and the citation now quotes them as they are).
+- The gate was verified to fail on a renamed test and to pass again afterwards.
+
 ### Node: the provider's key no longer reaches the log
 
 - A managed RPC URL carries the provider's API key in its path. The node

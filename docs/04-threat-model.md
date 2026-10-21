@@ -595,8 +595,8 @@ it looks for), and a `HIGH` score answered the write with a plausible `201` and 
 encrypted rows were unrecoverable — the upload looked successful at every layer, and a regular
 cadence is exactly what the SDK's own upload loop produces. The honeypot now requires a *hard*
 signal as well (a failed auth, a rate hit, a duplicate payload, range abuse); timing alone no
-longer shadows a write. Regression: `infra/shardstore/hardening.test.mjs` — *"a regular
-cadence of an honest client does not land in the honeypot"*.
+longer shadows a write. Regression: `infra/shardstore/hardening.test.mjs` — *"(в2) регулярная cadence честного
+клиента не попадает под honeypot"*.
 
 ### F-43 — The DA's memory guard did not guard memory (ADV8) — **Mitigated**
 The in-flight byte budget was checked once, on admission, and a body without `Content-Length`
@@ -604,8 +604,8 @@ reserved **zero** bytes — so the check passed and was never re-applied while t
 N such connections held N × 64 MiB under a 512 MiB budget, and the store died under every
 node that had to publish a shard. The budget is now re-checked as the body arrives and the
 excess is shed as backpressure (a retryable 503), not as a silent drop. Regression:
-`infra/shardstore/hardening.test.mjs` — *"the byte budget holds for a body without
-Content-Length"*.
+`infra/shardstore/hardening.test.mjs` — *"(в3) бюджет байтов держится и для
+тела без Content-Length"*.
 
 ### F-44 — The node read the epoch claim by a rule the contract does not have (ADV2) — **Mitigated**
 `commitEpoch` writes `claimed[taskId][epoch]` exactly once: the **first** verified commit takes
@@ -643,8 +643,8 @@ A request whose handler rejected took the server down with it: the rejection sur
 unhandled rejection, and Node treats that as fatal. One malformed request — or one internal
 bug on a rare path — stopped the store, and with it every node that had to publish or fetch
 a shard. The handler's rejection is now caught per request and answered as a 500.
-Regression: `infra/shardstore/guard.test.mjs` — *"a rejected handler is a failed request,
-not a dead process"*.
+Regression: `infra/shardstore/guard.test.mjs` — *"guardedRequest: отказ хендлера — это отказ
+запроса, а не смерть процесса"*.
 
 ### F-48 — The SDK's range pull could buffer the whole object (ADV8) — **Mitigated**
 A range pull was bounded by the *object* cap (64 MiB) instead of the requested window, so a
@@ -705,7 +705,7 @@ transport address the contributor submitted (`sha256` of the payload) and the on
 node would commit — and nothing noticed, because the lab and the harness agreed with each
 other and both disagreed with the node. The leaf is built from the chain's record now, and
 the site, the harness and the node pin the same golden vector. Regression:
-`web/tests/equiv.mjs` — *"the lab leaf matches the golden digest"*, and
+`web/tests/equiv.mjs` — *"3b. lab leaf matches the golden digest"*, and
 `node/src/fhe.rs` — *"site_vectors_pin_the_digest_layout"*.
 
 ### F-55 — The bot aborted its own long poll — **Mitigated**
