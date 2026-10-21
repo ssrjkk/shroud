@@ -42,6 +42,7 @@ pub mod da;
 pub mod error;
 pub mod fhe;
 pub mod mesh;
+pub mod redact;
 pub mod state;
 pub mod worker;
 

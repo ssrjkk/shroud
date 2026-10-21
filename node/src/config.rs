@@ -418,7 +418,14 @@ impl Config {
 
         let cfg: Config = figment
             .extract()
-            .map_err(|e| ConfigError::Load(e.to_string()))?;
+            // The error quotes the offending value, and the offending value may be
+            // the RPC endpoint with the provider's key in it.
+            .map_err(|e| {
+                ConfigError::Load(crate::redact::scrub_secret(
+                    &e.to_string(),
+                    &crate::redact::rpc_secret(),
+                ))
+            })?;
         cfg.validate()?;
         Ok(cfg)
     }

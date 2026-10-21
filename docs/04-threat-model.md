@@ -737,6 +737,19 @@ only a process restart could recover. A failed attempt is not remembered now; th
 builds a new one. Regression: `packages/sdk/test/smoke.test.ts` — *"a failed attempt is not
 cached: the next call tries again"*.
 
+### F-58 — The node's endpoint, and the provider's key in it, reached the log — **Mitigated**
+A managed RPC URL carries the provider's API key in its path. The node printed that URL in its
+start-up line, and a transport error quotes the URL it failed to reach — so a node whose RPC
+hiccupped wrote the key into its log, on every failed poll. A configuration error quoted the
+offending value the same way, before the node had even started. The key is the one thing in the
+configuration that must never reach a log line, a monitoring agent, or a support bundle. The
+operator still needs to see *which* endpoint a message is about, so the endpoint stays visible in
+its redacted form — the host and the API version — while every path segment that is not an API
+version, the query string, the fragment and the URL's own credentials are masked. A storage
+endpoint is a location rather than a credential, so its path stays visible; a presigned query
+signature does not. Regression: `node/src/redact.rs` — *"the key does not survive the
+redaction"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.

@@ -262,7 +262,12 @@ async fn store_for(url: &str) -> Result<(Box<dyn object_store::ObjectStore>, Str
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
             .build()
-            .map_err(|e| Error::Other(anyhow::anyhow!("da backend {url}: {e}")))?;
+            .map_err(|e| {
+                Error::Other(anyhow::anyhow!(
+                    "da backend {url}: {e}",
+                    url = crate::redact::redact_endpoint(url)
+                ))
+            })?;
         return Ok((Box::new(store), prefix));
     }
     if let Some(rest) = url
@@ -273,13 +278,20 @@ async fn store_for(url: &str) -> Result<(Box<dyn object_store::ObjectStore>, Str
         let store = GoogleCloudStorageBuilder::from_env()
             .with_bucket_name(bucket)
             .build()
-            .map_err(|e| Error::Other(anyhow::anyhow!("da backend {url}: {e}")))?;
+            .map_err(|e| {
+                Error::Other(anyhow::anyhow!(
+                    "da backend {url}: {e}",
+                    url = crate::redact::redact_endpoint(url)
+                ))
+            })?;
         return Ok((Box::new(store), prefix));
     }
-    let store = HttpBuilder::new()
-        .with_url(url)
-        .build()
-        .map_err(|e| Error::Other(anyhow::anyhow!("da backend {url}: {e}")))?;
+    let store = HttpBuilder::new().with_url(url).build().map_err(|e| {
+        Error::Other(anyhow::anyhow!(
+            "da backend {url}: {e}",
+            url = crate::redact::redact_endpoint(url)
+        ))
+    })?;
     Ok((Box::new(store), String::new()))
 }
 
@@ -311,10 +323,12 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
     let location = object_path(&prefix, cid);
     // Bound before buffering: stat the object first so an honest oversize
     // object fails without any body transfer.
-    let meta = store
-        .head(&location)
-        .await
-        .map_err(|e| Error::Other(anyhow::anyhow!("da stat of {cid:#x} from {url}: {e}")))?;
+    let meta = store.head(&location).await.map_err(|e| {
+        Error::Other(anyhow::anyhow!(
+            "da stat of {cid:#x} from {url}: {e}",
+            url = crate::redact::redact_endpoint(url)
+        ))
+    })?;
     if meta.size as u64 > max_bytes {
         return Err(Error::ShardStore(ShardError::TooLarge {
             cid: *cid,
@@ -322,10 +336,12 @@ async fn fetch_remote(url: &str, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> 
             max: max_bytes,
         }));
     }
-    let result = store
-        .get(&location)
-        .await
-        .map_err(|e| Error::Other(anyhow::anyhow!("da fetch of {cid:#x} from {url}: {e}")))?;
+    let result = store.get(&location).await.map_err(|e| {
+        Error::Other(anyhow::anyhow!(
+            "da fetch of {cid:#x} from {url}: {e}",
+            url = crate::redact::redact_endpoint(url)
+        ))
+    })?;
     // ...but `head` is the server's own claim: stream the body and enforce the
     // cap chunk by chunk. Buffering first and checking afterwards would let a
     // backend that understates the size make the node hold an unbounded body
@@ -348,8 +364,12 @@ where
 
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|e| Error::Other(anyhow::anyhow!("da read of {cid:#x} from {url}: {e}")))?;
+        let chunk = chunk.map_err(|e| {
+            Error::Other(anyhow::anyhow!(
+                "da read of {cid:#x} from {url}: {e}",
+                url = crate::redact::redact_endpoint(url)
+            ))
+        })?;
         // saturating: chunk lengths arrive over the network, and hostile
         // lengths must be errors, never panics.
         let grown = (bytes.len() as u64).saturating_add(chunk.len() as u64);
@@ -396,7 +416,8 @@ fn remote_needs_feature(url: &str) -> Error {
         offset: 0,
         reason: format!(
             "da endpoint {url} needs remote storage, but this binary was built \
-             without the `da` feature; rebuild with --features da"
+             without the `da` feature; rebuild with --features da",
+            url = crate::redact::redact_endpoint(url)
         ),
     })
 }

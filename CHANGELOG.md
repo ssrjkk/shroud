@@ -6,6 +6,21 @@ first tagged release.
 
 ## Unreleased
 
+### Node: the provider's key no longer reaches the log
+
+- A managed RPC URL carries the provider's API key in its path. The node
+  printed that URL in its start-up line, and a transport error quotes the URL it
+  failed to reach — so a node whose RPC hiccupped wrote the key into its log,
+  **on every failed poll**. A configuration error quoted the offending value
+  the same way, before the node had even started.
+- The endpoint now stays visible in a redacted form (the host and the API
+  version), while every path segment that is not an API version, the query
+  string, the fragment and the URL's own credentials are masked. The secret is
+  registered before the configuration is loaded, so even a configuration error
+  is scrubbed. A storage endpoint is a location rather than a credential, so its
+  path stays visible — but a presigned query signature does not.
+- This is F-58 in the threat model; the site's finding count follows — 58.
+
 ### Docs: three dead references, one false claim, and a gate that keeps them dead
 
 - The architecture's mitigation table pointed at `shard_store.rs` — a file that

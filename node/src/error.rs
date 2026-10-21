@@ -19,7 +19,6 @@ pub enum Error {
 
     #[error("alloy: {0}")]
     Alloy(String),
-
     #[error("contract call {method} reverted: {reason}")]
     ContractCall {
         method: &'static str,
@@ -70,9 +69,24 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+impl Error {
+    /// A provider or transport error, with the RPC endpoint's secret scrubbed out.
+    ///
+    /// A transport error carries the request URL, and a managed RPC URL carries
+    /// the provider's API key: printing it as it is writes the key into the
+    /// node's log, on every failed poll. The endpoint stays visible in its
+    /// redacted form, so the operator still knows which one failed.
+    pub fn alloy(message: impl std::fmt::Display) -> Self {
+        Error::Alloy(crate::redact::scrub_secret(
+            &message.to_string(),
+            &crate::redact::rpc_secret(),
+        ))
+    }
+}
+
 impl From<alloy::transports::RpcError<alloy::transports::TransportErrorKind>> for Error {
     fn from(e: alloy::transports::RpcError<alloy::transports::TransportErrorKind>) -> Self {
-        Error::Alloy(format!("{e}"))
+        Error::alloy(e)
     }
 }
 

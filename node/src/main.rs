@@ -43,9 +43,32 @@ async fn main() -> std::process::ExitCode {
 
 async fn run() -> Result<()> {
     let cli = Cli::parse();
+
+    // Register the RPC endpoint before the configuration is even loaded: a
+    // configuration error quotes the offending value, and the offending value may
+    // be the endpoint with the provider's key in it. The flag and the environment
+    // are the two sources that can be known this early; the effective endpoint
+    // replaces them below.
+    if let Some(url) = cli.rpc_url.as_deref() {
+        shroud_node::redact::set_rpc_secret(url);
+    } else {
+        // The flag's own environment variable, and the nested config key's.
+        for name in ["CM_RPC_URL", "CM_CHAIN__RPC_URL"] {
+            if let Ok(url) = std::env::var(name) {
+                if !url.is_empty() {
+                    shroud_node::redact::set_rpc_secret(&url);
+                    break;
+                }
+            }
+        }
+    }
+
     let cfg = Config::load(&cli)?;
 
     init_tracing(&cli)?;
+
+    // The effective endpoint, now that the configuration is known.
+    shroud_node::redact::set_rpc_secret(&cfg.chain.rpc_url);
 
     // The state layer reads this to locate its checkpoint directory. It is set here rather
     // than threaded through every constructor so the state module stays free of config types.
@@ -53,7 +76,7 @@ async fn run() -> Result<()> {
 
     info!(
         version = VERSION,
-        rpc = %cfg.chain.rpc_url,
+        rpc = %shroud_node::redact::redact_rpc_url(&cfg.chain.rpc_url),
         chain_id = cfg.chain.chain_id,
         task = %cfg.contracts.cipher_task,
         vault = %cfg.contracts.payment_vault,
