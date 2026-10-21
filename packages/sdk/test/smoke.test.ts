@@ -1424,6 +1424,15 @@ test("the noop shard matches the node's shroud/noop/v1 layout byte for byte", as
     "0x47ab2fcd4d844b6194bf38a90275c1c6715e73d0451576061854f3aefba6feaf",
     "the shard bytes must match the node's golden (the on-chain ctDigest)"
   );
+  // The row commitment, the same way: the node's harness builds it from the same
+  // tag and the same f64 rows, and the shared vector carries the value. A change to
+  // either side would make the commitment the contract stores differ from the one a
+  // re-execution computes from the rows it decrypts.
+  assert.equal(
+    noopRowCommitment(new Float64Array(rows)).toLowerCase(),
+    "0x36439ba0c36114c4917613a479ad725d2eb9ab495e070dd427f7d5501cb1afec",
+    "the row commitment must match the node's golden"
+  );
 });
 
 test("weights files match the node's shroud/weights/v1 layout byte for byte", async () => {
