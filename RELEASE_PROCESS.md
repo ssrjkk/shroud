@@ -41,9 +41,9 @@ the logs attach to the draft release.
 ## 4. Sign and publish
 
 - `git tag -s v0.1.0-testnet-rc.1 -m "<evidence summary>"`.
-- Draft GitHub release with `RELEASE_NOTES.md`: the research-prototype warning,
-  trust assumptions pointer, known limitations, supported networks, commit hash,
-  artifact checksums.
+- Draft the GitHub release from a new `RELEASE_NOTES.md` (written for the tag, not
+  committed beforehand): the research-prototype warning, trust assumptions pointer,
+  known limitations, supported networks, commit hash, artifact checksums.
 - An independent machine rebuilds from the tag and compares hashes before the
   `testnet` (non-RC) tag moves.
 

@@ -1,0 +1,55 @@
+name: doc-refs
+
+# Every file the documentation names must exist.
+#
+# A reference to a file that was renamed is a dead end for the reader who
+# follows it, and a reference to a file that never existed looks like evidence.
+# The threat model's regression references matter most here: an auditor who
+# cannot find the test that pins a finding has to take the finding on trust.
+#
+# The paths matter as much as the check: a source file can be renamed without
+# touching a single document, and that is exactly when a reference goes stale.
+# So this workflow runs on the sources as well as on the prose.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "web/**"
+      - "node/**"
+      - "packages/**"
+      - "bot/**"
+      - "infra/**"
+      - "scripts/**"
+      - ".github/workflows/docrefs.yml"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "web/**"
+      - "node/**"
+      - "packages/**"
+      - "bot/**"
+      - "infra/**"
+      - "scripts/**"
+      - ".github/workflows/docrefs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doc-refs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: every file the documentation names exists
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node scripts/doc-refs.mjs

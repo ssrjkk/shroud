@@ -160,10 +160,13 @@ default = ["grpc-server"]
 # Serve the gRPC peer mesh. A stateless worker that only talks to the sequencer can turn this
 # off; `build.rs` still runs but the server module is not compiled in.
 grpc-server = []
-# Reserve the FHE execution + STARK proving dependency stack. Nothing in this crate imports it
-# until the engine and AIR land; enabling it only pulls the declared crates so they still resolve
-# and compile, so a `--all-features` CI run keeps them from rotting rather than building code
-# paths that use them.
+# Build the FHE execution stack: the `tfhe-rs` backend that runs an epoch over real
+# ciphertexts (`FheBackend::TfheShortInteger` / `TfheConcrete`). Without it those two
+# backends compile to a stub that refuses every epoch loudly at execution time
+# (`ProverMissingEngine`), so a node built without the feature still starts and says
+# why it cannot execute. The `--all-features` CI run compiles *and tests* the real
+# backend - the weights envelope round trip, the frame count, the L2 scale - so the
+# tfhe path cannot rot unnoticed between releases.
 prover = ["dep:tfhe", "dep:winterfell", "dep:winter_utils"]
 # Reserve the remote content-addressed DA stack (`object_store`). Off by default because the node
 # currently serves and reads shards only from its local `shard.cache_dir`.

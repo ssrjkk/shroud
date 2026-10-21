@@ -6,6 +6,28 @@ first tagged release.
 
 ## Unreleased
 
+### Docs: three dead references, one false claim, and a gate that keeps them dead
+
+- The architecture's mitigation table pointed at `shard_store.rs` — a file that
+  does not exist; the shard store is `node/src/da.rs`.
+- The cryptography document attributed its performance figures to
+  `node/benches/epoch.rs` — a benchmark that is not in this tree. The figures are
+  derived from the scaling guard's arithmetic, and the document now says so: a
+  number that looks measured but is not is worse than a number that says where
+  it came from.
+- The release process pointed at a `RELEASE_NOTES.md` that nobody had written;
+  it now says the file is written for the tag.
+- `node/Cargo.toml` described the `prover` feature as a reserved dependency
+  stack that "nothing in this crate imports" — the tfhe backend has been behind
+  that feature all along, and the `--all-features` CI run compiles *and tests*
+  it. The comment described a plan, not the code.
+- `scripts/doc-refs.mjs` now checks that every file the documentation names
+  exists, and a new `doc-refs` workflow runs it — on the sources as well as on
+  the prose, because a file can be renamed without touching a document, and that
+  is exactly when a reference goes stale. Runtime artifacts (the bot's
+  watchlist, the operator's config, the evidence pack's output) are listed
+  explicitly, so the exceptions are visible rather than implicit.
+
 ### Node: a network blip no longer costs the node an epoch
 
 - Before it either requeues an epoch or drops it, the node sorts a failure into

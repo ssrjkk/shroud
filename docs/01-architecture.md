@@ -387,7 +387,7 @@ exactness and a tractable ZK trace.
 | A9 | Buyer aborts after nodes spent compute | Escrow is locked per-epoch on `openEpoch`; abort keeps a slice of the open lock only for an epoch with a *verified* commit (as a redeemable channel), refunds everything else; unspent node pool reclaimable after the last epoch | `abort`, `reclaimUnspentEpochs` |
 | A10 | DoS via absurd dataset size | `maxContributors`, `maxShards`, `maxCiphertextBytes`, `minRowsPerShard` all bounded at task creation | `TaskParams` validation |
 | A11 | Reorg reverts a settled epoch | Watchers only act on `finalized` blocks; STARK public input includes `chainId`; settlement is idempotent by `(taskId, epoch)` | `watcher.rs: FinalityPolicy` |
-| A12 | Ciphertext decompression bomb on node | Range-pull with byte budget + streaming digest verification before TFHE parse | `shard_store.rs` |
+| A12 | Ciphertext decompression bomb on node | Range-pull with byte budget + streaming digest verification before TFHE parse | `node/src/da.rs` |
 
 ---
 

@@ -10,12 +10,15 @@
 | Message | 32 bits plaintext × 8 lanes | |
 | Noise budget | 40 safe bits | consumed ≈ 3 bits/bootstrapped add |
 | Plaintext modulus | 2 64 (for the matmul accumulator) | q = 2 64, so `∑ ≤ 2^40` rows before overflow |
-| Bootstraps per epoch (33×d linear) | ≈ 2 600 | measured `node/benches/epoch.rs` |
-| Wall clock per epoch, 8-core AVX2 | ≈ 41 s | measured, single shard set of 1 000 rows |
+| Bootstraps per epoch (33×d linear) | ≈ 2 600 | derived from the 33-lane dot product below |
+| Wall clock per epoch, 8-core AVX2 | ≈ 41 s | derived, not a committed measurement |
 
 **Scaling guard.** A bootstrapped SIMD add over 8 lanes on one AVX2 core ≈ 12 ms. A 33-lane
 dot product is 33 chained adds ⇒ ~400 ms; SGD over a 1 000-row dataset = 1 000 dot products
-= ~7 min/epoch. Shroud therefore trains **full-batch or minibatch-of-8 with
+= ~7 min/epoch (the table's 41 s is the same work spread over 8 cores). These are derived
+figures, not a committed measurement: the benchmark harness is not in this tree, and the
+decision below does not depend on their exact value — only on the order of magnitude.
+Shroud therefore trains **full-batch or minibatch-of-8 with
 gradient accumulation**, i.e. 1 bootstrap-set per minibatch, and *not* per-sample SGD.
 This is stated in the buyer-facing model spec as `update_mode: "batch"|"minibatch"`.
 
