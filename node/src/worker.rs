@@ -1029,12 +1029,22 @@ fn outcome_of(gate: Gate) -> Outcome {
 }
 
 /// Failures that may resolve on their own: a DA layer that has not synced yet, a fold
-/// that is still backfilling, or a remote backend that is temporarily unreachable. The
-/// caller requeues those without spending gas; the epoch window bounds the wait, because
-/// the gate turns `Ready` into `Skip` once it closes. Data and configuration errors
-/// (`Fhe`, `Shard`) are permanent and must be loud instead.
+/// that is still backfilling, a remote backend that is temporarily unreachable, or a
+/// chain transport that dropped the call. The caller requeues those without spending gas;
+/// the epoch window bounds the wait, because the gate turns `Ready` into `Skip` once it
+/// closes. Data and configuration errors (`Fhe`, `Shard`) are permanent and must be loud
+/// instead.
+///
+/// `Error::Alloy` belongs here: it is the chain *transport* — a timeout, a dropped
+/// connection, a 502, or a revert while the chain is mid-reorg. None of those is an
+/// answer about the epoch. It was left out, so a two-second network blip while the
+/// inputs were being collected was read as "this epoch has no executable inputs" and
+/// the node dropped the epoch: no commit, no opinion, and the window closed without it.
 fn is_retryable(e: &Error) -> bool {
-    matches!(e, Error::Io(_) | Error::Chain(_) | Error::Other(_))
+    matches!(
+        e,
+        Error::Io(_) | Error::Chain(_) | Error::Other(_) | Error::Alloy(_)
+    )
 }
 
 /// The task's status byte as the node's own enum, with an unknown value collapsing to `None`.
@@ -1288,6 +1298,36 @@ mod tests {
             commit_gate(&t, 3, 700, Duration::from_secs(300)),
             Gate::Ready
         );
+    }
+
+    #[test]
+    fn a_transport_failure_is_not_an_answer_about_the_epoch() {
+        // The chain transport failing while the inputs are collected is not a verdict on
+        // the epoch: a timeout or a dropped connection says nothing about whether the
+        // node can execute. Read as permanent, a two-second network blip cost the node
+        // the whole epoch - no commit, no opinion, and the window closed without it.
+        assert!(is_retryable(&Error::Alloy(
+            "connection reset by peer".into()
+        )));
+        assert!(is_retryable(&Error::Io(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "the da has not synced yet"
+        ))));
+        // A malformed shard or a shape mismatch is permanent: retrying cannot fix it,
+        // and pretending otherwise would spin on a hopeless epoch.
+        assert!(!is_retryable(&Error::Fhe(FheError::ShapeMismatch {
+            got_rows: 1,
+            got_cols: 2,
+            want_rows: 3,
+            want_cols: 4,
+        })));
+        assert!(!is_retryable(&Error::ShardStore(
+            crate::error::ShardError::TooLarge {
+                cid: B256::ZERO,
+                size: 10,
+                max: 1,
+            }
+        )));
     }
 
     #[test]

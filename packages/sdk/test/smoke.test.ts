@@ -18,6 +18,7 @@ import { ethers } from "ethers";
 import { MemoryShardStore, HttpShardStore, assertSafeCid } from "../dist/index.js";
 import { NoopEncryptor, noopRowCommitment, pinPayload } from "../dist/index.js";
 import { REDEEM_TYPEHASH, domainSeparator, popDigest } from "../dist/index.js";
+import { onceAsync } from "../dist/memo.js";
 import {
   decodeSliceSignature,
   encodeSliceSignature,
@@ -1323,6 +1324,26 @@ test("registerNodeWithPop validates its inputs before touching the signer", asyn
   await assert.rejects(() => client.registerNodeWithPop(1n, bls, stubSigner, 0n), /positive integer/);
 });
 
+test("the dispute commitment matches the node's golden", async () => {
+  // The node files disputes with the same commitment (node/src/chain/transcript.rs) and
+  // the contract checks it on reveal. The node's golden is pinned to a hardcoded value
+  // and this is the same value, so a change to either encoder is caught here instead of
+  // surfacing as a dispute that can never be revealed.
+  const { CipherTaskClient } = await import("../dist/cipher.js");
+  const client = new CipherTaskClient(
+    "0x0000000000000000000000000000000000000001",
+    { getNetwork: async () => ({ chainId: 31337n }) } as unknown as ethers.Provider
+  );
+  assert.equal(
+    client.disputeCommitment(
+      `0x${"11".repeat(32)}`,
+      `0x${"22".repeat(32)}`,
+      `0x${"aa".repeat(20)}`
+    ),
+    "0xcfd5d0c50c4ee315105146571d644a56cfe517efa50a3d1f9010e78948106e97"
+  );
+});
+
 test("disputeCommitment binds digest, salt and reporter exactly like the contract", async () => {
   // `CipherTask.commitDispute` expects keccak256(abi.encode(digest, salt, reporter)); the SDK
   // helper must produce byte-identical commitments or every commit would be unrevealable.
@@ -1363,6 +1384,25 @@ test("the domain separator matches the vault's, byte for byte", () => {
     domainSeparator("0x0000000000000000000000000000000000000001", 1n),
     "0x7daba0f7c50d1c8fd8026e05236fc6a200ce2bacc02f5c91de5630ce317cc423"
   );
+});
+
+test("a failed attempt is not cached: the next call tries again", async () => {
+  // The relayer encryptor builds its live instance once and reuses it. A *rejection*
+  // that is cached is a permanent failure, so a momentary outage - the relayer
+  // restarting, the RPC hiccupping - left the encryptor broken until the process was
+  // restarted. The failure is dropped instead, and the next call builds a new attempt.
+  let attempts = 0;
+  const get = onceAsync(async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error("relayer is down");
+    return "instance";
+  });
+  await assert.rejects(() => get(), /relayer is down/);
+  assert.equal(await get(), "instance");
+  assert.equal(attempts, 2);
+  // A success is remembered: the resource is not rebuilt.
+  assert.equal(await get(), "instance");
+  assert.equal(attempts, 2);
 });
 
 test("the noop shard matches the node's shroud/noop/v1 layout byte for byte", async () => {

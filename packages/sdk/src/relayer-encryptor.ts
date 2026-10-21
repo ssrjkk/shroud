@@ -32,6 +32,7 @@ import { ethers } from "ethers";
 import { createInstance, SepoliaConfig } from "@zama-fhe/relayer-sdk/node";
 import type { FhevmInstance } from "@zama-fhe/relayer-sdk/node";
 import type { Encryptor } from "./types.js";
+import { onceAsync } from "./memo.js";
 
 /** Magic + version of the DA payload envelope (see `encodeRelayerPayload`). */
 export const RELAYER_PAYLOAD_MAGIC = "shroud/relayer/v1";
@@ -202,7 +203,6 @@ export class RelayerEncryptor implements Encryptor {
   > &
     Required<Pick<RelayerEncryptorOptions, "contractAddress" | "userAddress">>;
   private instance?: FhevmInstance;
-  private instancePromise?: Promise<FhevmInstance>;
 
   private constructor(
     opts: RelayerEncryptorOptions,
@@ -279,18 +279,25 @@ export class RelayerEncryptor implements Encryptor {
 
   private async ready(): Promise<FhevmInstance> {
     if (this.instance) return this.instance;
-    if (!this.instancePromise) {
-      const opts = this.opts;
-      this.instancePromise = createInstance({
-        ...SepoliaConfig,
-        relayerUrl: opts.relayerUrl,
-        network: opts.network,
-        chainId: opts.chainId,
-      }).then((instance) => {
-        this.instance = instance;
-        return instance;
-      });
-    }
-    return this.instancePromise;
+    return this.instanceOnce();
   }
+
+  /**
+   * The live instance, built at most once.
+   *
+   * A failed attempt is not remembered: the relayer or the RPC may be down for a
+   * moment, and a cached rejection would leave the encryptor permanently broken
+   * until the process is restarted.
+   */
+  private readonly instanceOnce = onceAsync(async () => {
+    const opts = this.opts;
+    const instance = await createInstance({
+      ...SepoliaConfig,
+      relayerUrl: opts.relayerUrl,
+      network: opts.network,
+      chainId: opts.chainId,
+    });
+    this.instance = instance;
+    return instance;
+  });
 }

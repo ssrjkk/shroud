@@ -31,6 +31,39 @@ fn file_name(cid: &B256) -> String {
 /// oversize, unreadable — is a [`ShardError`] and does not get better on retry.
 pub fn read_object(cache_dir: &Path, cid: &B256, max_bytes: u64) -> Result<Vec<u8>> {
     let path = cache_dir.join(file_name(cid));
+    // Stat before reading: an oversize object must be refused without being pulled into
+    // memory. The remote path does the same (`head` before `get`), and the difference
+    // matters: shards are fetched with a bounded concurrency, so a cache holding
+    // objects larger than the current budget — an operator who lowered
+    // `max_ciphertext_bytes`, or a file planted in the directory — would be read in
+    // full, several at a time, before the check rejected it. The length is checked
+    // again after the read, because the file may grow in between: the stat is a cheap
+    // gate, not the only one.
+    match std::fs::metadata(&path) {
+        Ok(meta) => {
+            if !meta.is_file() {
+                return Err(Error::ShardStore(ShardError::Malformed {
+                    offset: 0,
+                    reason: format!("{} is not a regular file", path.display()),
+                }));
+            }
+            let size = meta.len();
+            if size > max_bytes {
+                return Err(Error::ShardStore(ShardError::TooLarge {
+                    cid: *cid,
+                    size,
+                    max: max_bytes,
+                }));
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(Error::Io(e)),
+        Err(e) => {
+            return Err(Error::ShardStore(ShardError::Malformed {
+                offset: 0,
+                reason: format!("cannot stat {}: {e}", path.display()),
+            }));
+        }
+    }
     let bytes = std::fs::read(&path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             Error::Io(e)
@@ -423,6 +456,20 @@ mod tests {
         let dir = dir();
         let err = read_object(dir.path(), &B256::repeat_byte(0x9), 1 << 20).expect_err("missing");
         assert!(matches!(err, Error::Io(_)));
+    }
+
+    #[test]
+    fn a_cache_entry_that_is_not_a_regular_file_is_malformed() {
+        // The cache is checked by stat before the read, so a directory sitting where an
+        // object belongs must still read as malformed rather than as an oversize object.
+        let dir = dir();
+        let cid = B256::repeat_byte(0x9);
+        std::fs::create_dir(dir.path().join(file_name(&cid))).expect("plant");
+        let err = read_object(dir.path(), &cid, 1 << 20).expect_err("not a file");
+        assert!(matches!(
+            err,
+            Error::ShardStore(ShardError::Malformed { .. })
+        ));
     }
 
     #[test]

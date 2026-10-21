@@ -719,6 +719,24 @@ tells an operator nothing. The deadline now clears the poll window plus the roun
 Regression: `bot/test/telegram.test.js` — *"a long poll is not aborted by the client's
 own request deadline"*.
 
+### F-56 — A network blip cost the node the whole epoch — **Mitigated**
+Before it either requeues an epoch or drops it, the node sorts the failure into "may resolve on
+its own" and "permanent". The chain's *transport* errors were in the permanent group: a timeout,
+a dropped connection or a 502 while the epoch's inputs were being collected was read as "this
+epoch has no executable inputs", so the node dropped the epoch — no commit, no opinion, and the
+window closed without it. A two-second blip on a mobile uplink was enough to forfeit an epoch
+and the reward attached to it. The transport is a retryable failure now, and the epoch window
+bounds the wait — which is what the code's own documentation always said it did. Regression:
+`node/src/worker.rs` — *"a transport failure is not an answer about the epoch"*.
+
+### F-57 — The relayer encryptor remembered a failure forever — **Mitigated**
+The SDK's relayer encryptor builds its live instance once and reuses it. The *rejection* was
+reused too: a momentary outage — the relayer restarting, the RPC hiccupping — left the
+encryptor permanently broken, because every later call returned the same cached rejection and
+only a process restart could recover. A failed attempt is not remembered now; the next call
+builds a new one. Regression: `packages/sdk/test/smoke.test.ts` — *"a failed attempt is not
+cached: the next call tries again"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.

@@ -6,6 +6,35 @@ first tagged release.
 
 ## Unreleased
 
+### Node: a network blip no longer costs the node an epoch
+
+- Before it either requeues an epoch or drops it, the node sorts a failure into
+  "may resolve on its own" and "permanent". The chain's **transport** errors were
+  in the permanent group: a timeout, a dropped connection or a 502 while the
+  epoch's inputs were being collected was read as "this epoch has no executable
+  inputs", and the node dropped the epoch — no commit, no opinion, and the
+  window closed without it. The transport is a retryable failure now, and the
+  epoch window bounds the wait, which is what the code's own documentation
+  always said it did.
+- The local DA cache is checked by `stat` before the object is read, the way
+  the remote path already did with `head` before `get`. Shards are fetched with
+  a bounded concurrency, so a cache holding objects larger than the current
+  budget was read in full — several at a time — before the check rejected it.
+- This is F-56 in the threat model; the site's finding count follows — 57.
+
+### SDK: the relayer encryptor no longer remembers a failure forever
+
+- The relayer encryptor builds its live instance once and reuses it. The
+  *rejection* was reused too: a momentary outage — the relayer restarting, the
+  RPC hiccupping — left the encryptor permanently broken, because every later
+  call returned the same cached rejection and only a process restart could
+  recover. A failed attempt is not remembered now; the next call builds a new
+  one. The memo is a named helper (`onceAsync`) with a test of its own.
+- The SDK's dispute commitment is now pinned to the node's golden, so the two
+  encoders cannot drift apart — a divergence would surface as a dispute that can
+  never be revealed.
+- This is F-57 in the threat model.
+
 ### Dependabot: version updates off, security updates on
 
 - Dependabot was scheduled weekly on seven ecosystems, so every Monday it re-created the
