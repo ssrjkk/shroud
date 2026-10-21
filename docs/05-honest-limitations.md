@@ -108,6 +108,16 @@ not counted against that limit, and every JavaScript CI job now gates on
 of waiting for a scan. The consequence to be aware of: **routine version bumps no longer
 arrive on their own**; they have to be taken by hand.
 
+That split was exercised on 2026-10-21, within a day of the change: a **high**-severity
+advisory appeared in `follow-redirects` (a transitive dependency of the Hardhat 2 dev
+toolchain), and Dependabot opened exactly one pull request - a security update, which the
+`open-pull-requests-limit: 0` does not suppress. It was merged on 2026-10-22 (#52), the
+`npm audit --audit-level=high` gate in the contracts job had already failed on the advisory
+in the meantime, and the repository is back to **zero open advisories**. The design point
+worth keeping: the version-update noise is gone, and the security signal still arrives - and
+arrives as a red build rather than as something to notice.
+
+
 Resolved 2026-10-17: 29 of the 30 via flat `overrides` in
 `packages/contracts/package.json` (`cookie 0.7.0`, `tmp 0.2.7`,
 `undici 6.28.1`, `diff 8.0.3`, `serialize-javascript 7.0.5`, `uuid 11.1.1`,
