@@ -1082,7 +1082,7 @@ pub fn commit_gate(task: &TaskOnChain, epoch: u32, now: u64, min_window: Duratio
     // unreachable dispute: the committee cannot check the claim, and the epoch is
     // settled on the claimant's word alone. The node refuses rather than take part in
     // a dispute mechanism that cannot work.
-    if (task.dispute_window as u64) < min_window.as_secs() {
+    if u64::from(task.dispute_window) < min_window.as_secs() {
         return Gate::Skip(
             "the dispute window is too short to hold a re-execution; the dispute would be unreachable",
         );

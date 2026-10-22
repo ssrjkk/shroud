@@ -6,6 +6,32 @@ first tagged release.
 
 ## Unreleased
 
+### Design: the owner can no longer move the money or drop the proof requirement in one transaction
+
+- The treasury receives every slashed bond and every committee leg, and
+  `setTreasury` was a single `onlyOwner` call: one transaction repointed every
+  future fee flow to an address of the owner's choosing, with no window in which
+  anyone could notice. The treasury now moves through a rotation —
+  `proposeTreasury` queues the candidate and the time it becomes executable,
+  `executeTreasury` installs it once `TREASURY_DELAY` (seven days, the same
+  window the verifier and the task-manager rotations use) has elapsed, and
+  `cancelTreasury` lets the owner drop a change it no longer wants. A live
+  candidate cannot be swapped, so the address watchers saw is the address that
+  lands, and anyone may execute, so a queued rotation is not hostage to a lost
+  owner key. **F-61.**
+- Each contribution carries a Groth16 proof that its rows match the buyer's
+  shape, and that proof is the only thing keeping rows of the wrong shape out of
+  the dataset. `setShapeProofsRequired(false)` removed the requirement in one
+  call. The requirement is now a **ratchet**: `requireShapeProofs` turns it on and
+  there is no entry point that turns it off at all — a deployment decides at
+  construction, the owner may tighten it later, nobody may loosen it. A delay
+  would have been the weaker version of the same fix: it would still leave a
+  window in which the requirement could lapse. **F-62.**
+- ABI change: `setTreasury`/`setShapeProofsRequired` are gone, the rotation
+  functions are new, and the shape-proof requirement is decided per deployment.
+  `DISPUTE_QUORUM` is no longer a public constant — `disputeQuorum(taskId)` still
+  reports it. The SDK's ABI is regenerated from the artifact.
+
 ### Design: the dispute committee is no longer the sequencer's to pick
 
 - The committee that may report a dispute for an epoch is drawn by a weighted

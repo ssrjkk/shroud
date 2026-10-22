@@ -83,7 +83,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
 
     /// @dev Distinct re-executors whose disagreement with the claimed digest is required to
     ///      reject an epoch. See docs/03-proof-of-compute.md §4.
-    uint256 public constant DISPUTE_QUORUM = 3;
+    uint256 internal constant DISPUTE_QUORUM = 3;
+    /// @dev How long a queued treasury change waits before it can be executed. Seven days,
+    ///      like the verifier and the task-manager rotations: a week is what an operator
+    ///      needs to notice a queued change and react to it.
+    uint64 public constant TREASURY_DELAY = 7 days;
 
     bytes32 private constant _EMPTY_ROOT = keccak256("SHROUD/CTROOT/v1");
     bytes4 private constant _1271_MAGIC = 0x1626ba7e;
@@ -124,6 +128,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     address public pendingOwner;
     address public treasury;
     bool public shapeProofsRequired;
+    /// @dev A queued treasury change and the time it becomes executable. The zero address
+    ///      means nothing is queued. Internal on purpose: the proposal and the cancellation
+    ///      are announced by events, and every byte of public surface here is a byte the
+    ///      next feature cannot use (see `Deployability.spec.ts`).
+    address internal pendingTreasury;
+    uint64 internal pendingTreasuryEta;
 
     uint256 public taskCount;
 
@@ -176,6 +186,8 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     event OwnershipTransferStarted(address indexed from, address indexed to);
     event OwnershipTransferred(address indexed from, address indexed to);
     event TreasuryChanged(address indexed from, address indexed to);
+    event TreasuryProposed(address indexed to, uint64 indexed eta);
+    event TreasuryRotationCancelled(address indexed dropped);
     event ShapeProofsRequiredChanged(bool required);
     event StateAccessGranted(uint256 indexed taskId, address indexed account);
     /// @dev Emitted for every settlement page that is not the last, so an operator can watch
@@ -189,6 +201,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /* ------------------------------------------------------------------ */
 
     error NotOwner(address caller);
+    error PendingRotationExists(address proposed, uint64 eta);
+    error NoPendingTreasury();
+    error TreasuryNotReady(uint64 eta);
     error NodeAlreadyRegistered(uint256 taskId, address node);
     error NarrowCast(address from);
     error NarrowCastId(uint256 id);
@@ -258,15 +273,64 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         pendingOwner = address(0);
     }
 
-    function setTreasury(address to) external onlyOwner {
+    /// @notice Queue a treasury change, effective `TREASURY_DELAY` after it is proposed.
+    /// @dev The treasury receives every slashed bond and the committee leg, so pointing it
+    ///      somewhere else is pointing the money somewhere else. It used to be a single
+    ///      call: one transaction moved every future fee flow to an address of the owner's
+    ///      choosing, with no window in which anybody could notice. The delay is the one
+    ///      the verifier and the task-manager rotations use, and it is enforced on chain —
+    ///      an off-chain promise in a runbook is not a mitigation.
+    /// @dev Re-proposing while a change is live reverts: the queued candidate and its eta
+    ///      are what observers rely on, and swapping the candidate mid-timelock would let
+    ///      the owner show one address to watchers and install another. The queued change
+    ///      is read from the events, not from a getter: `TreasuryProposed` carries the
+    ///      candidate and the eta, `TreasuryChanged` and `TreasuryRotationCancelled` close
+    ///      it.
+    function proposeTreasury(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
-        emit TreasuryChanged(treasury, to);
-        treasury = to;
+        if (pendingTreasury != address(0)) revert PendingRotationExists(pendingTreasury, pendingTreasuryEta);
+        pendingTreasury = to;
+        pendingTreasuryEta = uint64(block.timestamp) + TREASURY_DELAY;
+        emit TreasuryProposed(to, pendingTreasuryEta);
     }
 
-    function setShapeProofsRequired(bool required) external onlyOwner {
-        shapeProofsRequired = required;
-        emit ShapeProofsRequiredChanged(required);
+    /// @notice Execute the queued treasury change. Callable by anyone once the delay has
+    ///         elapsed, so a queued change is not hostage to a lost owner key.
+    function executeTreasury() external {
+        address to = pendingTreasury;
+        if (to == address(0)) revert NoPendingTreasury();
+        if (block.timestamp < pendingTreasuryEta) revert TreasuryNotReady(pendingTreasuryEta);
+        pendingTreasury = address(0);
+        pendingTreasuryEta = 0;
+        address from = treasury;
+        treasury = to;
+        emit TreasuryChanged(from, to);
+    }
+
+    /// @notice Cancel the queued treasury change. Owner-only: the owner must be able to
+    ///         stop a change it no longer wants, including one queued by a compromised key
+    ///         before the delay elapsed.
+    function cancelTreasury() external onlyOwner {
+        address dropped = pendingTreasury;
+        if (dropped == address(0)) revert NoPendingTreasury();
+        pendingTreasury = address(0);
+        pendingTreasuryEta = 0;
+        emit TreasuryRotationCancelled(dropped);
+    }
+
+    /// @notice Require a Groth16 shape proof from contributors.
+    /// @dev A ratchet, not a switch: requiring a proof is the stricter setting and can
+    ///      only reject a submission that would have been rejected later anyway, so it
+    ///      takes effect at once. *Dropping* the requirement is the destructive
+    ///      direction — the proof is what keeps rows that do not match the buyer's shape
+    ///      out of the dataset — so there is no way to drop it at all. A deployment
+    ///      decides at construction whether the requirement holds, and the owner may
+    ///      tighten it later, but no key can quietly reopen the door to poisoned rows.
+    /// @dev The requirement is global, not per task: it is a property of how this
+    ///      deployment accepts contributions, not a dial the owner turns between tasks.
+    function requireShapeProofs() external onlyOwner {
+        shapeProofsRequired = true;
+        emit ShapeProofsRequiredChanged(true);
     }
 
     function setPaused(bool v) external onlyOwner {

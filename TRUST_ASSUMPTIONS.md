@@ -7,7 +7,7 @@ documented. If any row is unacceptable for your use case, do not escrow value.
 |---|---|---|---|
 | T-01 | The decryption committee does not collude at or above threshold | Rows and early weights decrypt; privacy ends | Residual by design (F-10); ceremony/rotation are future work |
 | T-02 | Fewer than 3 mutually distrusting re-executors per epoch are malicious | Honest winner loses reward + bond; epoch rejected | Priced, not prevented (flat quorum); `docs/04` §2a |
-| T-03 | The contract owner key is honest and live | Pause/treasury/abort/slash abused; no multisig or timelock on these paths | Single-key today; `CipherTask` owner powers listed in `docs/01` |
+| T-03 | The contract owner key is honest and live | Pause/abort/slash abused; no multisig on these paths | The treasury moves only through a 7-day rotation (F-61) and the shape-proof requirement cannot be loosened (F-62); pause and `emergencyUnwind` stay immediate, single key, no multisig |
 | T-04 | The TFHE network key pinned by `NetworkParams` is correct | Ciphertexts under a substituted key decrypt elsewhere or nowhere | SDK pin fail-closed when configured; relayer binding required; node pin checked at startup by default |
 | T-05 | The DA serves the bytes its CIDs name, eventually | Liveness stalls (withholds fail loudly via digest/size/timeout checks, never silently) | Hostile-DA handling tested (`da.ts`, ShardStore guard suite) |
 | T-06 | `chainId` and contract addresses in client config are right | Cross-chain replay / wrong-task encryption | SDK hard-errors on configured mismatch; unconfigured values are skipped, not verified |

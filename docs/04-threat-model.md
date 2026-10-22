@@ -808,6 +808,41 @@ long a re-execution takes; the guard therefore lives in the node, which does kno
 refuses the epoch loudly instead of taking part in a mechanism that cannot work. Regression:
 `node/src/worker.rs` — *"an epoch whose dispute window cannot hold a re-execution is refused"*.
 
+### F-61 — The owner could move the treasury in one transaction (ADV5) — **Mitigated**
+The treasury receives every slashed bond and every committee leg, so it is where the money that
+contributors earned ends up. `setTreasury` was a single `onlyOwner` call: one transaction
+repointed every future fee flow to an address of the owner's choosing, with no window in which
+a user could notice, complain or get their funds out. The same key that owns the contract also
+signs the deployment, so a single compromised key could turn the escrow's residual flow into a
+private wallet — and the movement would look exactly like a legitimate treasury update.
+
+The treasury now moves through a rotation: `proposeTreasury` queues the candidate and the time
+it becomes executable, `executeTreasury` installs it once `TREASURY_DELAY` (seven days — the
+same window the verifier and the task-manager rotations use) has elapsed, and `cancelTreasury`
+lets the owner drop a change it no longer wants. A live candidate cannot be swapped, so the
+address watchers saw is the address that lands; and anyone may execute the change, so a queued
+rotation is not hostage to a lost owner key. The events carry the candidate and the eta, so the
+queue is readable without trusting the owner's own reporting.
+Regression: `packages/contracts/test/AdminControls.spec.ts` — *"refuses to execute before the
+delay, and executes for anyone after it"*.
+
+### F-62 — The owner could drop the shape-proof requirement in one transaction (ADV5) — **Mitigated**
+Every contribution carries a Groth16 proof that its rows match the buyer's `shapeRoot`. That
+proof is the only thing keeping rows of the wrong shape out of the dataset: without it the
+buyer pays for a dataset that does not answer the question they bought. `setShapeProofsRequired(false)`
+removed the requirement in one call, with no delay and no trace beyond a single event, so a
+compromised owner key could reopen the door to poisoned rows for every task that had not yet
+been contributed to — and the poisoned rows would be indistinguishable from good ones to
+everyone downstream.
+
+The requirement is now a ratchet. `requireShapeProofs` turns it on, and there is no entry point
+that turns it off at all: a deployment decides at construction whether the requirement holds,
+the owner may tighten it later, and nobody may loosen it. A delay would have been the weaker
+version of the same fix — it would still leave a window in which the requirement could lapse —
+so the weakening direction was removed rather than slowed down.
+Regression: `packages/contracts/test/AdminControls.spec.ts` — *"cannot be loosened: there is no
+switch that turns the requirement off"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.

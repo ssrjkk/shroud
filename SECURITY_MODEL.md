@@ -36,7 +36,9 @@ or the test suite — nothing here is new, it is the enforceable subset in one p
 
 - A t-of-n committee colluding off-chain (residual F-10): rows decryptable by design.
 - A Sybil dispute quorum (flat 3, bonds returned): griefing is priced, not prevented.
-- A malicious/complacent contract owner: single-key pause/treasury/abort (no multisig).
+- A malicious/complacent contract owner: single-key pause/abort (no multisig). The treasury
+  moves only through a 7-day rotation (F-61) and the shape-proof requirement cannot be loosened
+  at all (F-62), so the money and the dataset's integrity are not one keystroke away.
 - TFHE-branch determinism across nodes: single-executor only today.
 - The live `commitEpoch` from this node on production: has not happened yet.
 
