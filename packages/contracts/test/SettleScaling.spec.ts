@@ -110,6 +110,35 @@ describe("settlement scalability", () => {
     void contributors;
   });
 
+  it("pins the per-channel sweep cost so the channel array cannot silently eat the block", async () => {
+    // `taskChannels` only grows: closed channels stay in the array, and the sweep walks
+    // all of it on every settlement page (and once in `abort`). The threat-model bound
+    // (F-63) is arithmetic on the two numbers measured here — closing a mature channel
+    // vs skipping an already-closed one. If a storage-layout change moves them, the
+    // bound must be redone, and this is where that shows first.
+    const [owner, node] = await ethers.getSigners();
+    const token = await ethers.deployContract("TestToken");
+    const vault: PaymentVault = await ethers.deployContract("PaymentVault", [await token.getAddress()]);
+    await vault.setTaskManager(owner.address);
+    const N = 200;
+    const lock = 1000n;
+    await token.mint(owner.address, BigInt(N) * lock);
+    await token.connect(owner).approve(await vault.getAddress(), ethers.MaxUint256);
+    await vault.connect(owner).fundTask(1n, BigInt(N) * lock, owner.address);
+    for (let i = 0; i < N; i++) {
+      await vault.connect(owner).openTaskChannel(1n, node.address, lock, 0);
+    }
+    expect(await vault.channelIds(1n)).to.have.lengthOf(N);
+    await time.increase(30 * 86400 + 1); // outlast the default 30-day window
+    const closeReceipt = await (await vault.connect(owner).sweepTaskChannels(1n)).wait();
+    const skipReceipt = await (await vault.connect(owner).sweepTaskChannels(1n)).wait();
+    const perClose = closeReceipt.gasUsed / BigInt(N);
+    const perSkip = skipReceipt.gasUsed / BigInt(N);
+    console.log(`      sweep per channel: close ${perClose}, skip-closed ${perSkip}`);
+    expect(perClose).to.be.lessThan(15_000n);
+    expect(perSkip).to.be.lessThan(6_000n);
+  });
+
   it("pays the whole contributor pool across pages exactly once", async () => {
     // Hardhat only provides 20 signers and the fixture spends several, so the paging path is
     // exercised by temporarily shrinking the page size rather than by inventing 200+ accounts.

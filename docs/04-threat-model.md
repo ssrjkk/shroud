@@ -844,6 +844,25 @@ so the weakening direction was removed rather than slowed down.
 Regression: `packages/contracts/test/AdminControls.spec.ts` — *"cannot be loosened: there is no
 switch that turns the requirement off"*.
 
+### F-63 — Settlement sweep iterates every channel the task ever opened (ADV2) — **Partially mitigated**
+`taskChannels[taskId]` only grows: closed channels stay in the array, and
+`sweepTaskChannels` walks all of it on every settlement page (and once in `abort`),
+paying for the read even on entries it skips. Measured: ~11,500 gas to close a mature
+channel, ~4,800 to skip an already-closed one. One page bricks at ~2,600 mature
+unclosed channels on the close path, or ~6,300 closed ones on the skip path, against
+a 30M block — and a bricked first page means settlement never starts, so the escrow
+stays stuck with no recourse. The hard bound is 365 epochs × 65 channels = 23,725,
+past both limits. What keeps it theoretical is the sortition: the draw admits ~7
+reporters per epoch in expectation no matter how many Sybils register (each identity
+past the auto-pass threshold only dilutes the others), so a realistic worst case is
+~8 channels × 365 epochs ≈ 2,900 — inside the skip-path limit as long as winners and
+reporters actually claim, and past the close-path one only if hundreds of max-disputed
+epochs all go unclaimed to maturity. The fix that would remove the bound instead of
+leaning on it — a live-channel list or a paged sweep — does not fit the 346-byte
+deployment headroom, so it stays recorded here as future work.
+Regression: `packages/contracts/test/SettleScaling.spec.ts` — *"pins the per-channel
+sweep cost so the channel array cannot silently eat the block"*.
+
 ## 3. Explicitly out of scope
 
 - Padding-oracle / timing side channels inside the fhEVM coprocessor.

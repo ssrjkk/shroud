@@ -6,6 +6,15 @@ first tagged release.
 
 ## Unreleased
 
+### Threat model: the settlement sweep has a measured channel bound (F-63)
+
+- `taskChannels` only grows and the sweep walks all of it on every settlement page:
+  ~11.5k gas to close a channel, ~4.8k to skip a closed one, so one page bricks at
+  ~2,600 mature unclosed (or ~6,300 closed) channels. The sortition keeps the realistic
+  worst case near ~8 channels per epoch, which is why this is recorded, not fixed —
+  the fix does not fit the deployment headroom. A new tripwire test pins the two
+  per-channel numbers so a storage change cannot silently eat the margin.
+
 ### Docs: a slashed winner bond never reaches the treasury
 
 - Seven places said the treasury receives "every slashed bond". It does not: slashed
