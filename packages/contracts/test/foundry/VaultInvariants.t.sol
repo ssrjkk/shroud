@@ -6,7 +6,7 @@ import "../../src/payments/PaymentVault.sol";
 import "../../src/mocks/TestToken.sol";
 
 /// Fuzzed driver for the vault-accounting invariants. Every function here is a
-/// manager-side operation forge may call in any order with any arguments; the
+/// manager- or owner-side operation forge may call in any order with any arguments; the
 /// bounds keep inputs inside the valid domain (a reverting handler call fails
 /// the run, so out-of-domain inputs are skipped, not sent).
 contract VaultHandler is Test {
@@ -29,13 +29,26 @@ contract VaultHandler is Test {
     uint256 public warpsDone;
     uint256 public redeemsDone;
     uint256 public reclaimsDone;
+    uint256 public closesDone;
+    uint256 public straysDone;
+    uint256 public rescuesDone;
 
-    /// Channels this handler opened, for slice/reclaim driving.
+    /// Every channel this handler opened (it is the streamer of all of them, so
+    /// `closeChannel` works on any entry, unlike redeem/reclaim which need the
+    /// earner).
+    uint256[] public allIds;
+
+    /// Tokens minted straight to the vault, bypassing `fundTask`: the only money
+    /// the accounting does not know about, and exactly what `rescueStrayTokens`
+    /// must return. `invariant_strayAccounts` pins the identity.
+    uint256 public strayOwed;
+
+    /// Slice indices per channel, so every redeem moves strictly forward.
     mapping(uint256 => uint64) public nextSlice;
 
-    /// The newest channel this handler earns from. Picks by lottery (`openIds`)
-    /// almost never land on an open handler-owned channel once the array fills
-    /// with closed ones, so redeem/reclaim drive this slot instead of rolling dice.
+    /// The newest channel this handler earns from. Picks by lottery almost never
+    /// land on an open handler-owned channel once the array fills with closed
+    /// ones, so redeem/reclaim drive this slot instead of rolling dice.
     uint256 public lastHandlerChannel;
     bool public hasHandlerChannel;
 
@@ -47,6 +60,14 @@ contract VaultHandler is Test {
     constructor(PaymentVault _vault, TestToken _token) {
         vault = _vault;
         token = _token;
+    }
+
+    /// Accept the vault's ownership (two-step handover, called once from setUp).
+    /// Guarded: any later fuzz call finds nothing pending and skips instead of
+    /// reverting the run.
+    function acceptVaultOwnership() external {
+        if (vault.pendingOwner() != address(this)) return;
+        vault.acceptOwnership();
     }
 
     function _task(uint256 seed) internal pure returns (uint256) {
@@ -125,6 +146,7 @@ contract VaultHandler is Test {
         vault.openTaskChannel(taskId, node, uint128(lock), unlockAt);
         uint256[] memory ids = vault.channelIds(taskId);
         uint256 id = ids[ids.length - 1];
+        allIds.push(id);
         if (node == address(this)) {
             lastHandlerChannel = id;
             hasHandlerChannel = true;
@@ -136,6 +158,35 @@ contract VaultHandler is Test {
     function sweep(uint256 taskSeed) external {
         vault.sweepTaskChannels(_task(taskSeed));
         sweepsRun++;
+    }
+
+    /// Close any open channel as its streamer. Unlike sweep/reclaim this needs no
+    /// maturity: the streamer may pull its own lock back at any time.
+    function closeChannel(uint256 channelSeed) external {
+        if (allIds.length == 0) return;
+        uint256 id = allIds[bound(channelSeed, 0, allIds.length - 1)];
+        if (vault.channelInfo(id).closed) return;
+        vault.closeChannel(id);
+        closesDone++;
+    }
+
+    /// Mint tokens straight to the vault, bypassing every ledger entry.
+    function stray(uint256 amount) external {
+        amount = bound(amount, 1, 1_000_000);
+        token.mint(address(vault), amount);
+        strayOwed += amount;
+        straysDone++;
+    }
+
+    /// Rescue exactly the stray — no more (escrow is untouchable), no less
+    /// (dust must not accumulate). The equality is the test: `rescueStrayTokens`
+    /// computes `balance - owed` independently of this handler's bookkeeping.
+    function rescue() external {
+        if (strayOwed == 0) return;
+        uint256 got = vault.rescueStrayTokens();
+        assertEq(got, strayOwed);
+        strayOwed = 0;
+        rescuesDone++;
     }
 
     /// Redeem the next slice of this handler's newest channel. Slice indices must
@@ -217,6 +268,10 @@ contract VaultInvariants is Test {
         vault = new PaymentVault(address(token));
         handler = new VaultHandler(vault, token);
         vault.setTaskManager(address(handler));
+        // The handler also owns the vault so `rescue` is reachable; acceptance
+        // runs through the handler's guarded entry point, exactly once.
+        vault.transferOwnership(address(handler));
+        handler.acceptVaultOwnership();
         targetContract(address(handler));
     }
 
@@ -228,6 +283,15 @@ contract VaultInvariants is Test {
     /// The vault always holds at least what it owes.
     function invariant_solvency() external view {
         assertGe(token.balanceOf(address(vault)), vault.totalLocked() + vault.pendingTotal());
+    }
+
+    /// Stray accounting: the only money outside the books is what `stray` minted
+    /// and `rescue` has not yet taken back.
+    function invariant_strayAccounts() external view {
+        uint256 bal = token.balanceOf(address(vault));
+        uint256 owed = vault.totalLocked() + vault.pendingTotal();
+        assertGe(bal, owed);
+        assertEq(bal - owed, handler.strayOwed());
     }
 
     /// Coverage proof: every handler operation completed at least once across the
@@ -244,5 +308,8 @@ contract VaultInvariants is Test {
         assertGt(handler.warpsDone(), 0, "warp never ran");
         assertGt(handler.redeemsDone(), 0, "redeem never ran");
         assertGt(handler.reclaimsDone(), 0, "reclaim never ran");
+        assertGt(handler.closesDone(), 0, "closeChannel never ran");
+        assertGt(handler.straysDone(), 0, "stray never ran");
+        assertGt(handler.rescuesDone(), 0, "rescue never ran");
     }
 }
