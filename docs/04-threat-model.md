@@ -868,7 +868,9 @@ deployment headroom, so it stays recorded here as future work. (The 30M bound as
 lower limit bricks proportionally earlier — the per-channel numbers above are the portable
 part, the block count is not.)
 Regression: `packages/contracts/test/SettleScaling.spec.ts` — *"pins the per-channel
-sweep cost so the channel array cannot silently eat the block"*.
+sweep cost so the channel array cannot silently eat the block"* and *"a fully-disputed
+max-epochs task still sweeps inside a block"* (the bound composed from on-chain
+`MAX_EPOCHS` and `committeeSize`, so a future constant change moves it automatically).
 
 ## 3. Explicitly out of scope
 

@@ -110,12 +110,8 @@ describe("settlement scalability", () => {
     void contributors;
   });
 
-  it("pins the per-channel sweep cost so the channel array cannot silently eat the block", async () => {
-    // `taskChannels` only grows: closed channels stay in the array, and the sweep walks
-    // all of it on every settlement page (and once in `abort`). The threat-model bound
-    // (F-63) is arithmetic on the two numbers measured here — closing a mature channel
-    // vs skipping an already-closed one. If a storage-layout change moves them, the
-    // bound must be redone, and this is where that shows first.
+  /** Opens N channels on one task, sweeps twice, returns both per-channel costs. */
+  async function measureSweep() {
     const [owner, node] = await ethers.getSigners();
     const token = await ethers.deployContract("TestToken");
     const vault: PaymentVault = await ethers.deployContract("PaymentVault", [await token.getAddress()]);
@@ -134,11 +130,54 @@ describe("settlement scalability", () => {
     if (!closeReceipt) throw new Error("no receipt for sweep-close");
     const skipReceipt = await (await vault.connect(owner).sweepTaskChannels(1n)).wait();
     if (!skipReceipt) throw new Error("no receipt for sweep-skip");
-    const perClose = closeReceipt.gasUsed / BigInt(N);
-    const perSkip = skipReceipt.gasUsed / BigInt(N);
+    return { perClose: closeReceipt.gasUsed / BigInt(N), perSkip: skipReceipt.gasUsed / BigInt(N) };
+  }
+
+  it("pins the per-channel sweep cost so the channel array cannot silently eat the block", async () => {
+    // `taskChannels` only grows: closed channels stay in the array, and the sweep walks
+    // all of it on every settlement page (and once in `abort`). The threat-model bound
+    // (F-63) is arithmetic on the two numbers measured here — closing a mature channel
+    // vs skipping an already-closed one. If a storage-layout change moves them, the
+    // bound must be redone, and this is where that shows first.
+    const { perClose, perSkip } = await measureSweep();
     console.log(`      sweep per channel: close ${perClose}, skip-closed ${perSkip}`);
     expect(perClose).to.be.lessThan(15_000n);
     expect(perSkip).to.be.lessThan(6_000n);
+  });
+
+  it("a fully-disputed max-epochs task still sweeps inside a block", async () => {
+    // The composition the tripwire above does not check: per-channel cost times the
+    // worst case the sortition realistically allows. Every epoch disputed, each drawing
+    // twice the committee (variance tail — the expectation is one committee, ~7), plus
+    // the winner channel. The constants come from the chain, not from this file, so a
+    // future `COMMITTEE_SIZE` or `MAX_EPOCHS` change moves the bound automatically
+    // instead of silently outgrowing the block.
+    const [owner, buyer, treasury] = await ethers.getSigners();
+    const token = await ethers.deployContract("TestToken");
+    const vault: PaymentVault = await ethers.deployContract("PaymentVault", [await token.getAddress()]);
+    const verifier = await ethers.deployContract("MockStarkVerifier", [48_576]);
+    const bls = await ethers.deployContract("MockBLS");
+    const gate = await ethers.deployContract("DecryptionGate", [
+      await bls.getAddress(),
+      bytes32Of("agg"),
+      2,
+    ]);
+    const task: CipherTask = await deployLinked("CipherTask", [
+      await token.getAddress(),
+      await vault.getAddress(),
+      await verifier.getAddress(),
+      await gate.getAddress(),
+      treasury.address,
+      false,
+    ]);
+    const epochs = BigInt(await task.MAX_EPOCHS());
+    const committee = BigInt(await task.committeeSize());
+    const worstChannels = epochs * (1n + 2n * committee);
+    const { perSkip } = await measureSweep();
+    const worstSweep = worstChannels * perSkip;
+    console.log(`      worst case: ${worstChannels} channels x ${perSkip} = ${worstSweep} gas`);
+    expect(worstSweep).to.be.lessThan(BLOCK_GAS_LIMIT);
+    void buyer;
   });
 
   it("pays the whole contributor pool across pages exactly once", async () => {
