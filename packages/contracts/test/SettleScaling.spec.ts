@@ -131,7 +131,9 @@ describe("settlement scalability", () => {
     expect(await vault.channelIds(1n)).to.have.lengthOf(N);
     await time.increase(30 * 86400 + 1); // outlast the default 30-day window
     const closeReceipt = await (await vault.connect(owner).sweepTaskChannels(1n)).wait();
+    if (!closeReceipt) throw new Error("no receipt for sweep-close");
     const skipReceipt = await (await vault.connect(owner).sweepTaskChannels(1n)).wait();
+    if (!skipReceipt) throw new Error("no receipt for sweep-skip");
     const perClose = closeReceipt.gasUsed / BigInt(N);
     const perSkip = skipReceipt.gasUsed / BigInt(N);
     console.log(`      sweep per channel: close ${perClose}, skip-closed ${perSkip}`);

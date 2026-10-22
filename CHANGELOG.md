@@ -6,6 +6,16 @@ first tagged release.
 
 ## Unreleased
 
+### Docs and lab: the reward weight is linear, not sqrt (H3 aftermath)
+
+- The contract pays `rows·liveness` since the H3 fix — sqrt backfired by rewarding
+  splits — but the site, the lab preview and the bot still said sqrt, and the bot
+  also claimed there was no slashable contribution bond while the opt-in bond
+  exists. All of it now matches the code: linear weight, split-neutral, deterrence
+  by minRows, gas and the bond. (`docs/01-architecture.md` still shows the old
+  formula; it is frozen by agreement, so this entry records the divergence instead
+  of editing it.)
+
 ### Threat model: the settlement sweep has a measured channel bound (F-63)
 
 - `taskChannels` only grows and the sweep walks all of it on every settlement page:

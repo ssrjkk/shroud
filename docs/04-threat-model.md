@@ -22,9 +22,13 @@ guarantees, wallet security, the buyer's own model IP.
 ### F-01 — Sybil contribution farming (ADV1) — **Partially mitigated**
 Contributions are 1:1 per address per task (`Task.contributorOf`), each contribution carries a
 Groth16 proof of knowledge of a valid row against the buyer's `shapeRoot`, and the reward weight
-is `sqrt(rows)·liveness` rather than linear, so splitting one row into 400 sybil addresses yields
-`400·sqrt(1) << sqrt(400)`. Residual: a funded adversary with many *genuinely distinct* rows is not
-preventable by any of this and is not a vulnerability — that is a bulk data purchase.
+is linear — `rows·liveness` — so splitting a dataset across addresses earns exactly what the
+undivided shard would: there is no split bonus and no split penalty. (An earlier revision used
+`sqrt(rows)` to damp whales; that backfired — 400 rows split as 400×1 earned 400 against an
+honest `sqrt(400)` = 20 — so the damping now comes from `minRowsPerShard`, per-address gas, and
+the opt-in bond below, not from weight distortion.) Residual: a funded adversary with many
+*genuinely distinct* rows is not preventable by any of this and is not a vulnerability — that
+is a bulk data purchase.
 
 *Update:* an opt-in bond now exists where none did. `setContributionBondRequirement` (buyer or
 update manager, only while the window is open, capped at `MAX_CONTRIBUTION_BOND`) makes every

@@ -173,7 +173,7 @@
     var el = $("settleOut"); if (!el) return;
     el.textContent =
       "task " + v.taskId + " · epochs " + v.epochs +
-      "\ncontributor: rows=" + v.rows + " → sqrt=" + v.w + " → ≈" + v.c + " USDC" +
+      "\ncontributor: rows=" + v.rows + " → w=" + v.w + " → ≈" + v.c + " USDC" +
       "\nwinner node: " + v.perEpoch + " USDC × " + v.epochs +
       "\ncommittee/treasury: " + v.tm + " USDC" +
       "\nPaymentVault: EIP-712 slices, disjoint pools.";
@@ -329,7 +329,9 @@
     readTaskInputs();
     var c = Math.floor(S.budget * 0.8), nd = Math.floor(S.budget * 0.15), tm = S.budget - c - nd;
     var perEpoch = nd / S.epochs;
-    var w = Math.sqrt(Math.max(1, S.rows.length));
+    // Linear like the chain (Dividend.weight): rows times liveness. The lab has no
+    // contribution window, so liveness is 1.0 and the weight is the row count.
+    var w = Math.max(1, S.rows.length);
     S.view.settle = { taskId: S.taskId, epochs: S.epochs, rows: S.rows.length, w: w.toFixed(2), c: c, perEpoch: perEpoch.toFixed(2), tm: tm };
     renderSettle();
     return { c: c, perEpoch: perEpoch };

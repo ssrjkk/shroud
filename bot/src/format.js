@@ -343,7 +343,7 @@ export function renderLimits() {
     "",
     "<b>Not enforced</b>",
     "  · the dispute quorum is <b>not</b> Sybil-resistant; three cheap addresses can deny a node its reward",
-    "  · there is no slashable contribution bond; row farming is only sqrt(rows)-weighted",
+    "  · the contribution bond is opt-in and attested, not proven; row farming is only rows-weighted",
     "  · the chain does <b>not</b> fully verify the STARK",
     "  · a substituted FHE public key is <b>not</b> detected by participants at submission time",
     "",

@@ -92,7 +92,7 @@
       <tr><td data-i18n="pro.m4a">Батчинг</td><td data-i18n="pro.m4b">8 лейнов на шифротекст — амортизация бутстрепов</td></tr>
       <tr><td data-i18n="pro.m5a">Шум</td><td data-i18n="pro.m5b">бюджет 2^40 safe-msg-bits; рекей каждые 2 эпохи (RekeyGuard)</td></tr>
     </table></div>
-    <div><div class="card solid rv"><span class="tag">SETTLE</span><h3 data-i18n="pro.stitle">Деление бюджета B, эпох E</h3><p data-i18n="pro.stxp">contributorPool = B·8000/10000; nodePool = B·1500/10000; committeePool — в treasury, а нераспределённый остаток — возврат покупателю. contributor_i = pool · w_i / Σw, где w_i = sqrt(rows_i)·liveness — sqrt душит китов, liveness штрафует опоздавших. node_n = nodePool / (E·q) поровну по валидным коммитам. Пыль contributor-пула — участнику с наибольшим address (детерминировано); остаток epoch lock и невостребованное уходят покупателю.</p><div class="foot-line" data-i18n="pro.sfl">попробуй числа на стенде 03–06 в лаборатории</div></div></div>
+    <div><div class="card solid rv"><span class="tag">SETTLE</span><h3 data-i18n="pro.stitle">Деление бюджета B, эпох E</h3><p data-i18n="pro.stxp">contributorPool = B·8000/10000; nodePool = B·1500/10000; committeePool — в treasury, а нераспределённый остаток — возврат покупателю. contributor_i = pool · w_i / Σw, где w_i = rows_i·liveness — линейно: дележ не даёт и не отнимает, китов душат minRows и бонд. node_n = nodePool / (E·q) поровну по валидным коммитам. Пыль contributor-пула — участнику с наибольшим address (детерминировано); остаток epoch lock и невостребованное уходят покупателю.</p><div class="foot-line" data-i18n="pro.sfl">попробуй числа на стенде 03–06 в лаборатории</div></div></div>
   </div>
 </section>
 
