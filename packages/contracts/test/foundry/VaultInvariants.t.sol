@@ -216,6 +216,36 @@ contract VaultHandler is Test {
         redeemsDone++;
     }
 
+    /// Deterministic redeem: open for this handler and redeem slice 0 immediately,
+    /// in one call. The organic path above depends on catching the slot channel
+    /// open; this proves the redeem itself while the fuzzer still interleaves
+    /// the organic one.
+    function openRedeem(uint256 taskSeed, uint256 lock, uint64 inDays) external {
+        uint256 taskId = _task(taskSeed);
+        uint256 balance = vault.taskBalance(taskId);
+        if (balance == 0) {
+            uint256 top = bound(lock, 1, 1_000_000_000_000);
+            token.mint(address(this), top);
+            token.approve(address(vault), top);
+            vault.fundTask(taskId, top, address(this));
+            fundsPosted++;
+            balance = vault.taskBalance(taskId);
+        }
+        lock = bound(lock, 1, balance > type(uint128).max ? uint256(type(uint128).max) : balance);
+        vault.openTaskChannel(taskId, address(this), uint128(lock), uint64(block.timestamp) + 7 days);
+        uint256[] memory ids = vault.channelIds(taskId);
+        uint256 id = ids[ids.length - 1];
+        channelsOpened++;
+        lastHandlerChannel = id;
+        hasHandlerChannel = true;
+        uint256 deadline = block.timestamp + bound(inDays, 1, 30 days);
+        _authNow = true;
+        vault.redeem(id, nextSlice[id], uint128(lock), deadline, hex"00");
+        _authNow = false;
+        nextSlice[id] += 1;
+        redeemsDone++;
+    }
+
     /// Deterministic reclaim: open for this handler, mature past its own window,
     /// reclaim — all in one call. The organic `reclaim` above depends on winning
     /// a race with `sweep`/`closeChannel` after a warp, which the fuzzer wins
