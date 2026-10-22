@@ -6,6 +6,14 @@ first tagged release.
 
 ## Unreleased
 
+### Site: the blueprint looks like a blueprint now
+
+- Millimeter grid across the sheet, registration marks on the hero, the schemes and
+  the license sheet, finer grid inside scheme bodies, tabular figures wherever numbers
+  sit, and the footer base reframed as a title block. Plus a print stylesheet, so the
+  spec sheets land on paper as a clean light document. CSS only, no new copy —
+  accessibility stays at 1.00 everywhere.
+
 ### Docs and lab: the reward weight is linear, not sqrt (H3 aftermath)
 
 - The contract pays `rows·liveness` since the H3 fix — sqrt backfired by rewarding

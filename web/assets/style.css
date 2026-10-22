@@ -304,6 +304,70 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,te
 .btn{min-height:44px}
 .iconbtn{width:44px;height:44px}}
 
+/* ==========================================================================
+   ЧЕРТЁЖ: миллиметровка, реперные метки, штамп, печать.
+   Всё ниже — статичный CSS поверх существующей разметки: нового текста нет,
+   поэтому i18n-симметрия не затрагивается. Декоративные слои (сетка, метки)
+   не несут информации и на доступность не влияют; цвета текста не меняются.
+   ========================================================================== */
+:root,:root[data-theme="ink"]{--grid:rgba(242,245,250,.055)}
+:root[data-theme="paper"]{--grid:rgba(14,58,122,.07)}
+
+/* миллиметровка на весь лист; герой свою отдельную сетку больше не рисует */
+body{background-image:
+  linear-gradient(var(--grid) 1px,transparent 1px),
+  linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:28px 28px}
+.hero{background-image:none}
+.hero-in{position:relative}
+
+/* реперные метки: два диагональных угла — герой, схемы, лист лицензии */
+.hero-in::before,.hero-in::after,
+.scheme::before,.scheme::after,
+.license-sheet::before,.license-sheet::after{
+  content:"";position:absolute;width:14px;height:14px;pointer-events:none}
+.hero-in::before,.scheme::before,.license-sheet::before{
+  left:6px;top:6px;border-left:2px solid var(--acc);border-top:2px solid var(--acc)}
+.hero-in::after,.scheme::after,.license-sheet::after{
+  right:6px;bottom:6px;border-right:2px solid var(--acc);border-bottom:2px solid var(--acc)}
+.hero,.scheme,.license-sheet{position:relative}
+
+/* внутри схем — сетка мельче, как на поле чертежа */
+:root[data-theme="ink"] .scheme-body{--grid:rgba(242,245,250,.09)}
+:root[data-theme="paper"] .scheme-body{--grid:rgba(14,58,122,.10)}
+.scheme-body{background-image:
+  linear-gradient(var(--grid) 1px,transparent 1px),
+  linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:14px 14px}
+
+/* цифры — табличные, чтобы колонки не плясали */
+code,.spec,.tbl,.ltable,.topbar,.foot-base,.hero-facts b,.tag,.stamp,.sect-num,
+.ledger-body,.datapreview,.simple-out,.lout{font-variant-numeric:tabular-nums}
+
+/* подвал-основание — рамка штампа вместо одной верхней линии */
+.foot-base{border:1px solid var(--line)}
+.foot-base span + span{border-left:1px solid var(--hair);padding-left:12px}
+
+/* печать: чертёж должен лечь на бумагу — светлый лист, без chrome */
+@media print{
+  :root,:root[data-theme="ink"]{
+    --bg:#fff;--bg2:#fff;--panel:#fff;--card:#fff;
+    --ink:#000;--mut:#333;--dim:#555;
+    --line:#000;--hair:rgba(0,0,0,.25);
+    --acc:#000;--acc-ink:#fff;
+    --good:#166b45;--warn:#2c5288;--bad:#a11a20;
+    --screen:#fff;--screen-acc:#000;--grid:rgba(0,0,0,.06)}
+  body{background-image:none}
+  .masthead{position:static}
+  .masthead .controls,.masthead .burger,.toc,.totop,.progress,.ticker,
+  .prewrap .copybtn,.lab-modes,.btnrow{display:none!important}
+  .nav{display:flex!important}
+  .rv{opacity:1!important;transform:none!important}
+  .hero *{animation:none!important}
+  .ledger{position:static}
+  a{color:inherit}
+}
+
 /* --- живое chrome: движение и мелкие инструменты (JS ставит классы .onshown) --- */
 
 /* hero: ступенчатое появление, один раз, без повторов */
