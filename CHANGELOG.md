@@ -6,6 +6,14 @@ first tagged release.
 
 ## Unreleased
 
+### Tests: stateful vault invariants in Foundry (roadmap: Foundry-инварианты)
+
+- The roadmap lists Foundry invariants; only the Dividend math had them. New
+  `test/foundry/VaultInvariants.t.sol` fuzzes interleavings of the manager-side
+  operations (fund, bond, top-up, open, sweep, credit, claim, warp) and asserts
+  after every sequence what `_assertInvariant` cannot see from inside: real token
+  solvency alongside `totalLocked == accountedLocked`. Test-only, no bytecode change.
+
 ### Site: the footers quoted an old finding count, and the gate did not look there
 
 - The footers said "threats 39" while the model carries 63 — the same drift the long
