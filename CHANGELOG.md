@@ -345,7 +345,7 @@ first tagged release.
   the request path, so the invariant is pinned by a unit test instead of by
   reading the server.
 
-### Gates: the site's finding count can no longer drift from the threat model
+### Threat model: seven fixed defects enter the map as F-40–F-46
 
 - The threat model carried F-01…F-39 and none of the seven defects fixed in this
   pass was in it — so the map an auditor reads did not describe the tree. They are
