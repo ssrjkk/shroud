@@ -121,7 +121,11 @@ async function main() {
       labelBits: 8,
       contributionWindow: 86400,
       epochDuration: 900,
-      disputeWindow: 120,
+      // Long enough to hold a re-execution. A dispute window shorter than the
+      // training time makes the dispute unreachable - the committee cannot check the
+      // claim - and the node refuses such an epoch (threat model F-60), which is
+      // exactly what happened here at 120 seconds: neither node committed.
+      disputeWindow: 600,
       pricePerRow: 1000,
       userShareBps: 8000,
       nodeShareBps: 1500,
