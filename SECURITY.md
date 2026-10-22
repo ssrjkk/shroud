@@ -50,9 +50,9 @@ upgrade can fix. They are pinned via flat `overrides` in
 | `@fastify/busboy` | `3.2.2` | GHSA-x8mw-p69m-v3mx, GHSA-gxm5-99cw-xjw9 |
 
 `npm audit` after the pins reports 0 high/moderate (16 low remain, all on the
-`elliptic` chain). The `contracts` CI job gates on `npm audit --audit-level=high`,
-so a new high/critical advisory fails the build instead of waiting for the
-weekly Dependabot scan. All workspaces require `npm >= 10` (`engines`).
+`elliptic` chain). Every JavaScript CI job gates on `npm audit --audit-level=high`
+(contracts, SDK, bot), so a new high/critical advisory fails the build instead of
+waiting for the weekly Dependabot scan. All workspaces require `npm >= 10` (`engines`).
 
 Known accepted risk: `elliptic<=6.6.1` (GHSA-848j-6mx2-7j84, low, no patched
 version) arrives via `hardhat@2` (`@ethersproject/*`, `ethereumjs-util`).

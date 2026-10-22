@@ -8,13 +8,13 @@ first tagged release.
 
 ### Gates: the threat model's regression references must name a real test
 
-- Every finding carries the test that pins it, and that reference is the
-  difference between a finding and a claim: an auditor who cannot find the
-  test has to take the finding on trust. The references were checked by eye —
-  and four of them were paraphrases rather than the tests' own names, so a
-  renamed test would have left a reference that pointed at nothing while
-  looking exactly as authoritative. `scripts/regression-refs.mjs` now checks
-  that the named file exists and contains the quoted name, and the four
+- Every finding fixed in this pass carries the test that pins it, and that
+  reference is the difference between a finding and a claim: an auditor who
+  cannot find the test has to take the finding on trust. The references were
+  checked by eye — and four of them were paraphrases rather than the tests' own
+  names, so a renamed test would have left a reference that pointed at nothing
+  while looking exactly as authoritative. `scripts/regression-refs.mjs` now
+  checks that the named file exists and contains the quoted name, and the four
   paraphrases are the tests' verbatim names (two of the ShardStore's tests are
   named in Russian, and the citation now quotes them as they are).
 - The gate was verified to fail on a renamed test and to pass again afterwards.
@@ -29,6 +29,32 @@ first tagged release.
   it downloaded against a digest the buyer computed differently and fallen back
   to genesis zeros with a warning in the log. Both sides now pin the same
   value for the same negative lanes.
+
+### The fee-on-transfer refusal was a claim, not a test
+
+- F-36 says the escrow and the registration bond now fail closed on a
+  fee-taking token, and that is what the code does — but nothing tested it. The
+  claim "fail closed" was a claim about the code, and a change to
+  `_pull`/`takeBond` would have silently restored the silent
+  under-collateralisation it was written to prevent.
+- A `FeeOnTransferTokenMock` (a token that takes a cut and burns it) and a spec
+  now prove both refusals: the escrow at the orchestrator's `EscrowMismatch`,
+  the bond at `BondInsufficient`, with the vault's books still balancing after
+  the refused pull. The mock's cut is switchable, because the escrow is checked
+  at task creation — with the cut already on, the task cannot exist and the
+  bond path is unreachable.
+- The finding's status did not change: the fix was already in the code, and it
+  is now pinned.
+
+### Gates: more of the threat model's findings cite the test that pins them
+
+- The regression-reference gate started at the thirteen findings fixed in this
+  pass. The older findings cited their regressions in prose — "two cases in
+  *governance recovery*", "the file had no test harness" — which no machine can
+  check and which had already gone stale in one place (F-28 still claimed the
+  shard store had no test harness; it has had one for a while). The citations
+  are now in the checkable form, and 32 of the 58 findings name a file and a
+  test; the rest are the accepted and residual ones, which have no test to name.
 
 ### Node: the provider's key no longer reaches the log
 

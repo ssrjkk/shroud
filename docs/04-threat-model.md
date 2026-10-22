@@ -110,17 +110,19 @@ The early-refund path returned the task's whole sub-balance. After the last epoc
 could call `reclaimUnspentEpochs` and take 100% of the escrow, leaving `settle` to distribute
 nothing — contributors who supplied the data would be paid zero from a task that completed
 normally. The function now reserves `userPool + committeePool` and returns only the unspent node
-pool, and is a no-op when nothing above that line remains. Regression: two cases in
-*"governance recovery"*, including one that then settles and asserts everyone is paid in full.
+pool, and is a no-op when nothing above that line remains. Regression: `packages/contracts/test/CipherTask.spec.ts` — *"reclaimUnspentEpochs never touches the
+contributor or committee pools"* and *"reclaimUnspentEpochs returns nothing when only the
+contributor and committee pools remain"* (the second one then settles and asserts everyone is
+paid in full).
 
 ### F-17 — Stranded escrow on abort (ADV4, ADV2) — **Mitigated**
 `abort` withheld `ABORT_LOCK_BPS` (20%) of the open epoch's lock "for a node that may have been
 working" but never paid it to anyone, and `abort` is terminal — no later call can move that
 balance. Every abort therefore burned 20% of the epoch lock. Retention is now conditional on an
 actual *verified* commit existing for the epoch, and the retained slice is opened as a normal
-redeemable reward channel. An abort with no commit refunds the buyer in full. Regression:
-*"strands nothing when aborted with an open but uncommitted epoch"* and
-*"retains a redeemable slice for a node that verified an epoch before the abort"*.
+redeemable reward channel. An abort with no commit refunds the buyer in full. Regression: `packages/contracts/test/CipherTask.spec.ts` — *"strands nothing when aborted with an
+open but uncommitted epoch"* and *"retains a redeemable slice for a node that verified an epoch
+before the abort"*.
 
 ### F-18 — Unpaid re-executors (ADV2 economics) — **Mitigated**
 `finalizeEpoch` documented that "reporters are paid out of the lock so that reporting is
@@ -130,7 +132,8 @@ unchallenged, which collapses the dispute window to nothing. Reporters now recei
 `reexecutionBps` of the disputed lock, split equally with the division remainder to the first
 reporter, as ordinary ERC-1271 redeemable channels. Bounty channels deliberately do **not** write
 `_epochChannel[epoch]`, so an indexer cannot mistake a bounty recipient for the epoch winner.
-Regression: *"pays reporters a bounty from the disputed lock, and nobody is paid as winner"*.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"pays reporters a bounty from the disputed
+lock, and nobody is paid as winner"*.
 
 ### F-19 — Committee bootstrap with duplicate members (ADV6) — **Mitigated**
 `DecryptionGate.initialize` accepted repeated addresses in `members`, so `threshold` could be
@@ -138,6 +141,7 @@ satisfied by fewer than `t` *distinct* members — or the gate could become impo
 at all, since `hasSubmitted` blocks a member from submitting twice. `initialize` is one-shot and
 gates every past and future reveal, so a bad bootstrap is not recoverable in place. Duplicate
 members are now rejected.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"opens on a valid aggregate signature and only counts distinct committee members"*.
 
 ### F-20 — Unrestricted grant of encrypted-state decryption (ADV8) — **Mitigated**
 `grantStateAccess(account)` had **no access control whatsoever**. Any address could hand any
@@ -180,6 +184,8 @@ The one behavioural cost is stated plainly: a task's committee cut and buyer ref
 to one reward window after the last epoch. The money was never lost (it sat in redeemable
 channels), but it is deferred, and this makes the deferral explicit and bounded rather than a
 silent haircut.
+Regression: `packages/contracts/test/Hardening.spec.ts` — *"reverts ChannelsImmature on the final page
+until the window passes"*.
 
 ### F-23 — SDK could upload cleartext rows by omission (ADV1) — **Mitigated**
 `ShroudSdk` defaulted `encryptor` to `NoopEncryptor`, which serialises the plaintext `f64`s
@@ -189,7 +195,8 @@ encryptor would publish a contributor's rows in cleartext with no downstream sig
 `Encryptor` interface now requires `providesConfidentiality: boolean`, and `uploadAndMonetize`
 refuses to run when it is false unless the caller passes `allowUnencrypted: true`. The refusal
 happens before any network call, so a misconfiguration cannot leak data even when the task itself
-is invalid. Regression: *"ShroudSdk refuses to upload through an encryptor that does not encrypt"*.
+is invalid. Regression: `packages/sdk/test/smoke.test.ts` — *"ShroudSdk refuses to upload through an encryptor
+that does not encrypt"*.
 
 ### F-24 — Client could sign against the wrong chain (ADV4) — **Mitigated**
 `SdkConfig.chainId` was accepted, stored, and then ignored, and the private `ensureChainId()` that
@@ -230,6 +237,7 @@ Also added: per-request `AbortController` timeout (an epoch has a deadline), opt
 `authToken`, and `getRange` so the documented "range-pull" claim is actually implementable against
 this store. Regressions cover traversal, unusable returned CID, size caps, and a store that lies
 about its digest.
+Regression: `packages/sdk/test/smoke.test.ts` — *"HttpShardStore derives the on-chain digest locally instead of trusting the store"*.
 
 ### F-28 — Reference DA server was unbounded, lossy and unauthenticated (ADV8) — **Mitigated**
 `infra/shardstore/server.mjs` accumulated bodies in an in-memory `Map` with no size limit (a single
@@ -244,7 +252,8 @@ publishes it on `127.0.0.1` only.
 `content-range: bytes 2-5/16`, out-of-range `416`, missing `404`, traversal `400`, oversized `413`.
 That live run caught a bug in the hardening itself — the CID pattern initially rejected the `0x`
 prefix the client actually sends, so every `GET` returned 400. A unit test would not have caught
-it; there is no test harness for this file.
+it; the file had no test harness at the time.
+Regression: `infra/shardstore/server.test.mjs` — *"serves byte ranges and 416s the unusable ones"*.
 
 ### F-29 — Verifier rotation had no on-chain timelock (ADV5) — **Mitigated**
 `ProofVerifier.rotate(address)` was a single-call `onlyOwner` swap. This contract gates every
@@ -259,6 +268,7 @@ rotation window so both halves of the trust surface move on one schedule. `execu
 "the rotation can be frozen forever", so a queued rotation is guaranteed to happen at or after its
 announced time unless the owner cancels it. Regressions cover the delay, permissionless execution,
 owner-only cancellation, and a cancelled rotation never taking effect.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"refuses to rotate immediately and requires the timelock to elapse"*.
 
 ### F-30 — Devnet mocks were open to any address, and are the real verifiers there (ADV2) — **Mitigated**
 `deploy.ts` installs `MockStarkVerifier` as the chain's actual `ProofVerifier` and `MockBLS` as the
@@ -273,6 +283,7 @@ rather than test-only conveniences:
   point of the threshold gate.
 
 Both are owner-only now, and `deploy.ts` marks the mocks in `addresses.json` and prints a warning.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"stops an outsider from poisoning a transcript"*.
 
 ### F-31 — Devnet deployment path (ADV5) — **Mitigated**
 `docker compose up devnet` deploys the contracts to a standalone `hardhat node` today, on the
@@ -349,6 +360,8 @@ are now fixed and covered:
   it cannot strand funds, because settlement is permissionless, every page is independently
   callable, and the total credited can never exceed the frozen pool — so finishing is always
   possible.
+Regression: `packages/contracts/test/SettleScaling.spec.ts` — *"keeps every settlement page inside a block
+regardless of contributor count"*.
 
 ### F-34 — Unreachable surface that implied mechanisms which do not exist (ADV8) — **Removed**
 Seven declarations were reachable only by inspection and each implied a capability the protocol
@@ -418,6 +431,7 @@ Verified by reverting the first fix and confirming the regression test fails wit
 was the only thing exercised — and it now has eight cases covering a clean rotation, the mismatch,
 six invalid parameter sets, timelock enforcement, single execution, cancellation, role separation,
 and the live-rotation guard.
+Regression: `packages/contracts/test/NetworkParams.spec.ts` — *"installs a valid rotation after the timelock"*.
 
 ### F-33 — Segmented proofs were documented as implemented but are unreachable (ADV2) — **Mitigated**
 `IProofVerifier.verifyProofSegmented` and the `ProofVerifier` implementation exist, and
@@ -431,6 +445,7 @@ could ever reach it.
 the prover itself: there is no working STARK prover in this repo (mock verifier on devnet), so
 segmented verification is exercised against the mock's shape check, not a real AIR. The
 cryptographic half stays in `05-honest-limitations.md` as missing work.
+Regression: `packages/contracts/test/Hardening.spec.ts` — *"accepts a segmented root through the segmented path and settles the epoch"*.
 
 ### F-25 — SDK pre-validation was documented but absent (ADV1) — **Mitigated**
 `uploadAndMonetize`'s docstring promised it pre-validates "task status, per-address contribution
@@ -440,6 +455,8 @@ was never checked, so a second contribution from the same address was discovered
 the contribution-window deadline and the `maxContributors` cap were not checked either. All of
 them are now checked locally against on-chain state before the payload is built, and the docstring
 matches the code again. The contract remains the authority and still reverts if anything slips.
+Regression: `packages/sdk/test/smoke.test.ts` — *"uploadAndMonetize approves a missing contribution
+bond before submitting"*.
 
 ### F-05 — Weight theft without payment (ADV4) — **Mitigated**
 Weights are ciphertext on DA until `requestReveal` succeeds, and `requestReveal` requires
@@ -548,16 +565,19 @@ assumes). Both paths now ledger the balance diff actually received. A shortfall 
 `EscrowMismatch` on creation, `BondInsufficient` on registration — rather than recording money
 that never arrived. Fee-on-transfer tokens are therefore rejected with a diagnosis, not
 mis-accounted; plain and no-return (USDT-style) tokens work as before.
+Regression: `packages/contracts/test/FeeOnTransfer.spec.ts` — *"the escrow fails closed when the token takes a cut"* and *"the registration bond fails closed when the token takes a cut"*.
 
 ### F-37 — Transient-only reentrancy guard (pre-Cancun chains) — **Mitigated**
 The guard used `TLOAD`/`TSTORE` (EIP-1153), which do not exist pre-Cancun: on such a chain every
 guarded call misbehaves instead of merely costing more gas. The guard is now a storage flag —
 slightly more expensive on Cancun+, correct everywhere the bytecode can execute.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"holds the reentrancy guard when a token calls back mid-transfer"*.
 
 ### F-38 — Task-manager rotation overwrite (ADV5) — **Mitigated**
 `proposeTaskManager` silently overwrote a live rotation, including its `eta`: observers watching
 the first proposal could be switched to a different candidate mid-timelock. A live proposal must
 now be cancelled (itself an event) before a new one is queued.
+Regression: `packages/contracts/test/Hardening.spec.ts` — *"refuses to overwrite a live task-manager rotation; cancel then propose works"*.
 
 ### F-39 — `openEpoch`/`reclaim` authority creep (ADV4) — **Mitigated**
 `openEpoch` accepted the contract owner alongside the buyer/update manager, handing a third key
@@ -565,6 +585,7 @@ quiet control of the training trajectory; only the buyer and update manager may 
 (the owner's emergency lever remains `emergencyUnwind`, rate-limited by deadline + window).
 `reclaimUnspentEpochs` was buyer-only, stranding the refund behind a key the task may no longer
 use; the update manager — which already controls the epoch loop — may call it too.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"restricts openEpoch to the buyer or update manager"*.
 
 ### F-40 — An aborted task could be re-sealed, reopening the slash path (ADV4) — **Mitigated**
 `sealTask` gated on `isSealed` alone, and `abort` leaves `isSealed` false — the task was never

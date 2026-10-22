@@ -1,8 +1,9 @@
 # Audit scope
 
 What an external auditor is asked to review, which invariants must hold, and which
-questions are already open. Frozen per release: this file describes the tree at the
-tagged commit, not `main` in motion.
+questions are already open. No tag has been published yet, so this file describes
+the tree as it stands on `main`; it is frozen per release from the first tag
+onward, and the commit it describes is named there.
 
 ## In scope
 
