@@ -6,6 +6,13 @@ first tagged release.
 
 ## Unreleased
 
+### Site: the footers quoted an old finding count, and the gate did not look there
+
+- The footers said "threats 39" while the model carries 63 — the same drift the long
+  quotes once had, in a format `findings.mjs` did not check. All six spots now say 63,
+  and the gate checks every `threats N` in the dictionary and every page, proven
+  against a deliberate mismatch.
+
 ### Site: the blueprint looks like a blueprint now
 
 - Millimeter grid across the sheet, registration marks on the hero, the schemes and

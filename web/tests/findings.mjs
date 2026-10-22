@@ -15,7 +15,7 @@
 //
 // Запуск из корня репозитория:  node web/tests/findings.mjs
 // Зависимостей нет.
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 
@@ -77,6 +77,30 @@ for (const [label, file] of sources) {
   }
 }
 if (quoted) console.log(`цитат находок проверено: ${quoted}`);
+
+// --- 3b. короткие цитаты в подвалах ------------------------------------------
+// `threats 39` в f.base3/f.base4 — та же цифра другим форматом, и она дрейфовала
+// ровно так же, пока гейт смотрел только на длинные цитаты. Проверяем все
+// страницы и словарь: любое `threats N` обязано равняться числу находок.
+const SHORT = /threats (\d+)/g;
+const htmlPages = readdirSync(WEB)
+  .filter((n) => n.endsWith(".html"))
+  .sort();
+const shortFiles = [
+  ["web/assets/i18n.js", path.join(WEB, "assets", "i18n.js")],
+  ...htmlPages.map((p) => [`web/${p}`, path.join(WEB, p)]),
+];
+let shorts = 0;
+for (const [label, file] of shortFiles) {
+  const text = readFileSync(file, "utf8");
+  for (const m of text.matchAll(SHORT)) {
+    shorts++;
+    if (Number(m[1]) !== count) {
+      fail(`${label}: цитирует threats ${m[1]}, а в модели их ${count}`);
+    }
+  }
+}
+if (shorts) console.log(`коротких цитат проверено: ${shorts}`);
 
 // --- 5. сводная карточка совпадает с таблицей --------------------------------
 // На карточке стояло «18 — enforced», пока в таблице было 14 строк: цифру никто

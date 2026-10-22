@@ -864,7 +864,9 @@ past the auto-pass threshold only dilutes the others), so a realistic worst case
 reporters actually claim, and past the close-path one only if hundreds of max-disputed
 epochs all go unclaimed to maturity. The fix that would remove the bound instead of
 leaning on it — a live-channel list or a paged sweep — does not fit the 346-byte
-deployment headroom, so it stays recorded here as future work.
+deployment headroom, so it stays recorded here as future work. (The 30M bound assumes an Ethereum-mainnet block; an L3 sequencer with a
+lower limit bricks proportionally earlier — the per-channel numbers above are the portable
+part, the block count is not.)
 Regression: `packages/contracts/test/SettleScaling.spec.ts` — *"pins the per-channel
 sweep cost so the channel array cannot silently eat the block"*.
 
