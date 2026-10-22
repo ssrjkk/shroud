@@ -14,8 +14,6 @@ contract VaultHandler is Test {
     TestToken public token;
 
     uint256 public keyNonce;
-    bytes32[] public bondedKeys;
-    mapping(bytes32 => bool) public bonded;
 
     /// Calls that completed without reverting, per operation. `afterInvariant`
     /// asserts every operation ran at least once: a green run that never posted
@@ -29,13 +27,6 @@ contract VaultHandler is Test {
     uint256 public creditsPosted;
     uint256 public claimsMade;
     uint256 public warpsDone;
-
-    struct BondRef {
-        uint256 taskId;
-        address node;
-    }
-
-    mapping(bytes32 => BondRef) public bondRefs;
 
     constructor(PaymentVault _vault, TestToken _token) {
         vault = _vault;
@@ -60,41 +51,34 @@ contract VaultHandler is Test {
         fundsPosted++;
     }
 
-    /// Post a registration bond for a node (fresh BLS key every time: keys are
-    /// single-use per task). Funded through the node itself, exactly like production.
-    function bond(uint256 taskSeed, uint256 nodeSeed) external {
+    /// Post a registration bond for this handler on a task. The handler bonds
+    /// *itself*: no `deal`, no `prank` — mint, approve and post all happen as one
+    /// identity, so there is no cross-identity plumbing that can silently fail
+    /// and brick the whole bond path (which is exactly what happened with a
+    /// `deal` + `prank` setup: every post reverted and the fuzzer never touched
+    /// bonds while reporting green).
+    function bond(uint256 taskSeed) external {
         uint256 taskId = _task(taskSeed);
-        address node = _node(nodeSeed);
-        bytes32 key = keccak256(abi.encode("shroud-test-key", keyNonce++));
-        deal(address(token), node, vault.REGISTRATION_BOND());
-        // The approval comes from the node, but `takeBond` itself must arrive from
-        // the task manager (this handler): a single-shot `prank` covers exactly the
-        // approve, so a stray persistent prank cannot silently flip every later call
-        // into a revert.
-        vm.prank(node);
-        token.approve(address(vault), vault.REGISTRATION_BOND());
-        vault.takeBond(taskId, node, key);
-        bytes32 id = keccak256(abi.encode(taskId, node));
-        if (!bonded[id]) {
-            bonded[id] = true;
-            bondedKeys.push(id);
-            bondRefs[id] = BondRef(taskId, node);
-        }
+        _bondSelf(taskId);
         bondsPosted++;
     }
 
-    /// Top up a bond this handler previously posted. Only the bond owner may top up
-    /// their own position, so the whole call happens as the node.
-    function topUp(uint256 keySeed, uint128 amount) external {
-        if (bondedKeys.length == 0) return;
-        bytes32 id = bondedKeys[bound(keySeed, 0, bondedKeys.length - 1)];
-        BondRef storage ref = bondRefs[id];
+    function _bondSelf(uint256 taskId) internal {
+        if (vault.nodeBond(taskId, address(this)) != 0) return;
+        bytes32 key = keccak256(abi.encode("shroud-test-key", keyNonce++));
+        token.mint(address(this), vault.REGISTRATION_BOND());
+        token.approve(address(vault), vault.REGISTRATION_BOND());
+        vault.takeBond(taskId, address(this), key);
+    }
+
+    /// Top up this handler's own bond. Same identity throughout, like `bond`.
+    function topUp(uint256 taskSeed, uint128 amount) external {
+        uint256 taskId = _task(taskSeed);
+        _bondSelf(taskId);
         amount = uint128(bound(amount, 1, 1_000_000));
-        deal(address(token), ref.node, amount);
-        vm.startPrank(ref.node);
+        token.mint(address(this), amount);
         token.approve(address(vault), amount);
-        vault.topUpNodeBond(ref.taskId, amount);
-        vm.stopPrank();
+        vault.topUpNodeBond(taskId, amount);
         topUpsPosted++;
     }
 
