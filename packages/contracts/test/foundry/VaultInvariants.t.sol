@@ -223,10 +223,10 @@ contract VaultHandler is Test {
         uint256 taskId = _task(taskSeed);
         uint256 balance = vault.taskBalance(taskId);
         if (balance == 0) {
-            uint256 fund = bound(lock, 1, 1_000_000_000_000);
-            token.mint(address(this), fund);
-            token.approve(address(vault), fund);
-            vault.fundTask(taskId, fund, address(this));
+            uint256 top = bound(lock, 1, 1_000_000_000_000);
+            token.mint(address(this), top);
+            token.approve(address(vault), top);
+            vault.fundTask(taskId, top, address(this));
             fundsPosted++;
             balance = vault.taskBalance(taskId);
         }
@@ -341,18 +341,18 @@ contract VaultInvariants is Test {
     /// global solvency check cannot see.
     function invariant_pendingPerAccount() external view {
         assertEq(
-            vault.pendingWithdrawal(address(this)),
-            ghostCredited[address(this)] - ghostClaimed[address(this)],
+            vault.pendingWithdrawal(address(handler)),
+            handler.ghostCredited(address(handler)) - handler.ghostClaimed(address(handler)),
             "handler pending drift"
         );
         assertEq(
             vault.pendingWithdrawal(address(uint160(0x3001))),
-            ghostCredited[address(uint160(0x3001))],
+            handler.ghostCredited(address(uint160(0x3001))),
             "earner1 pending drift"
         );
         assertEq(
             vault.pendingWithdrawal(address(uint160(0x3002))),
-            ghostCredited[address(uint160(0x3002))],
+            handler.ghostCredited(address(uint160(0x3002))),
             "earner2 pending drift"
         );
     }
