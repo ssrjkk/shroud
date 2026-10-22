@@ -26,17 +26,20 @@ The FHE layer's honesty comes from the **dispute re-execution quorum**, which is
 deterministic-recomputation, not cryptography. A full "verify TFHE bootstraps inside a ZKVM"
 design is a research project (see AUs 2024/2025 work on verifiable FHE); it is not in this repo.
 
-## 2a. The re-executor set is unweighted; the bond prices Sybils without stopping them
+## 2a. The re-executor set is drawn, not open; the bond prices Sybils without stopping them
 
 `registerNode(taskId, blsPubKey)` pulls a flat `REGISTRATION_BOND` into vault custody, rejects
 zero and reused BLS keys per task, and a dispute quorum slashes the *winner's* bond into the
-buyer refund. `reportDispute` still accepts any registered address and the quorum is still a
-flat count of 3 — there is no seeded or stake-weighted re-executor assignment.
+buyer refund. Since the sortition landed, `reportDispute` no longer accepts any registered
+address: the first dispute action fixes the epoch seed (`nodeSetHash` plus prevrandao, so the
+sequencer cannot pick the committee), and after that only drawn members report, with the draw
+weighted by posted bond. The quorum itself is still a flat count of 3 — three drawn reporters,
+not three units of stake.
 
 Consequences, stated plainly:
-- A ring of 3 addresses now locks 3× the bond for the task's life, plus gas and one verified
-  commit each. It cannot *steal* the payout — the winner is still chosen by STARK validity —
-  but it can deny a node its reward and burn the honest winner's bond with it, at the cost of
+- A ring of 3 addresses must now also *be drawn*: with equal bonds the whole set expects
+  ~7 drawn per epoch, so three random Sybils usually are not all in. It cannot *steal*
+  the payout — the winner is still chosen by STARK validity — but it can deny a node its reward and burn the honest winner's bond with it, at the cost of
   three bonds locked and three commits computed.
 - Copying a bare dispute from the mempool no longer works unmodified: disputes are filed
   commit-reveal (`commitDispute` → `reportDisputeWithSalt`, salt bound to the reporter), and
@@ -44,9 +47,9 @@ Consequences, stated plainly:
 - Conversely, an honest node cannot exclude Sybil reporters, and locked capital returns to the
   attacker after terminality: the bond is a spam price, not a burn.
 
-Making it economically unattractive still requires real work: stake-weighted or seeded
-re-executor assignment. Until that lands, treat the quorum as a liveness check against a single
-bad claimant backed by a priced identity, not as a Sybil-resistant economic guarantee.
+Making it economically unattractive still requires real work: stake-weighted quorum
+*counting*. Until that lands, treat the quorum as a liveness check against a single bad
+claimant backed by priced identities, not as a Sybil-resistant economic guarantee.
 
 ## 3. On-chain proof verification is sampled, not complete
 
