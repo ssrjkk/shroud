@@ -193,15 +193,18 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
   timelocks; dispute quorum with winner-bond slash; commit-reveal dispute reporting with
   reporter-bound salt; BLS-key proof-of-possession on registration; opt-in contribution
   bonds (slash-to-treasury); segmented-proof commit path; settlement gated on reward
-  maturity; fee-on-transfer fail-closed accounting; admin controls under test.
+  maturity; fee-on-transfer fail-closed accounting; admin controls under test — the
+  treasury moves through a 7-day rotation and the shape-proof requirement is a ratchet
+  (it can be tightened, never loosened).
 - **Compute:** deterministic execution engine wired into the worker (commit, re-execute,
   commit-reveal disputes from own commits); `tfhe-rs` backend + remote DA behind cargo features;
   inbound mesh throttling per peer IP + stream cap; `strict_weights` on by default; two-node
   devnet agreement check in CI.
 - **Clients & ops:** SDK upload/weights/key-pin (fail-closed)/DA hardening + DecryptionGate
-  client, Telegram ops bot with read coverage + per-chat abuse quotas + alert dedupe,
-  content-addressed DA service with perimeter guard (rate limits, penalty box, shadowban,
-  idempotency, graceful shutdown), devnet compose, gas snapshot + lifecycle fuzz in the suite.
+  client, Telegram ops bot with read coverage + per-chat abuse quotas + alert dedupe and
+  treasury-rotation alerts, content-addressed DA service with perimeter guard (rate limits,
+  penalty box, shadowban, idempotency, graceful shutdown), devnet compose, gas snapshot +
+  lifecycle fuzz in the suite.
 
 ### Next
 

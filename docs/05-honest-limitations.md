@@ -238,6 +238,20 @@ proof pipeline cannot be worked around without a new deployment. The requirement
 rather than per task for the same reason. If per-task proofs turn out to matter, that is a
 protocol parameter to change — not a key to hand back to the owner.
 
+## 8b. The pause is an emergency brake, and a forgotten one is a real outage
+
+`setPaused(true)` stops the pipeline in one transaction, and it is deliberately not
+delayed: the pause is the brake you pull when something is burning. The cost is that
+the same key that pauses is the only key that unpauses, so a pause raised in a panic and
+forgotten in the aftermath freezes contributions, epochs and settlement until somebody
+notices. The abort path and the contributor's bond release stay open while paused, so the
+money is not trapped — but the work is.
+
+A self-expiring pause was considered and not adopted: the expiry would be a public
+timestamp, so an attacker who knows the pause is about to lift would simply wait for it,
+and a renewal that races that moment is worse than a pause that simply stays. The brake
+stays as it is, and the deployment's own runbook has to say "unpause" out loud.
+
 ## 9. What is genuinely finished in this repo
 
 - `CipherTask.sol`: complete state machine, escrow, dividend, staged withdrawal, fraud window,
