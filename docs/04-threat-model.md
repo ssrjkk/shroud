@@ -36,6 +36,7 @@ settled or terminal, so post-hoc burns of honest contributors' unreleased bonds 
 tasks created before this mechanism behave exactly as before. What the bond does **not** do is
 prove fraud on chain: there is no on-chain test for "this shard is poison", so the slash is an
 attested operator action with an event trail, not a fraud proof.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"enforces one shard per address, minimum rows and proof presence"*.
 
 ### F-02 — Proof replay across tasks (ADV2) — **Mitigated**
 The STARK transcript (`CipherTask.proofTranscript`) is bound to `chainId`, `address(this)`,
@@ -44,6 +45,7 @@ recomputes that binding in Solidity, so a proof lifted from another task fails b
 committing node's identity is *not* one of the bound values: whoever holds a valid proof for
 these inputs can be its committer, which the dispute protocol has to absorb instead of the
 binding.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"rejects a proof that is not a STARK, and one whose transcript was already consumed"*.
 
 ### F-03 — Trained-on-wrong-dataset (ADV2) — **Partially mitigated**
 `ctRoot` is bound into the transcript, so an epoch proved against a different dataset fails the
@@ -61,6 +63,7 @@ implementation, and a Sybil ring that registers N addresses and runs them cheapl
 cheaper than the analysis there assumes. F-15 removes the free griefing path, but stake-weighted
 assignment and a bond are still genuinely missing and are called out in
 `05-honest-limitations.md` rather than papered over here.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"rejects a proof that is not a STARK, and one whose transcript was already consumed"*.
 
 ### F-04 — Sybil node ring defeating the dispute quorum (ADV3) — **Partially mitigated**
 *Corrected:* this finding previously described stake-weighted, contract-assigned re-executors
@@ -92,6 +95,7 @@ closes while a commitment is open). `registerNodeWithPop` binds the BLS key to a
 per identity and ends key-theft repudiation for adopters. Neither changes the flat quorum of 3.
 
 F-15 removes the variant where the attack is free.
+Regression: `packages/contracts/test/Hardening.spec.ts` — *"slashed weight leaves the denominator: honest shares are undiluted"*.
 
 ### F-15 — Dispute-target hijack by a losing committer (ADV2) — **Mitigated**
 `_claimedDigest` is the digest the dispute window is measured against, and it must therefore be
@@ -463,11 +467,13 @@ Weights are ciphertext on DA until `requestReveal` succeeds, and `requestReveal`
 `status == SETTLING` (all epochs settled) and a valid BLS aggregate from the committee. The
 committee's `DecryptionGate` check rejects any request whose output CIDs are not in the
 settled task's committed set, so there is no way to request the reveal before paying.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"withdraw is blocked while the gate has not reached threshold"*.
 
 ### F-06 — Mid-task spec change (ADV4) — **Mitigated**
 `TaskParams` are frozen at creation; the spec hash is a public input to every epoch's STARK.
 Changes require a new task. Reusing already-settled epochs across tasks is impossible because
 `taskId` is bound.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"escrows exactly the buyer's named budget and pins the params"*.
 
 ### F-07 — Censorship by the sequencer (ADV5) — **Accepted**
 An encrypted mempool plus forced inclusion windows reduces but does not eliminate censorship.
@@ -513,11 +519,13 @@ looking. A node that turns it on without the two pin fields does not start at al
 devnet config sets it false explicitly. It is still a startup check, not a continuous one:
 a rotation that lands mid-epoch is caught at the next restart, not before the next commit.
 So the finding stands as **mitigated at boot, not mid-epoch**.
+Regression: `packages/sdk/test/smoke.test.ts` — *"ShroudSdk refuses to upload under a key the chain has not pinned"*.
 
 ### F-09 — Committee minority decryption (ADV6) — **Mitigated**
 Shamir t-of-n. `DecryptionGate` additionally restricts *what* may be decrypted: a member's
 `partialDecrypt` call carries the output CID and is rejected unless that CID is registered by
 a settled task, so a minority cannot even meaningfully co-process user shards.
+Regression: `packages/contracts/test/CipherTask.spec.ts` — *"opens on a valid aggregate signature and only counts distinct committee members"*.
 
 ### F-10 — Committee majority decryption (ADV7) — **RESIDUAL, documented**
 If `t` committee members collude they can compute the decryption of *any* ciphertext under
@@ -551,12 +559,14 @@ documented rather than hidden.
 ### F-13 — Encrypted-output tampering in DA (ADV8) — **Mitigated**
 `encWeightsCid` is a keccak256 pin in the contract and its digest is a STARK public input. A
 swapped object fails the digest check before it is ever loaded.
+Regression: `packages/sdk/test/smoke.test.ts` — *"HttpShardStore.getVerified rejects bytes that do not match the committed digest"*.
 
 ### F-14 — Malleability of the EIP-712 payment slices (ADV4) — **Mitigated**
 Slice permits are `Permit`-style with `deadline`, `channelId`, monotonically increasing
 `sliceIndex`, and a `MAX_CUMULATIVE` cap. The contract rejects `sliceIndex <= consumed` and
 `amount > remainingChannel`. Re-signing an old slice is worthless. Signature malleability is
 handled by using the low-s form and an explicit `s` bound check in `PaymentVault`.
+Regression: `packages/contracts/test/PaymentVault.spec.ts` — *"rejects the malleable twin of an otherwise valid signature"*.
 
 ### F-36 — Fee-on-transfer tokens broke escrow accounting (ADV4) — **Mitigated (fail-closed)**
 `fundTask` and `takeBond` recorded the *requested* amount while the token could deliver less, so

@@ -53,8 +53,9 @@ first tagged release.
   *governance recovery*", "the file had no test harness" — which no machine can
   check and which had already gone stale in one place (F-28 still claimed the
   shard store had no test harness; it has had one for a while). The citations
-  are now in the checkable form, and 32 of the 58 findings name a file and a
-  test; the rest are the accepted and residual ones, which have no test to name.
+  are now in the checkable form, and **52 of the 58 findings name a file and a
+  test**. The six that do not are the ones with no test to name: four accepted
+  or residual risks, a removal, and the devnet deployment path.
 
 ### Node: the provider's key no longer reaches the log
 
