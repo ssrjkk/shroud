@@ -6,6 +6,14 @@ first tagged release.
 
 ## Unreleased
 
+### Paper theme: code and journal headings were unreadable
+
+- In the light theme the keyword color and the journal headings rendered dark-on-dark
+  (contrast 1.27 — the text was there, but only the DOM could see it). Both now use a
+  pale screen accent, verified against the computed styles in both themes.
+- The 404 page promised three ways out and linked two; the protocol button is there now.
+- Commit messages and comments stay short from here: explain the why, not the what.
+
 ### Node: stop filing disputes the sortition did not pick
 
 - `reportDispute` counts a report only from an address the epoch's sortition drew, and the

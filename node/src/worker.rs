@@ -1236,16 +1236,10 @@ pub fn dispute_gate(
     Gate::Ready
 }
 
-/// The part of `reportDispute`'s standing that is not on `TaskOnChain`: the draw.
+/// The draw behind `reportDispute`: fixed by the first dispute action, draw-only after.
 ///
-/// `DisputeLib` derives the epoch's sortition seed on the first dispute action and admits
-/// only nodes the draw picked. A node that committed, disagrees and was not drawn therefore
-/// has standing and still reverts `NotCommitteeMember`, after paying for the transaction.
-///
-/// `seed == 0` is not "not drawn": nobody has fixed the seed yet, it is derived from the
-/// first reporter's transaction, and refusing here would make the first dispute impossible.
-/// That asymmetry is also why this cannot live in `dispute_gate`, which is pure over the
-/// task's on-chain state.
+/// A zero seed means the committee is not drawn yet — and this node may be the one
+/// that fixes it, so refusing there would make the first dispute impossible.
 pub fn committee_gate(seed: B256, drawn: bool) -> Gate {
     if seed != B256::ZERO && !drawn {
         return Gate::Skip("not drawn into this epoch's dispute committee");

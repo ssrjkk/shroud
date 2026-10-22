@@ -9,7 +9,7 @@
   --line:rgba(242,245,250,.85); --hair:rgba(242,245,250,.22);
   --acc:#ffffff; --acc-ink:#0a2a5c;
   --good:#8fe3a0; --warn:#9fc0e8; --bad:#ff9a9a;
-  --screen:#081f45;
+  --screen:#081f45; --screen-acc:#ffffff;
   --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
   --disp:"Helvetica Neue",Helvetica,Arial,"Segoe UI",Roboto,sans-serif;
   --body:"Helvetica Neue",Helvetica,Arial,"Segoe UI",Roboto,sans-serif;
@@ -21,7 +21,7 @@
   --line:#0e3a7a; --hair:rgba(14,58,122,.25);
   --acc:#0e3a7a; --acc-ink:#ffffff;
   --good:#166b45; --warn:#2c5288; --bad:#a11a20;
-  --screen:#0a2a5c;
+  --screen:#0a2a5c; --screen-acc:#cfe0ff;
 }
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
@@ -36,7 +36,7 @@ code,kbd{font-family:var(--mono);font-size:.86em;background:rgba(127,127,127,.16
   border:1px solid var(--hair);border-radius:0;padding:.08em .34em;word-break:break-word}
 pre.code{font-family:var(--mono);font-size:12.8px;line-height:1.55;background:var(--screen);color:#e8eef7;
   border:1px solid var(--line);border-radius:0;padding:16px 18px;overflow:auto;margin:0}
-pre.code .c{color:#8fa5c4}pre.code .k{color:var(--acc)}
+pre.code .c{color:#8fa5c4}pre.code .k{color:var(--screen-acc)}
 .skip{position:absolute;left:-9999px;top:0;background:var(--acc);color:var(--acc-ink);padding:.6rem 1rem;z-index:99}
 .skip:focus{left:0}
 .wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
@@ -207,7 +207,7 @@ fieldset.bench legend{font-family:var(--disp);font-weight:800;font-size:12px;let
 .ledger-head{padding:10px 18px;border-bottom:1px solid rgba(232,238,247,.25);font-family:var(--mono);font-size:11px;
   display:flex;justify-content:space-between;color:#b9cbe4}
 .ledger-body{padding:18px;max-height:70vh;overflow:auto}
-.ledger-body h2,.ledger-body h4{font-family:var(--mono);font-size:11px;color:var(--acc);margin:18px 0 8px}
+.ledger-body h2,.ledger-body h4{font-family:var(--mono);font-size:11px;color:var(--screen-acc);margin:18px 0 8px}
 .ledger-body h2:first-child,.ledger-body h4:first-child{margin-top:0}
 .ltable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
 .ltable td{padding:6px 8px;border-bottom:1px solid rgba(232,238,247,.14);vertical-align:top;word-break:break-all}

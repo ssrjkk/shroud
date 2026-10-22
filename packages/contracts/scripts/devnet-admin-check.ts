@@ -4,17 +4,12 @@ import { join } from "path";
 import assert from "node:assert/strict";
 
 /**
- * Owner controls on a live devnet deployment.
+ * Owner controls against the real deployment, not a fixture.
  *
- * The unit suite proves the treasury rotation and the shape-proof ratchet against the
- * contract in isolation. This proves the same behaviour through the real deployment:
- * the artifact that actually lands on chain, the address book the SDK and the bot read,
- * and a chain that mines blocks. "The interface works in a fixture" and "the deployed
- * thing works" have disagreed in this repository before.
- *
- * It runs after the deploy and before the SDK check, moves the treasury to a fresh
- * address and leaves the proof requirement on — which is what a hardened deployment
- * looks like anyway.
+ * The unit suite covers the rotation and the ratchet in isolation; this runs
+ * them through the artifact that actually lands on chain (propose → early
+ * execute refused → a week passes → a non-owner executes). Runs between the
+ * lifecycle smoke and the SDK check.
  */
 async function main() {
   const addrs = JSON.parse(readFileSync(join(__dirname, "../../../infra/devnet/addresses.json"), "utf8"));
