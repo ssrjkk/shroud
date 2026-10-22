@@ -30,6 +30,7 @@ import {
   renderCommitMismatch,
   renderDispute,
   renderRotation,
+  renderTreasury,
   renderLimits,
   renderHelp,
   renderWatchlist,
@@ -936,6 +937,31 @@ async function main() {
           key: "rot",
           markup: rotationKeyboard(),
         });
+      }
+    }
+
+    if (config.cipherTask) {
+      // The treasury rotation is the one rotation whose window is the whole point:
+      // the money only moves if nobody objects during it. So the proposal is
+      // reported on its own, not only the moment it lands.
+      for (const ev of dedupeEvents(await chain.treasuryEvents(cursor + 1, head), seen)) {
+        const name = ev.name ?? "";
+        let rendered = null;
+        if (name === "TreasuryProposed") {
+          rendered = renderTreasury("proposed", { to: ev.args?.to, eta: ev.args?.eta });
+        } else if (name === "TreasuryChanged") {
+          rendered = renderTreasury("executed", { from: ev.args?.from, to: ev.args?.to });
+        } else if (name === "TreasuryRotationCancelled") {
+          rendered = renderTreasury("cancelled", { dropped: ev.args?.dropped });
+        }
+        if (rendered) {
+          alerts.push({
+            text: rendered,
+            taskId: null,
+            key: "tre",
+            markup: rotationKeyboard(),
+          });
+        }
       }
     }
 

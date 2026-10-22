@@ -369,6 +369,42 @@ test("rotationEvents surfaces proposals and executions with no pending queue", a
   assert.equal(got.pending, null);
 });
 
+test("treasuryEvents surfaces the proposal, the change and the cancellation", async (t) => {
+  const { reader, routes, ifaces } = await setup(t);
+  const ct = ifaces.cipherTask;
+  let logIndex = 0;
+  const logFor = (name, args) => {
+    const frag = ct.getEvent(name);
+    const enc = ct.encodeEventLog(frag, args);
+    return {
+      address: TASK,
+      topics: enc.topics,
+      data: enc.data,
+      blockNumber: 200 + logIndex,
+      blockHash: "0x" + "2".repeat(64),
+      transactionHash: "0x" + "3".repeat(64),
+      transactionIndex: 0,
+      index: logIndex++,
+      removed: false,
+    };
+  };
+  routes.logs = [
+    logFor("TreasuryProposed", [NODE_A, 1234n]),
+    logFor("TreasuryChanged", [NODE_B, NODE_A]),
+    logFor("TreasuryRotationCancelled", [NODE_B]),
+  ];
+  const got = await reader.treasuryEvents(100, 300);
+  assert.deepEqual(
+    got.map((e) => e.name),
+    ["TreasuryProposed", "TreasuryChanged", "TreasuryRotationCancelled"]
+  );
+  // The candidate and the eta are what an operator has to act on.
+  assert.equal(got[0].args.to.toLowerCase(), NODE_A.toLowerCase());
+  assert.equal(got[0].args.eta, 1234n);
+  assert.equal(got[1].args.from.toLowerCase(), NODE_B.toLowerCase());
+  assert.equal(got[2].args.dropped.toLowerCase(), NODE_B.toLowerCase());
+});
+
 test("pendingRotation maps the queued rotation by name", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
   const np = ifaces.networkParams;

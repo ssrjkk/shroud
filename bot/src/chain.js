@@ -514,6 +514,36 @@ export class ChainReader {
     return out.sort((a, b) => (a.blockNumber ?? 0) - (b.blockNumber ?? 0));
   }
 
+  /**
+   * Treasury-rotation events, oldest first.
+   *
+   * The treasury receives every slashed bond and every committee leg, and it moves
+   * through a seven-day rotation: `TreasuryProposed` queues the candidate, and
+   * either `TreasuryChanged` (it landed) or `TreasuryRotationCancelled` (it did
+   * not) closes the story. A watcher that only reports the final move misses the
+   * window in which the operator was supposed to react, so the proposal is an
+   * event of its own here.
+   */
+  async treasuryEvents(fromBlock, toBlock) {
+    const names = ["TreasuryProposed", "TreasuryChanged", "TreasuryRotationCancelled"];
+    const out = [];
+    for (const name of names) {
+      try {
+        const logs = await this.#queryLogs(
+          this.#ifaces.cipherTask,
+          name,
+          this.#config.cipherTask,
+          fromBlock,
+          toBlock
+        );
+        out.push(...this.#decode(this.#ifaces.cipherTask, name, logs));
+      } catch {
+        // Not every build emits every event; absence is not an error.
+      }
+    }
+    return out.sort((a, b) => (a.blockNumber ?? 0) - (b.blockNumber ?? 0));
+  }
+
   // --- NetworkParams -------------------------------------------------------
 
   /**

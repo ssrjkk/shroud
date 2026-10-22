@@ -100,15 +100,20 @@ test("sendReply goes through the bounded queue, never raw sendMessage", async ()
  * (watchlist logic), so every combination of flag source × watchlist state ×
  * alert scope is pinned rather than left to inspection.
  */
-const ALL_ON = { commitMismatch: true, disputes: true, keyRotation: true };
+const ALL_ON = { commitMismatch: true, disputes: true, keyRotation: true, treasury: true };
 
 test("shouldDeliverAlert follows the global flags by default", () => {
   const state = emptyState();
   assert.ok(shouldDeliverAlert({ key: "disp", taskId: "42" }, ALL_ON, state, 1));
   assert.ok(shouldDeliverAlert({ key: "rot", taskId: null }, ALL_ON, state, 1));
+  assert.ok(shouldDeliverAlert({ key: "tre", taskId: null }, ALL_ON, state, 1));
   assert.ok(!shouldDeliverAlert({ key: "disp", taskId: "42" }, { ...ALL_ON, disputes: false }, state, 1));
   // Rotation still flows when only disputes are off.
   assert.ok(shouldDeliverAlert({ key: "rot", taskId: null }, { ...ALL_ON, disputes: false }, state, 1));
+  // A treasury alert is global too, and it follows its own flag.
+  assert.ok(
+    shouldDeliverAlert({ key: "tre", taskId: null }, { ...ALL_ON, treasury: false }, state, 1) === false
+  );
 });
 
 test("shouldDeliverAlert lets a chat override the global flags either way", () => {

@@ -33,7 +33,7 @@ export const MAX_WATCHED_PER_CHAT = 200;
 export const MAX_CHATS_WITH_STATE = 10_000;
 
 /** Alert flag keys shared with keyboards.js (`a:<key>` toggle payloads). */
-export const ALERT_KEYS = ["mm", "disp", "rot"];
+export const ALERT_KEYS = ["mm", "disp", "rot", "tre"];
 
 /** Map alert keys to the global config flag names in config.js. */
 export function globalFlagFor(key) {
@@ -44,6 +44,8 @@ export function globalFlagFor(key) {
       return "disputes";
     case "rot":
       return "keyRotation";
+    case "tre":
+      return "treasury";
     default:
       return null;
   }
@@ -234,6 +236,7 @@ export function effectiveAlerts(global, state, chatId) {
     mm: pick("mm", global.commitMismatch),
     disp: pick("disp", global.disputes),
     rot: pick("rot", global.keyRotation),
+    tre: pick("tre", global.treasury),
   };
 }
 

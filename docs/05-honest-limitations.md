@@ -224,6 +224,20 @@ What remains true:
   deployments whose buyers always publish SDK-encoded seed files. Deployments that knowingly
   serve non-file pins (devnet mocks) opt out explicitly with `strict_weights = false`.
 
+## 8a. The shape-proof requirement is a property of the deployment, not a dial
+
+Every contribution carries a Groth16 proof that its rows match the buyer's `shapeRoot`. That
+requirement is decided when the contract is deployed: it can be tightened later
+(`requireShapeProofs`) and it can never be loosened. This is a deliberate trade — the
+weakening direction is the one a compromised owner key would use, and a delay would still
+leave a window in which the requirement could lapse (F-62).
+
+The cost is real. A deployment that starts with the requirement on cannot turn it off, so a
+buyer who does not want to pay for proofs cannot get a task that skips them, and a bug in the
+proof pipeline cannot be worked around without a new deployment. The requirement is global
+rather than per task for the same reason. If per-task proofs turn out to matter, that is a
+protocol parameter to change — not a key to hand back to the owner.
+
 ## 9. What is genuinely finished in this repo
 
 - `CipherTask.sol`: complete state machine, escrow, dividend, staged withdrawal, fraud window,

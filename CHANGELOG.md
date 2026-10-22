@@ -6,6 +6,16 @@ first tagged release.
 
 ## Unreleased
 
+### Ops: the bot watches the treasury rotation
+
+- A timelock is only as good as the monitoring around it. The bot already
+  watched the network-key rotation; it now watches `TreasuryProposed`,
+  `TreasuryChanged` and `TreasuryRotationCancelled` on the orchestrator.
+- The **proposal** is the alert that matters, because it is the only moment when
+  an operator can still say no — once the change is executed, the money is
+  already pointed somewhere else. `ALERT_TREASURY` (on by default) delivers it,
+  with a `/alerts` per-chat toggle like the other flags.
+
 ### Design: the owner can no longer move the money or drop the proof requirement in one transaction
 
 - The treasury receives every slashed bond and every committee leg, and

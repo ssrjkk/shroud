@@ -174,7 +174,7 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 | Cleartext upload by omission | **Enforced.** Non-encrypting encryptors are refused without `allowUnencrypted`. |
 | Wrong-chain signing | **Enforced.** A configured `chainId` mismatch is a hard error. |
 | Hostile DA | **Enforced.** CIDs validated pre-request, responses size-capped and timed out, payloads re-hashed locally against the on-chain pin. |
-| Admin surface | **Enforced.** Treasury/proof-flag/pause switches are owner-only, tested; verifier and manager rotations go through timelocks executable by anyone; live rotations cannot be overwritten without a cancel. |
+| Admin surface | **Enforced.** The treasury moves through a 7-day rotation that anyone may execute once the window has passed; the shape-proof requirement is a ratchet — it can be tightened, never loosened; the pause stays an immediate owner brake. Verifier and manager rotations behave the same way, and a live rotation cannot be overwritten without a cancel. |
 | Fee-on-transfer escrow tokens | **Enforced (fail-closed).** Vault ledgers the balance diff actually received; shortfalls revert instead of mis-accounting. |
 | Dispute front-running | **Enforced.** Commit-reveal reporting (`commitDispute` → `reportDisputeWithSalt`); the node files disputes this way. |
 | Epoch-authorship by the owner | **Enforced.** Only buyer/update-manager may `openEpoch`; the owner keeps `emergencyUnwind`. |

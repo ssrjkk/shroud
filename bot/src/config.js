@@ -149,6 +149,7 @@ export function loadConfig() {
       commitMismatch: flag("ALERT_COMMIT_MISMATCH", true),
       disputes: flag("ALERT_DISPUTES", true),
       keyRotation: flag("ALERT_KEY_ROTATION", true),
+      treasury: flag("ALERT_TREASURY", true),
     },
 
     html: flag("HTML_MODE", true),

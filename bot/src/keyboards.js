@@ -71,7 +71,7 @@ export function parseCallback(data) {
       if (!isTaskId(arg)) return null;
       return { op, arg };
     case "a":
-      if (arg !== "mm" && arg !== "disp" && arg !== "rot") return null;
+      if (arg !== "mm" && arg !== "disp" && arg !== "rot" && arg !== "tre") return null;
       return { op, arg };
     default:
       return null;
@@ -146,11 +146,11 @@ export function statusKeyboard() {
   return { inline_keyboard: [[button("⟳ refresh", "s")]] };
 }
 
-const ALERT_LABELS = { mm: "mismatch", disp: "disputes", rot: "rotation" };
+const ALERT_LABELS = { mm: "mismatch", disp: "disputes", rot: "rotation", tre: "treasury" };
 
 /**
  * Alert-override keyboard: one toggle button per flag showing its effective
- * state, plus a refresh back to /status. `effective` maps mm/disp/rot to
+ * state, plus a refresh back to /status. `effective` maps mm/disp/rot/tre to
  * booleans already resolved against the global config.
  */
 export function alertsKeyboard(effective) {

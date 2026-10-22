@@ -18,6 +18,7 @@ import {
   renderCommitMismatch,
   renderDispute,
   renderRotation,
+  renderTreasury,
   renderLimits,
   renderHelp,
   htmlEscape,
@@ -365,6 +366,21 @@ test("rotation alerts warn in both directions", () => {
   assert.ok(proposed.includes("do not upload anything"));
   const executed = renderRotation("executed", { keyVersion: 5, fhePublicKeyHash: ZERO32 });
   assert.ok(executed.includes("key-substitution attack"));
+});
+
+test("treasury alerts say the window is still open, and where the money goes", () => {
+  const proposed = renderTreasury("proposed", { to: ZERO20, eta: 1234 });
+  // The proposal is the only moment somebody can still say no, so the text has to
+  // say that the change is not effective yet.
+  assert.ok(proposed.includes("not effective yet"));
+  assert.ok(proposed.includes("0x0000"));
+
+  const executed = renderTreasury("executed", { from: ZERO20, to: ZERO20 });
+  assert.ok(executed.includes("slashed bond"));
+  assert.ok(executed.includes("Check the new address"));
+
+  const cancelled = renderTreasury("cancelled", { dropped: ZERO20 });
+  assert.ok(cancelled.includes("did not happen"));
 });
 
 test("limits and help state the honest limits, not marketing", () => {

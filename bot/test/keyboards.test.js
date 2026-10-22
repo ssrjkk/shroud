@@ -33,7 +33,7 @@ test("isTaskId accepts the same decimal shape the /task gate enforces", () => {
 });
 
 test("encode/parse round-trips every opcode", () => {
-  for (const data of ["s", "p:1", "p:12", "t:42", "w:7", "u:7", "a:mm", "a:disp", "a:rot"]) {
+  for (const data of ["s", "p:1", "p:12", "t:42", "w:7", "u:7", "a:mm", "a:disp", "a:rot", "a:tre"]) {
     const parsed = parseCallback(data);
     assert.ok(parsed, `${data} parses`);
     assert.equal(encodeCallback(parsed.op, parsed.arg), data);
@@ -117,11 +117,12 @@ test("taskKeyboard flips the watch button and navigates", () => {
 });
 
 test("alertsKeyboard mirrors effective flags and links back to status", () => {
-  const kb = alertsKeyboard({ mm: true, disp: false, rot: true });
+  const kb = alertsKeyboard({ mm: true, disp: false, rot: true, tre: false });
   const labels = kb.inline_keyboard[0].map((b) => b.text);
   assert.ok(labels.some((t) => t === "✅ mismatch"));
   assert.ok(labels.some((t) => t === "❌ disputes"));
   assert.ok(labels.some((t) => t === "✅ rotation"));
+  assert.ok(labels.some((t) => t.endsWith("treasury")));
   assert.equal(kb.inline_keyboard[1][0].text, "status");
 });
 

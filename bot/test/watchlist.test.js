@@ -48,9 +48,14 @@ test("addWatch validates, dedupes and caps", () => {
 
 test("alert overrides resolve against the global config", () => {
   const state = emptyState();
-  const global = { commitMismatch: true, disputes: false, keyRotation: true };
+  const global = { commitMismatch: true, disputes: false, keyRotation: true, treasury: true };
   // Unset inherits.
-  assert.deepEqual(effectiveAlerts(global, state, 1), { mm: true, disp: false, rot: true });
+  assert.deepEqual(effectiveAlerts(global, state, 1), {
+    mm: true,
+    disp: false,
+    rot: true,
+    tre: true,
+  });
   setAlertOverride(state, 1, "disp", true);
   assert.equal(effectiveAlerts(global, state, 1).disp, true);
   // Clearing restores inheritance.
@@ -58,7 +63,7 @@ test("alert overrides resolve against the global config", () => {
   assert.equal(effectiveAlerts(global, state, 1).disp, false);
   assert.ok(!setAlertOverride(state, 1, "nope", true).ok);
   assert.ok(!setAlertOverride(state, 1, "mm", "yes").ok);
-  assert.deepEqual([...ALERT_KEYS].sort(), ["disp", "mm", "rot"]);
+  assert.deepEqual([...ALERT_KEYS].sort(), ["disp", "mm", "rot", "tre"]);
 });
 
 test("removeWatch on an unknown chat reports, never creates state", () => {

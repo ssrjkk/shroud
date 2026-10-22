@@ -59,9 +59,10 @@ Semantics, deliberately conservative:
 
 - Empty watchlist (default) = every task-scoped alert, exactly as before.
 - Non-empty watchlist = commit-mismatch and dispute alerts only for watched
-  tasks. Key-rotation alerts are global and ignore the watchlist.
-- Per-chat flags (`/alerts`, toggles `mismatch` / `disputes` / `rotation`)
-  override the global `ALERT_*` `.env` flags when set, inherit them when unset.
+  tasks. Key-rotation and treasury alerts are global and ignore the watchlist.
+- Per-chat flags (`/alerts`, toggles `mismatch` / `disputes` / `rotation` /
+  `treasury`) override the global `ALERT_*` `.env` flags when set, inherit them
+  when unset.
 
 Task-scoped alerts carry a `view task #id` button; rotation alerts carry a
 `view status` button.
@@ -75,6 +76,14 @@ Configurable in `.env`, all off-by-default-risk since they only *add* output:
 | `ALERT_COMMIT_MISMATCH` | on | one node committing twice for the same epoch with different digests |
 | `ALERT_DISPUTES` | on | disputes, epoch rejections, settlements, status changes |
 | `ALERT_KEY_ROTATION` | on | any network parameter rotation |
+| `ALERT_TREASURY` | on | a treasury change is proposed, executed or cancelled |
+
+`ALERT_TREASURY` watches the treasury rotation on the orchestrator. The treasury
+receives every slashed bond and every committee leg, and it moves through a
+seven-day window: `TreasuryProposed` queues the candidate, then either
+`TreasuryChanged` or `TreasuryRotationCancelled` closes the story. The proposal
+is reported on its own, because it is the only moment where somebody can still
+say no — once the change is executed, the money is already pointed elsewhere.
 
 `ALERT_COMMIT_MISMATCH` watches for the *same* node committing two different
 digests for one epoch. On chain that cannot happen — the contract rejects it — so
