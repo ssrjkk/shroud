@@ -48,13 +48,22 @@ async function main() {
   console.log("treasury proposed:", outsider.address, "- executable at", eta.toString());
 
   // --- an early execute is refused -------------------------------------------
-  let earlyError = "";
+  // Compare selectors, not names: a standalone node does not always decode a
+  // custom error into its name (CI reports only the raw return data), so
+  // matching on the string "TreasuryNotReady" would pass locally and fail on
+  // the runner. Both shapes carry the four-byte selector.
+  const notReady = task.interface.getError("TreasuryNotReady");
+  assert.ok(notReady, "TreasuryNotReady is not in the ABI");
+  let revertText = "";
   try {
     await task.connect(outsider).executeTreasury.staticCall();
   } catch (e) {
-    earlyError = String(e);
+    const raw = (e as { data?: unknown })?.data;
+    revertText = `${typeof raw === "string" ? raw : ""} ${String(e)}`;
   }
-  assert.ok(earlyError.includes("TreasuryNotReady"), `early execute was not refused: ${earlyError}`);
+  const refused =
+    revertText.toLowerCase().includes(notReady.selector.toLowerCase()) || revertText.includes("TreasuryNotReady");
+  assert.ok(refused, `early execute was not refused with TreasuryNotReady: ${revertText.slice(0, 160)}`);
   assert.equal(await task.treasury(), before, "an early execute still moved the treasury");
   console.log("early execute refused, as it should be");
 
