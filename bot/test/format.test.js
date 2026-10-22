@@ -376,7 +376,7 @@ test("treasury alerts say the window is still open, and where the money goes", (
   assert.ok(proposed.includes("0x0000"));
 
   const executed = renderTreasury("executed", { from: ZERO20, to: ZERO20 });
-  assert.ok(executed.includes("slashed bond"));
+  assert.ok(executed.includes("slashed contribution bond"));
   assert.ok(executed.includes("Check the new address"));
 
   const cancelled = renderTreasury("cancelled", { dropped: ZERO20 });

@@ -274,8 +274,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     /// @notice Queue a treasury change, effective `TREASURY_DELAY` after it is proposed.
-    /// @dev The treasury receives every slashed bond and the committee leg, so pointing it
-    ///      somewhere else is pointing the money somewhere else. It used to be a single
+    /// @dev The treasury receives slashed contribution bonds and the committee leg — a
+    ///      slashed winner bond rejoins the task balance and refunds to the buyer instead —
+    ///      so pointing it somewhere else is pointing the money somewhere else. It used to be a single
     ///      call: one transaction moved every future fee flow to an address of the owner's
     ///      choosing, with no window in which anybody could notice. The delay is the one
     ///      the verifier and the task-manager rotations use, and it is enforced on chain —

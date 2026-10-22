@@ -809,8 +809,9 @@ refuses the epoch loudly instead of taking part in a mechanism that cannot work.
 `node/src/worker.rs` — *"an epoch whose dispute window cannot hold a re-execution is refused"*.
 
 ### F-61 — The owner could move the treasury in one transaction (ADV5) — **Mitigated**
-The treasury receives every slashed bond and every committee leg, so it is where the money that
-contributors earned ends up. `setTreasury` was a single `onlyOwner` call: one transaction
+The treasury receives slashed contribution bonds and every committee leg (a slashed
+winner bond rejoins the task balance and refunds to the buyer instead), so it is where
+the money that contributors earned ends up. `setTreasury` was a single `onlyOwner` call: one transaction
 repointed every future fee flow to an address of the owner's choosing, with no window in which
 a user could notice, complain or get their funds out. The same key that owns the contract also
 signs the deployment, so a single compromised key could turn the escrow's residual flow into a

@@ -8,7 +8,7 @@ import { bytes32Of, params } from "./helpers";
 /**
  * Owner-gated switches on the orchestrator.
  *
- * The treasury decides where every slashed bond and every committee leg goes, and the
+ * The treasury decides where slashed contribution bonds and every committee leg goes, and the
  * shape-proof requirement decides whether a contribution has to prove that its rows
  * match the buyer's shape. Both used to be single-call switches: one transaction moved
  * the money, or dropped the proof requirement, with no window in which anybody could

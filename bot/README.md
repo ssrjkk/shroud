@@ -79,7 +79,7 @@ Configurable in `.env`, all off-by-default-risk since they only *add* output:
 | `ALERT_TREASURY` | on | a treasury change is proposed, executed or cancelled |
 
 `ALERT_TREASURY` watches the treasury rotation on the orchestrator. The treasury
-receives every slashed bond and every committee leg, and it moves through a
+receives slashed contribution bonds and every committee leg, and it moves through a
 seven-day window: `TreasuryProposed` queues the candidate, then either
 `TreasuryChanged` or `TreasuryRotationCancelled` closes the story. The proposal
 is reported on its own, because it is the only moment where somebody can still

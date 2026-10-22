@@ -6,6 +6,13 @@ first tagged release.
 
 ## Unreleased
 
+### Docs: a slashed winner bond never reaches the treasury
+
+- Seven places said the treasury receives "every slashed bond". It does not: slashed
+  contribution bonds go to the treasury, but a slashed winner bond rejoins the task
+  balance and refunds to the buyer at settlement. The docstring, the threat model,
+  the bot text and the spec header now say exactly that.
+
 ### Site: the settlement card tells the truth about the dust
 
 - The SETTLE card said "treasury = the remainder" and "all division remainders go to

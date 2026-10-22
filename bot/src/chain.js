@@ -517,7 +517,7 @@ export class ChainReader {
   /**
    * Treasury-rotation events, oldest first.
    *
-   * The treasury receives every slashed bond and every committee leg, and it moves
+   * The treasury receives slashed contribution bonds and every committee leg, and it moves
    * through a seven-day rotation: `TreasuryProposed` queues the candidate, and
    * either `TreasuryChanged` (it landed) or `TreasuryRotationCancelled` (it did
    * not) closes the story. A watcher that only reports the final move misses the

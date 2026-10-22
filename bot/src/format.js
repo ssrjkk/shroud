@@ -301,8 +301,9 @@ export function renderRotation(kind, p) {
 /**
  * The treasury rotation.
  *
- * The treasury is where every slashed bond and every committee leg lands, and it
- * moves through a seven-day window. The proposal is the moment an operator can
+ * The treasury is where slashed contribution bonds and every committee leg lands
+ * (a slashed winner bond rejoins the task balance and refunds to the buyer), and
+ * it moves through a seven-day window. The proposal is the moment an operator can
  * still do something about it, so it gets its own alert: by the time the change
  * is executed, the money is already pointed somewhere else.
  */
@@ -310,7 +311,7 @@ export function renderTreasury(kind, p) {
   if (kind === "proposed") {
     return (
       `${WARN} <b>Treasury change proposed</b>\n\n` +
-        `The treasury receives every slashed bond and every committee leg.\n\n` +
+        `The treasury receives slashed contribution bonds and every committee leg.\n\n` +
         `new treasury ${mono(shortAddr(p.to))}\n` +
         `executable at ${mono(p.eta)}\n\n` +
         `<b>It is not effective yet.</b> ` +
@@ -328,7 +329,7 @@ export function renderTreasury(kind, p) {
   }
   return (
     `${WARN} <b>Treasury changed</b>\n\n` +
-      `The treasury now receives every slashed bond and every committee leg.\n\n` +
+      `The treasury now receives slashed contribution bonds and every committee leg.\n\n` +
       `from ${mono(shortAddr(p.from))}\n` +
       `to ${mono(shortAddr(p.to))}\n\n` +
       `Check the new address against your own records: money that already went to the old ` +
