@@ -110,11 +110,14 @@ contract VaultHandler is Test {
         if (balance == 0) return;
         uint256 cap = balance > type(uint128).max ? uint256(type(uint128).max) : balance;
         lock = bound(lock, 1, cap);
-        window = uint64(bound(window, 1, 7 days));
+        // `unlockAt` is absolute, not a duration: passing the window raw would
+        // mature every channel at birth (1970) and the sweep would close it before
+        // any redeem could run — the exact dead path this harness must not have.
+        uint64 unlockAt = uint64(block.timestamp) + uint64(bound(window, 1, 7 days));
         // Every third channel names this handler as the earner so `reclaim` has
         // something to close; the rest go to arbitrary nodes like production's.
         address node = nodeSeed % 3 == 0 ? address(this) : _node(nodeSeed);
-        vault.openTaskChannel(taskId, node, uint128(lock), window);
+        vault.openTaskChannel(taskId, node, uint128(lock), unlockAt);
         uint256[] memory ids = vault.channelIds(taskId);
         openIds.push(ids[ids.length - 1]);
         channelsOpened++;
