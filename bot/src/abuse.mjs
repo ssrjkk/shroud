@@ -23,6 +23,8 @@ export const COMMAND_COST = Object.freeze({
   status: 4, // chainId + blockNumber + networkParams + rotation
   limits: 1, help: 1,
   watch: 1, unwatch: 1, watchlist: 1, alerts: 1,
+  menu: 1, start: 1, how: 1, protocol: 1, role: 1, settings: 1,
+  pro: 1, simple: 1, lang: 1,
 });
 const KNOWN_COMMANDS = Object.freeze(Object.keys(COMMAND_COST));
 
@@ -124,7 +126,7 @@ export class ChatAbuseGuard {
       const r = this.#risk.add(subject, RiskSignal.RANGE_ABUSE);
       this.#audit.security("BAD_INPUT", { chatId, riskLevel: r.level });
       this.#metrics.incr("abuse:deny-usage");
-      return { action: "deny-usage", reply: "usage: /pool · /task <id> · /status · /limits · /help" };
+      return { action: "deny-usage", reply: "usage: /menu · /pool · /task <id> · /status · /help" };
     }
     // The cost is what the action really costs in RPC. It comes from the command the text
     // names, unless the caller states it outright: a button press can do more than the

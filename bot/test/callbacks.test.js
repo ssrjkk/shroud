@@ -12,7 +12,7 @@ import { poolPage, POOL_PAGE_SIZE } from "../src/chain.js";
 import { parseCallback, callbackCost } from "../src/keyboards.js";
 import { parseCommand, loadAbuseConfig, COMMAND_COST } from "../src/abuse.mjs";
 import { createMemoryStore } from "../src/watchlist.js";
-import { createHandlers, routeCallback, replyText } from "../src/index.js";
+import { createHandlers, routeCallback, replyText, normalizeInput } from "../src/index.js";
 
 const view = (id) => ({
   taskId: String(id),
@@ -71,8 +71,11 @@ test("routeCallback pages the pool without re-reading the count twice", async ()
   const chain = stubChain(25);
   const out = await routeCallback(parseCallback("p:2"), { chain, config: {}, store: createMemoryStore(), chatId: 1 });
   assert.ok(out.text.includes("page 2/3"));
-  assert.ok(out.markup.inline_keyboard.at(-1).some((b) => b.callback_data === "p:1"));
-  assert.ok(out.markup.inline_keyboard.at(-1).some((b) => b.callback_data === "p:3"));
+  // The pager row sits above the mode/language row: find it by content, not position.
+  const nav = out.markup.inline_keyboard.find((r) => r.some((b) => b.callback_data === "p:1"));
+  assert.ok(nav && nav.some((b) => b.callback_data === "p:3"));
+  // ...and the prefs row is last.
+  assert.ok(out.markup.inline_keyboard.at(-1).some((b) => String(b.callback_data).startsWith("m:")));
   assert.equal(chain.calls.filter((c) => c === "taskCount").length, 1);
 });
 
@@ -111,11 +114,113 @@ test("status refresh re-renders with a keyboard", async () => {
   assert.equal(out.markup.inline_keyboard[0][0].callback_data, "s");
 });
 
+test("lim/help callbacks render their screens with working toggles", async () => {
+  const chain = stubChain(0);
+  const store = createMemoryStore();
+  const lim = await routeCallback(parseCallback("lim"), { chain, config: {}, store, chatId: 1 });
+  assert.ok(lim.text.includes("Not externally audited") || lim.text.includes("Внешнего аудита"));
+  // Mode/language toggles stay on the limits screen instead of jumping away.
+  const limToggled = await routeCallback(parseCallback("m:lim"), { chain, config: {}, store, chatId: 1, langCode: "en" });
+  assert.ok(limToggled.text.includes("Not externally audited") || limToggled.text.includes("Внешнего аудита"));
+  const help = await routeCallback(parseCallback("help"), { chain, config: {}, store, chatId: 1 });
+  assert.ok(help.text.includes("/limits"));
+});
+
+test("verifier toggles flip the per-chat flag with a toast", async () => {
+  const store = createMemoryStore();
+  const chain = stubChain(0);
+  const t = toast();
+  const global = { commitMismatch: true, disputes: true, keyRotation: true, treasury: true, verifierRotation: true };
+  const out = await routeCallback(parseCallback("A:ver"), { chain, config: { alerts: global }, store, chatId: 1, ...t });
+  assert.ok(t.seen.some((m) => m.includes("verifier off")));
+  assert.ok(out.text.includes("Settings") || out.text.includes("Настройки"));
+  assert.ok(out.text.includes("❌"));
+});
+
+test("settings toggles stay in settings, alerts toggles stay in alerts", async () => {
+  const store = createMemoryStore();
+  const chain = stubChain(0);
+  const t = toast();
+  const global = { commitMismatch: true, disputes: true, keyRotation: true, treasury: true };
+  const ctx = { chain, config: { alerts: global }, store, chatId: 1, ...t };
+  const viaSettings = await routeCallback(parseCallback("A:disp"), ctx);
+  assert.ok(t.seen.some((m) => m.includes("disputes off")));
+  assert.ok(viaSettings.text.includes("Settings") || viaSettings.text.includes("Настройки"));
+  const viaAlerts = await routeCallback(parseCallback("a:mm"), ctx);
+  assert.ok(viaAlerts.text.includes("Alerts for this chat") || viaAlerts.text.includes("Алерты этого чата"));
+});
+
+test("normalizeInput maps RU aliases, bare ids and RU role names", () => {
+  assert.equal(normalizeInput("/статус"), "/status");
+  assert.equal(normalizeInput("/таск 12"), "/task 12");
+  assert.equal(normalizeInput("12"), "/task 12");
+  assert.equal(normalizeInput("/роль покупатель"), "/role buyer");
+  assert.equal(normalizeInput("/role контрибьютор"), "/role contrib");
+  assert.equal(normalizeInput("/роль нода"), "/role node");
+  assert.equal(normalizeInput("/роль наблюдатель"), "/role watch");
+  // Unknown input passes through untouched for /help fallback.
+  assert.equal(normalizeInput("/nope"), "/nope");
+});
+
+test("watchlist, unwatch and missing tasks carry a way back", async () => {
+  const store = createMemoryStore();
+  const chain = stubChain(0);
+  const h = createHandlers(chain, { alerts: {} }, { store });
+  await h.watch(["7"], { chatId: 1 });
+  const list = await h.watchlist([], { chatId: 1 });
+  assert.ok(list.markup.inline_keyboard.flat().some((b) => b.callback_data === "menu"));
+  const unwatched = await h.unwatch(["7"], { chatId: 1 });
+  assert.ok(unwatched.markup.inline_keyboard.flat().some((b) => b.callback_data === "menu"));
+  const missing = createHandlers({ ...stubChain(0), task: async () => null }, {}, { store });
+  const gone = await missing.task(["999"], { chatId: 1 });
+  assert.ok(replyText(gone).includes("no task with id"));
+  assert.ok(gone.markup.inline_keyboard.flat().some((b) => b.callback_data === "menu"));
+});
+
 test("pool command accepts a page argument", async () => {
   const chain = stubChain(25);
   const { pool } = createHandlers(chain, {}, {});
   assert.ok(replyText(await pool([])).includes("page 1/3") || replyText(await pool([])).includes("Task pool"));
   assert.ok(replyText(await pool(["2"])).includes("page 2/3"));
+});
+
+test("empty pool and help keep navigation", async () => {
+  const { pool, help } = createHandlers(stubChain(0), {}, { store: createMemoryStore() });
+  const empty = await pool([]);
+  assert.ok(replyText(empty).includes("no tasks"));
+  assert.ok(empty.markup.inline_keyboard.flat().some((b) => b.callback_data === "menu"));
+  assert.ok(replyText(await help([])).includes("/статус"));
+});
+
+test("pool and task scale money by the escrow token, not hardcoded 18", async () => {
+  const six = {
+    ...stubChain(1),
+    task: async (id) => ({ ...view(id), budget: 1_500_000_000n, locked: 250_000_000n }),
+    escrowDecimals: async () => 6,
+  };
+  const h = createHandlers(six, {}, { store: createMemoryStore() });
+  assert.ok(replyText(await h.pool([])).includes("1500"), "pool budget at 6dp");
+  assert.ok(replyText(await h.task(["1"], { chatId: 1 })).includes("1500"), "task budget at 6dp");
+  // No escrowDecimals on the reader (old stubs): fail-soft to 18.
+  const bare = createHandlers(stubChain(1), {}, { store: createMemoryStore() });
+  assert.ok(replyText(await bare.pool([])).includes("0"), "18dp default renders sub-wei dust as 0");
+});
+
+test("pro/simple/lang confirmations and usage errors carry a way back", async () => {
+  const store = createMemoryStore();
+  const h = createHandlers(stubChain(0), {}, { store });
+  for (const out of [
+    await h.pro([], { chatId: 1 }),
+    await h.simple([], { chatId: 1 }),
+    await h.lang(["ru"], { chatId: 1 }),
+    await h.lang(["xx"], { chatId: 1 }),
+    await h.task([], { chatId: 1 }),
+    await h.task(["abc"], { chatId: 1 }),
+    await h.watch([], { chatId: 1 }),
+    await h.unwatch(["abc"], { chatId: 1 }),
+  ]) {
+    assert.ok(out.markup.inline_keyboard.flat().some((b) => b.callback_data === "menu"), replyText(out).slice(0, 60));
+  }
 });
 
 test("watch commands validate before touching state", async () => {
@@ -149,6 +254,9 @@ test("callbackCost matches the abuse-guard price of the work the button does", (
     ["u:42", "/task 42"],
     ["s", "/status"],
     ["a:disp", "/alerts"],
+    ["A:disp", "/alerts"],
+    ["a:ver", "/alerts"],
+    ["A:ver", "/alerts"],
   ];
   for (const [callback, text] of cases) {
     const parsed = parseCallback(callback);

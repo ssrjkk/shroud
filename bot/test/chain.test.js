@@ -337,7 +337,7 @@ test("statusOf and epochWinner pass values through", async (t) => {
   assert.equal((await reader.epochWinner(1, 0)).toLowerCase(), NODE_A);
 });
 
-test("rotationEvents surfaces proposals and executions with no pending queue", async (t) => {
+test("rotationEvents surfaces the full lifecycle with no pending queue", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
   const np = ifaces.networkParams;
   const logFor = (name, seed) => {
@@ -358,13 +358,20 @@ test("rotationEvents surfaces proposals and executions with no pending queue", a
       removed: false,
     };
   };
-  routes.logs = [logFor("RotationProposed", 400), logFor("RotationExecuted", 410)];
+  routes.logs = [
+    logFor("RotationProposed", 400),
+    logFor("RotationApproved", 405),
+    logFor("RotationCancelledEvent", 408),
+    logFor("RotationExecuted", 410),
+  ];
   routes.calls.set(
     np.getFunction("rotationPending").selector,
     np.encodeFunctionResult("rotationPending", [false])
   );
   const got = await reader.rotationEvents(100, 300);
   assert.equal(got.proposed.length, 1);
+  assert.equal(got.approved.length, 1);
+  assert.equal(got.cancelled.length, 1);
   assert.equal(got.executed.length, 1);
   assert.equal(got.pending, null);
 });
@@ -405,6 +412,81 @@ test("treasuryEvents surfaces the proposal, the change and the cancellation", as
   assert.equal(got[2].args.dropped.toLowerCase(), NODE_B.toLowerCase());
 });
 
+test("verifierEvents surfaces the proposal, the rotation and the cancellation", async (t) => {
+  const { reader, routes, ifaces } = await setup(t);
+  const vreader = new ChainReader(reader.provider, ifaces, {
+    cipherTask: TASK,
+    paymentVault: VAULT,
+    networkParams: PARAMS,
+    verifier: "0x4444444444444444444444444444444444444444",
+  });
+  const vf = ifaces.verifier;
+  const logFor = (name, seed) => {
+    const frag = vf.getEvent(name);
+    const enc = vf.encodeEventLog(
+      frag,
+      frag.inputs.map((c, i) => fill(c, seed + i))
+    );
+    return {
+      address: "0x4444444444444444444444444444444444444444",
+      topics: enc.topics,
+      data: enc.data,
+      blockNumber: 200,
+      blockHash: "0x" + "2".repeat(64),
+      transactionHash: "0x" + "3".repeat(64),
+      transactionIndex: 0,
+      index: 0,
+      removed: false,
+    };
+  };
+  routes.logs = [
+    logFor("VerifierRotationProposed", 400),
+    logFor("VerifierRotationCancelled", 410),
+    logFor("VerifierRotated", 420),
+  ];
+  const got = await vreader.verifierEvents(100, 300);
+  assert.equal(got.proposed.length, 1);
+  assert.equal(got.cancelled.length, 1);
+  assert.equal(got.rotated.length, 1);
+});
+
+test("pendingVerifierRotation maps the queued verifier, null when empty", async (t) => {
+  const { reader, routes, ifaces } = await setup(t);
+  const vreader = new ChainReader(reader.provider, ifaces, {
+    cipherTask: TASK,
+    paymentVault: VAULT,
+    networkParams: PARAMS,
+    verifier: "0x4444444444444444444444444444444444444444",
+  });
+  const vf = ifaces.verifier;
+  routes.calls.set(
+    vf.getFunction("pendingRotation").selector,
+    vf.encodeFunctionResult("pendingRotation", [NODE_A, 1234n])
+  );
+  const got = await vreader.pendingVerifierRotation();
+  assert.equal(got.to.toLowerCase(), NODE_A.toLowerCase());
+  assert.equal(got.executableAt, 1234);
+  // Zero address means no queue, not a verifier.
+  routes.calls.set(
+    vf.getFunction("pendingRotation").selector,
+    vf.encodeFunctionResult("pendingRotation", ["0x" + "0".repeat(40), 0n])
+  );
+  const vreader2 = new ChainReader(reader.provider, ifaces, {
+    cipherTask: TASK,
+    paymentVault: VAULT,
+    networkParams: PARAMS,
+    verifier: "0x4444444444444444444444444444444444444444",
+  });
+  assert.equal(await vreader2.pendingVerifierRotation(), null);
+  // Unconfigured verifier: no RPC at all.
+  const bare = new ChainReader(reader.provider, ifaces, {
+    cipherTask: TASK,
+    paymentVault: VAULT,
+    networkParams: PARAMS,
+  });
+  assert.equal(await bare.pendingVerifierRotation(), null);
+});
+
 test("pendingRotation maps the queued rotation by name", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
   const np = ifaces.networkParams;
@@ -419,6 +501,37 @@ test("pendingRotation maps the queued rotation by name", async (t) => {
   assert.equal(got.expectedHash, "0x" + (501).toString(16).padStart(64, "0"));
   assert.equal(got.proposer.toLowerCase(), ("0x" + (502).toString(16).padStart(40, "0")).toLowerCase());
   assert.equal(got.approver.toLowerCase(), ("0x" + (503).toString(16).padStart(40, "0")).toLowerCase());
+});
+
+test("escrowDecimals reads the token scale once, then serves the cache", async (t) => {
+  const { reader, routes, ifaces } = await setup(t);
+  const TOKEN = "0x4444444444444444444444444444444444444444";
+  routes.calls.set(
+    ifaces.cipherTask.getFunction("escrowToken").selector,
+    ifaces.cipherTask.encodeFunctionResult("escrowToken", [TOKEN])
+  );
+  const erc20 = new ethers.Interface(["function decimals() view returns (uint8)"]);
+  routes.calls.set(
+    erc20.getFunction("decimals").selector,
+    erc20.encodeFunctionResult("decimals", [6])
+  );
+  assert.equal(await reader.escrowDecimals(), 6);
+  const hits = routes.hits;
+  assert.equal(await reader.escrowDecimals(), 6);
+  assert.equal(routes.hits, hits, "second read served from cache, no RPC");
+});
+
+test("escrowDecimals fails soft to 18 when the token is unreadable", async (t) => {
+  const { reader } = await setup(t);
+  // No routes: escrowToken() decodes "0x" and throws.
+  assert.equal(await reader.escrowDecimals(), 18);
+  // Unconfigured contract: no RPC at all, still 18.
+  const bare = new ChainReader(reader.provider, makeInterfaces(), {
+    cipherTask: null,
+    paymentVault: null,
+    networkParams: null,
+  });
+  assert.equal(await bare.escrowDecimals(), 18);
 });
 
 test("connect fails fast on a dead RPC instead of hanging (RPC_TIMEOUT_MS)", async (t) => {

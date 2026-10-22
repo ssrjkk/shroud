@@ -21,11 +21,14 @@ const ENV_KEYS = [
   "CIPHER_TASK_ADDRESS",
   "PAYMENT_VAULT_ADDRESS",
   "NETWORK_PARAMS_ADDRESS",
+  "VERIFIER_ADDRESS",
   "POLL_INTERVAL_SECONDS",
   "CATCHUP_BLOCKS",
   "ALERT_COMMIT_MISMATCH",
   "ALERT_DISPUTES",
   "ALERT_KEY_ROTATION",
+  "ALERT_TREASURY",
+  "ALERT_VERIFIER_ROTATION",
   "HTML_MODE",
 ];
 
@@ -112,6 +115,8 @@ test("a missing address becomes null, meaning 'not configured'", async () => {
   const { ok } = await load(BASE);
   assert.equal(ok.cipherTask, null);
   assert.equal(ok.paymentVault, null);
+  assert.equal(ok.verifier, null);
+  assert.equal(ok.alerts.verifierRotation, true);
   // Not an error: the commands must be able to say "not configured" instead of
   // pretending the pool is empty.
 });
@@ -153,6 +158,7 @@ test("configuredContracts reports what is missing for /status", async () => {
   const { ok } = await load(BASE);
   const { configuredContracts } = await import("../src/config.js");
   const list = configuredContracts(ok);
-  assert.equal(list.length, 3);
+  assert.equal(list.length, 4);
   assert.ok(list.every((c) => c.configured === false));
+  assert.ok(list.some((c) => c.name === "ProofVerifier"));
 });

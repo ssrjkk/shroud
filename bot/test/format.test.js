@@ -19,6 +19,7 @@ import {
   renderDispute,
   renderRotation,
   renderTreasury,
+  renderVerifier,
   renderLimits,
   renderHelp,
   htmlEscape,
@@ -126,6 +127,53 @@ test("renderStatus distinguishes 'not configured' from 'unreadable' from 'read'"
   );
   assert.ok(good.includes("key version"));
   assert.ok(good.includes("a rotation is pending"));
+  assert.ok(good.includes("approved by"));
+  const awaiting = renderStatus(
+    {
+      chainId: 31337,
+      blockNumber: 12,
+      networkParams: {
+        chainId: 31337,
+        keyVersion: 4,
+        fhePublicKeyHash: ZERO32,
+        committeeThreshold: 3,
+        committeeSize: 7,
+        maxProofBytes: 48576,
+        maxCiphertextBytes: 1048576,
+        maxFeatures: 512,
+        activatedAt: 0,
+        active: true,
+      },
+      pendingRotation: {
+        scheduledAt: 1234,
+        expectedHash: ZERO32,
+        proposer: "0x1234567890abcdef1234567890abcdef12345678",
+        approver: "0x" + "0".repeat(40),
+      },
+    },
+    { cipherTask: "0x1234567890abcdef1234567890abcdef12345678", paymentVault: null, networkParams: "0x123" }
+  );
+  assert.ok(awaiting.includes("awaiting approver"));
+});
+
+test("simple status never leaks a !missing-key! marker", () => {
+  // The EN "status.simpleLine" key was once typed with a slash, so every
+  // English simple-mode /status rendered a literal !status.simpleLine!.
+  // RU worked, and the i18n parity test was blind to it (EN fallback).
+  for (const lang of ["en", "ru"]) {
+    for (const pending of [
+      null,
+      { scheduledAt: 1, expectedHash: ZERO32, proposer: ZERO20, approver: ZERO20 },
+    ]) {
+      const out = renderStatus(
+        { chainId: 1, blockNumber: 2, networkParams: null, pendingRotation: pending },
+        { cipherTask: null, paymentVault: null, networkParams: null },
+        lang,
+        "simple"
+      );
+      assert.ok(!out.includes("!"), `${lang} simple status leaks a key`);
+    }
+  }
 });
 
 test("renderTask flags two different digests in one epoch", () => {
@@ -148,6 +196,17 @@ test("renderTask flags two different digests in one epoch", () => {
     "42"
   );
   assert.ok(split.includes("2 different digests for one epoch"));
+});
+
+test("renderTask caps a long commit list instead of risking truncation", () => {
+  const many = Array.from({ length: 10 }, (_, i) => ({
+    node: "0x" + String(i + 1).repeat(40).slice(0, 40),
+    traceDigest: ZERO32,
+    verified: true,
+  }));
+  const out = renderTask({ task, commits: many, winner: null, quorum: null }, "42");
+  assert.ok(out.includes("more commits"));
+  assert.ok(out.length < 4096);
 });
 
 test("renderTask shows the proof reference when the reader provides it", () => {
@@ -180,6 +239,28 @@ test("renderTask shows quorum progress as have over need", () => {
   const out = renderTask({ task, commits: [], winner: null, quorum: { need: 3, have: 1 } }, "42");
   assert.ok(out.includes("1/3"), "progress shown");
   assert.ok(!out.includes("NaN"), "never NaN");
+});
+
+test("money scales by escrow decimals, not a hardcoded 18", () => {
+  // The devnet escrow token is 6-decimal USDC-style: 1_000_000_000 units is
+  // 1000 tokens, but 18-decimal math renders it "0".
+  const rich = { ...task, budget: 1_000_000_000n, locked: 250_000_000n };
+  const out6 = renderTask({ task: rich, commits: [], winner: null, quorum: null }, "42", "en", "pro", 6);
+  assert.ok(out6.includes("<code>1000</code>"), "budget at 6dp");
+  assert.ok(out6.includes("<code>250</code>"), "locked at 6dp");
+  const out18 = renderTask({ task: rich, commits: [], winner: null, quorum: null }, "42");
+  assert.ok(out18.includes("<code>0</code>"), "18dp default renders sub-wei dust as 0");
+  const pool6 = renderPool(
+    [{ ...task, taskId: "9", budget: 2_000_000n, status: 2, statusName: "Collecting", contributors: 1 }],
+    1, null, "en", "pro", 6
+  );
+  assert.ok(pool6.includes("<code>2</code>"), "pool budget at 6dp");
+  const settled = renderDispute(
+    { name: "TaskSettled", args: { taskId: 1n, userPool: 2_000_000n, nodePool: 1_000_000n, treasury: 500_000n }, blockNumber: 7, txHash: ZERO32 },
+    "en", 6
+  );
+  assert.ok(settled.includes("<code>2</code>"), "contributors at 6dp");
+  assert.ok(settled.includes("<code>0.5</code>"), "treasury at 6dp");
 });
 
 test("mismatchArgs carries the previous digest to the renderer", () => {
@@ -364,8 +445,43 @@ test("rotation alerts warn in both directions", () => {
     scheduledAt: 99,
   });
   assert.ok(proposed.includes("do not upload anything"));
+  const approved = renderRotation("approved", { approver: ZERO20, expectedHash: ZERO32 });
+  assert.ok(approved.includes("timelock"));
+  const cancelled = renderRotation("cancelled", { scheduledAt: 99 });
+  assert.ok(cancelled.includes("never activate"));
   const executed = renderRotation("executed", { keyVersion: 5, fhePublicKeyHash: ZERO32 });
   assert.ok(executed.includes("key-substitution attack"));
+});
+
+test("verifier alerts warn in all directions", () => {
+  const proposed = renderVerifier("proposed", { to: ZERO20, executableAt: 99 });
+  assert.ok(proposed.includes("not effective yet"));
+  assert.ok(proposed.includes("0x0000"));
+  const cancelled = renderVerifier("cancelled", { dropped: ZERO20 });
+  assert.ok(cancelled.includes("never activate"));
+  const executed = renderVerifier("executed", { from: ZERO20, to: ZERO20 });
+  assert.ok(executed.includes("permissive verifier pays fraudsters"));
+});
+
+test("renderStatus shows a queued verifier rotation only when configured", () => {
+  const view = {
+    chainId: 31337,
+    blockNumber: 12,
+    networkParams: null,
+    pendingRotation: null,
+    pendingVerifier: { to: ZERO20, executableAt: 99 },
+  };
+  const unconfigured = renderStatus(view, { cipherTask: null, paymentVault: null, networkParams: null }, "en", "pro");
+  assert.ok(!unconfigured.includes("Verifier rotation"), "no verifier screen without VERIFIER_ADDRESS");
+  const queued = renderStatus(
+    view,
+    { cipherTask: null, paymentVault: null, networkParams: null, verifier: "0x1234567890abcdef1234567890abcdef12345678" },
+    "en",
+    "pro"
+  );
+  assert.ok(queued.includes("Verifier rotation"));
+  assert.ok(queued.includes("executable at"));
+  assert.ok(queued.includes("ProofVerifier"));
 });
 
 test("treasury alerts say the window is still open, and where the money goes", () => {

@@ -15,12 +15,31 @@
  *   w:<id>          watch task
  *   u:<id>          unwatch task
  *   s               status refresh
- *   a:<key>         toggle a per-chat alert flag (mm | disp | rot)
+ *   h | menu        hub (h is the legacy start-screen opcode)
+ *   how             how-it-works screen
+ *   proto           geek protocol spec
+ *   set             settings screen
+ *   a               alerts screen
+ *   a:<key>         toggle a per-chat alert flag (mm | disp | rot | tre)
+ *   r:<role>        role guide (buyer | contrib | node | watcher)
+ *   m:<target>      flip simple/geek and re-render the target screen
+ *   l:<lang>:<target>  set language and re-render the target screen
+ *   lim             limits screen (honest limitations)
+ *   help            help screen (command map)
+ *   A:<key>         toggle a per-chat alert flag and stay in settings
+ *
+ * A <target> names the screen to re-render: s, h, menu, how, proto, set, a,
+ * lim, help, r:<role>, p:<page>, t:<id>. Everything stays far under the cap:
+ * the longest payload, a task re-render in the other language, is a dozen
+ * bytes.
  *
  * Builders return `{ text, reply_markup }`-ready `reply_markup` objects only;
  * rendering stays in format.js so keyboards never interpolate chain data
  * themselves (markup injection would render as broken buttons).
  */
+
+import { t } from "./i18n.js";
+import { isRole } from "./roles.js";
 
 export const CALLBACK_LIMIT = 64;
 
@@ -53,6 +72,14 @@ export function parseCallback(data) {
     return null;
   }
   if (data === "s") return { op: "s", arg: "" };
+  if (data === "h") return { op: "h", arg: "" };
+  if (data === "menu") return { op: "menu", arg: "" };
+  if (data === "how") return { op: "how", arg: "" };
+  if (data === "proto") return { op: "proto", arg: "" };
+  if (data === "set") return { op: "set", arg: "" };
+  if (data === "a") return { op: "a", arg: "" };
+  if (data === "lim") return { op: "lim", arg: "" };
+  if (data === "help") return { op: "help", arg: "" };
   const i = data.indexOf(":");
   if (i === -1) return null;
   const op = data.slice(0, i);
@@ -71,11 +98,54 @@ export function parseCallback(data) {
       if (!isTaskId(arg)) return null;
       return { op, arg };
     case "a":
-      if (arg !== "mm" && arg !== "disp" && arg !== "rot" && arg !== "tre") return null;
+    case "A":
+      // Lowercase toggles land on the alerts screen, uppercase ones stay in
+      // settings — same flags, different return address.
+      if (arg !== "mm" && arg !== "disp" && arg !== "rot" && arg !== "tre" && arg !== "ver") return null;
       return { op, arg };
+    case "r":
+      if (!isRole(arg)) return null;
+      return { op, arg };
+    case "m": {
+      // Re-render target after flipping simple/pro: s, h, a, r:<role>,
+      // p:<page>, t:<id>. Same grammar as a target, checked twice — once
+      // here, once where it is rendered.
+      if (!isTarget(arg)) return null;
+      return { op, arg };
+    }
+    case "l": {
+      // Language switch with a re-render target: "<lang>:<target>".
+      const j = arg.indexOf(":");
+      if (j === -1) return null;
+      const lang = arg.slice(0, j);
+      const target = arg.slice(j + 1);
+      if (lang !== "ru" && lang !== "en") return null;
+      if (!isTarget(target)) return null;
+      return { op, arg };
+    }
     default:
       return null;
   }
+}
+
+/**
+ * Re-render target grammar shared by `m:` and `l:` payloads: every bare
+ * screen plus r:<role> (guide), p:<page> (pool page), t:<id> (task).
+ * Anything else is not a screen and cannot be re-rendered.
+ */
+export function isTarget(s) {
+  if (
+    s === "s" || s === "h" || s === "a" || s === "menu" || s === "how" ||
+    s === "proto" || s === "set" || s === "lim" || s === "help"
+  ) return true;
+  const i = s.indexOf(":");
+  if (i === -1) return false;
+  const op = s.slice(0, i);
+  const arg = s.slice(i + 1);
+  if (op === "r") return isRole(arg);
+  if (op === "p") return /^\d{1,4}$/.test(arg) && Number(arg) >= 1 && Number(arg) <= 1000;
+  if (op === "t") return isTaskId(arg);
+  return false;
 }
 
 /** Map a parsed callback to the abuse-guard cost of the work it triggers. */
@@ -96,6 +166,28 @@ export function callbackCost(parsed) {
       // command (1) let a chat buy five times the intended RPC amplification - exactly
       // what the per-chat budget exists to stop.
       return 5;
+    case "m":
+    case "l": {
+      // A mode/language flip re-renders its target, so it costs what the
+      // target screen costs: pool pages are the only expensive ones.
+      const target = parsed.op === "m" ? parsed.arg : parsed.arg.slice(parsed.arg.indexOf(":") + 1);
+      const top = target.split(":")[0];
+      if (top === "p") return 15;
+      if (top === "t") return 5;
+      if (top === "s") return 4;
+      return 1;
+    }
+    case "h":
+    case "r":
+    case "menu":
+    case "how":
+    case "proto":
+    case "set":
+    case "lim":
+    case "help":
+      return 1; // static screens: no RPC at all
+    case "A":
+      return 1; // settings toggle: local state only, like "a"
     default:
       return 1; // the alert toggles touch local state only
   }
@@ -105,71 +197,252 @@ const button = (text, callback_data) => ({ text, callback_data });
 
 /**
  * Pool keyboard: up to 4 task buttons per row (short ids stay readable),
- * plus a pager row. `page` is 1-based; `pages` is the total page count.
+ * plus a pager row, first/last jump buttons on deep pools, and a hub row.
+ * `page` is 1-based; `pages` is the total page count. The last row flips
+ * simple/geek and RU/EN in place (`origin` re-renders this same page).
  */
-export function poolKeyboard(ids, page, pages) {
+export function poolKeyboard(ids, page, pages, lang = "en", mode = "pro") {
   const rows = [];
   for (let i = 0; i < ids.length; i += 4) {
     rows.push(ids.slice(i, i + 4).map((id) => button(`#${String(id)}`, encodeCallback("t", String(id)))));
   }
   const nav = [];
-  if (page > 1) nav.push(button("‹ prev", encodeCallback("p", String(page - 1))));
-  if (page < pages) nav.push(button("next ›", encodeCallback("p", String(page + 1))));
+  if (page > 1) nav.push(button(t(lang, "btn.prev"), encodeCallback("p", String(page - 1))));
+  if (page < pages) nav.push(button(t(lang, "btn.next"), encodeCallback("p", String(page + 1))));
   if (nav.length) rows.push(nav);
+  // Deep pools: walking ‹ prev / next › one page at a time is tedious, so
+  // offer direct jumps — but only when they skip at least one page, otherwise
+  // they duplicate prev/next. Labels are plain numbers, same in both languages.
+  const jumps = [];
+  if (page > 2) jumps.push(button(`« 1`, encodeCallback("p", "1")));
+  if (page < pages - 1) jumps.push(button(`${pages} »`, encodeCallback("p", String(pages))));
+  if (jumps.length) rows.push(jumps);
+  if (rows.length) rows.push([button(t(lang, "btn.menu"), "menu"), button(t(lang, "btn.how"), "how")]);
+  if (rows.length) rows.push(prefsRow(lang, mode, `p:${page}`));
   return rows.length ? { inline_keyboard: rows } : undefined;
 }
 
 /**
- * Task keyboard: refresh, watch/unwatch toggle, and neighbours for
- * prev/next navigation (prev/next may be null at the pool edges).
+ * Task keyboard: refresh, watch/unwatch toggle, neighbours for prev/next
+ * navigation (prev/next may be null at the pool edges), then the mode/language
+ * row so the reader can switch depth without leaving the task.
  */
-export function taskKeyboard(taskId, { watched, prevId = null, nextId = null } = {}) {
+export function taskKeyboard(taskId, { watched, prevId = null, nextId = null, lang = "en", mode = "pro" } = {}) {
   const id = String(taskId);
   const rows = [
     [
-      button("⟳ refresh", encodeCallback("t", id)),
+      button(t(lang, "btn.refresh"), encodeCallback("t", id)),
       watched
-        ? button("★ unwatch", encodeCallback("u", id))
-        : button("☆ watch", encodeCallback("w", id)),
+        ? button(t(lang, "btn.unwatch"), encodeCallback("u", id))
+        : button(t(lang, "btn.watch"), encodeCallback("w", id)),
     ],
   ];
   const nav = [];
-  if (prevId !== null) nav.push(button("‹ prev", encodeCallback("t", String(prevId))));
-  nav.push(button("pool", encodeCallback("p", "1")));
-  if (nextId !== null) nav.push(button("next ›", encodeCallback("t", String(nextId))));
+  if (prevId !== null) nav.push(button(t(lang, "btn.prev"), encodeCallback("t", String(prevId))));
+  nav.push(button(t(lang, "btn.pool"), encodeCallback("p", "1")));
+  if (nextId !== null) nav.push(button(t(lang, "btn.next"), encodeCallback("t", String(nextId))));
   rows.push(nav);
+  rows.push([button(t(lang, "btn.menu"), "menu"), button(t(lang, "btn.how"), "how")]);
+  rows.push(prefsRow(lang, mode, `t:${id}`));
   return { inline_keyboard: rows };
 }
 
-/** Status keyboard: refresh only. Everything else on /status is a snapshot. */
-export function statusKeyboard() {
-  return { inline_keyboard: [[button("⟳ refresh", "s")]] };
+/** Status keyboard: refresh, hub links, plus the mode/language row. */
+export function statusKeyboard(lang = "en", mode = "pro") {
+  return {
+    inline_keyboard: [
+      [button(t(lang, "btn.refresh"), "s")],
+      [button(t(lang, "btn.menu"), "menu"), button(t(lang, "btn.how"), "how")],
+      prefsRow(lang, mode, "s"),
+    ],
+  };
 }
 
-const ALERT_LABELS = { mm: "mismatch", disp: "disputes", rot: "rotation", tre: "treasury" };
+const ALERT_LABELS = { mm: "alerts.mm", disp: "alerts.disp", rot: "alerts.rot", tre: "alerts.tre", ver: "alerts.ver" };
 
 /**
  * Alert-override keyboard: one toggle button per flag showing its effective
- * state, plus a refresh back to /status. `effective` maps mm/disp/rot/tre to
- * booleans already resolved against the global config.
+ * state, plus a refresh back to /status. `effective` maps mm/disp/rot/tre/ver
+ * to booleans already resolved against the global config. Five toggles ride
+ * in 3+2 rows — five across would shrink every button to tap-target noise.
  */
-export function alertsKeyboard(effective) {
-  const rows = [
-    Object.entries(ALERT_LABELS).map(([key, label]) =>
-      button(`${effective[key] ? "✅" : "❌"} ${label}`, encodeCallback("a", key))
-    ),
-  ];
-  rows.push([button("status", "s")]);
+export function alertsKeyboard(effective, lang = "en", mode = "pro") {
+  const all = Object.entries(ALERT_LABELS).map(([key, labelKey]) =>
+    button(`${effective[key] ? "✅" : "❌"} ${t(lang, labelKey)}`, encodeCallback("a", key))
+  );
+  const rows = [all.slice(0, 3), all.slice(3)];
+  rows.push([button(t(lang, "btn.status"), "s")]);
+  rows.push([button(t(lang, "btn.menu"), "menu"), button(t(lang, "btn.settings"), "set")]);
+  rows.push(prefsRow(lang, mode, "a"));
   return { inline_keyboard: rows };
 }
 
 /** Deep link from a task-scoped alert back to the task view. */
-export function taskLinkKeyboard(taskId) {
+export function taskLinkKeyboard(taskId, lang = "en") {
   const id = String(taskId);
-  return { inline_keyboard: [[button(`view task #${id}`, encodeCallback("t", id))]] };
+  return { inline_keyboard: [[button(t(lang, "btn.viewTask", { id }), encodeCallback("t", id))]] };
 }
 
 /** Deep link from a rotation alert back to /status. */
-export function rotationKeyboard() {
-  return { inline_keyboard: [[button("view status", "s")]] };
+export function rotationKeyboard(lang = "en") {
+  return { inline_keyboard: [[button(t(lang, "btn.viewStatus"), "s")]] };
+}
+
+/**
+ * One row that flips simple/pro and RU/EN in place. `origin` names the screen
+ * to re-render (s, h, a, r:<role>, p:<n>, t:<id>), so the toggle never kicks
+ * the reader out of context.
+ */
+export function prefsRow(lang, mode, origin) {
+  const other = lang === "ru" ? "en" : "ru";
+  return [
+    button(t(lang, mode === "simple" ? "btn.modeSimple" : "btn.modePro"), `m:${origin}`),
+    button(other === "ru" ? "RU" : "EN", `l:${other}:${origin}`),
+  ];
+}
+
+/**
+ * Start / menu screen: the hub.
+ *
+ * First two rows jump to live data (status, pool) and to explainers
+ * (how, protocol). Then trust (limits, alerts) and the four role guides.
+ * Last row flips simple/geek + RU/EN in place. Extended rows never break
+ * old tests — they only assert `includes` for roles and prefs.
+ */
+export function startKeyboard(lang = "en", mode = "pro") {
+  return {
+    inline_keyboard: [
+      [
+        button(t(lang, "btn.statusLong"), "s"),
+        button(t(lang, "btn.poolLong"), "p:1"),
+      ],
+      [
+        button(t(lang, "btn.how"), "how"),
+        button(t(lang, "btn.proto"), "proto"),
+      ],
+      [
+        button(t(lang, "btn.alertsLong"), "a"),
+        button(t(lang, "btn.limits"), "lim"),
+      ],
+      [
+        button(t(lang, "btn.roleBuyer"), "r:buyer"),
+        button(t(lang, "btn.roleContrib"), "r:contrib"),
+      ],
+      [
+        button(t(lang, "btn.roleNode"), "r:node"),
+        button(t(lang, "btn.roleWatcher"), "r:watch"),
+      ],
+      prefsRow(lang, mode, "h"),
+    ],
+  };
+}
+
+/** Alias: /menu renders the same hub as /start (without touching prefs). */
+export function menuKeyboard(lang = "en", mode = "pro") {
+  return startKeyboard(lang, mode);
+}
+
+/** How-it-works screen: next steps + back to hub. */
+export function howKeyboard(lang = "en", mode = "pro") {
+  return {
+    inline_keyboard: [
+      [
+        button(t(lang, "btn.proto"), "proto"),
+        button(t(lang, "btn.poolLong"), "p:1"),
+      ],
+      [
+        button(t(lang, "btn.menu"), "menu"),
+        button(t(lang, "btn.limits"), "lim"),
+      ],
+      prefsRow(lang, mode, "how"),
+    ],
+  };
+}
+
+/** Protocol (geek) screen. */
+export function protoKeyboard(lang = "en", mode = "pro") {
+  return {
+    inline_keyboard: [
+      [
+        button(t(lang, "btn.how"), "how"),
+        button(t(lang, "btn.limits"), "lim"),
+      ],
+      [
+        button(t(lang, "btn.statusLong"), "s"),
+        button(t(lang, "btn.menu"), "menu"),
+      ],
+      prefsRow(lang, mode, "proto"),
+    ],
+  };
+}
+
+/** Settings screen: alert toggles + hub links + prefs row. */
+export function settingsKeyboard(effective, lang = "en", mode = "pro") {
+  // Uppercase "A" toggles: the flip stays in settings instead of jumping to
+  // the alerts screen (see routeCallback). Same flags, same cost.
+  const names = { mm: t(lang, "alerts.mm"), disp: t(lang, "alerts.disp"), rot: t(lang, "alerts.rot"), tre: t(lang, "alerts.tre"), ver: t(lang, "alerts.ver") };
+  return {
+    inline_keyboard: [
+      [
+        button(`${effective?.mm ? "✅" : "❌"} ${names.mm}`, encodeCallback("A", "mm")),
+        button(`${effective?.disp ? "✅" : "❌"} ${names.disp}`, encodeCallback("A", "disp")),
+        button(`${effective?.rot ? "✅" : "❌"} ${names.rot}`, encodeCallback("A", "rot")),
+      ],
+      [
+        button(`${effective?.tre ? "✅" : "❌"} ${names.tre}`, encodeCallback("A", "tre")),
+        button(`${effective?.ver ? "✅" : "❌"} ${names.ver}`, encodeCallback("A", "ver")),
+      ],
+      [
+        button(t(lang, "btn.menu"), "menu"),
+        button(t(lang, "btn.statusLong"), "s"),
+      ],
+      prefsRow(lang, mode, "set"),
+    ],
+  };
+}
+
+/**
+ * Minimal hub row for terminal screens (confirmations, empty states): just a
+ * way back, no prefs row — there is no screen context worth preserving.
+ */
+export function navRow(lang = "en") {
+  return {
+    inline_keyboard: [
+      [button(t(lang, "btn.menu"), "menu"), button(t(lang, "btn.how"), "how")],
+    ],
+  };
+}
+
+/** Small hub-link row for help / limits screens. */
+export function hubLinkKeyboard(lang = "en", mode = "pro", origin = "h") {
+  return {
+    inline_keyboard: [
+      [
+        button(t(lang, "btn.menu"), "menu"),
+        button(t(lang, "btn.how"), "how"),
+      ],
+      prefsRow(lang, mode, origin),
+    ],
+  };
+}
+
+/** Role guide screen: switch guides in place, plus hub + mode/language rows. */
+export function roleKeyboard(lang = "en", mode = "pro", role = "buyer") {
+  return {
+    inline_keyboard: [
+      [
+        button(t(lang, "btn.roleBuyer"), "r:buyer"),
+        button(t(lang, "btn.roleContrib"), "r:contrib"),
+      ],
+      [
+        button(t(lang, "btn.roleNode"), "r:node"),
+        button(t(lang, "btn.roleWatcher"), "r:watch"),
+      ],
+      [
+        button(t(lang, "btn.menu"), "menu"),
+        button(t(lang, "btn.how"), "how"),
+      ],
+      prefsRow(lang, mode, `r:${role}`),
+    ],
+  };
 }

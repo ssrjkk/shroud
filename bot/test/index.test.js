@@ -9,7 +9,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeEvents, eventUid, commandFromVerdict, sendReply, shouldDeliverAlert, loadCursor, saveCursor, redactRpcUrl, MAX_SEEN_DIGESTS, createDispatcher } from "../src/index.js";
+import { dedupeEvents, eventUid, commandFromVerdict, sendReply, shouldDeliverAlert, loadCursor, saveCursor, redactRpcUrl, MAX_SEEN_DIGESTS, createDispatcher, escrowScale } from "../src/index.js";
 import { emptyState, addWatch, setAlertOverride } from "../src/watchlist.js";
 import os from "node:os";
 import path from "node:path";
@@ -40,6 +40,15 @@ test("dedupeEvents drops repeats and remembers everything observed", () => {
   // A reorged log has a different transaction hash: it is a different event.
   const aReorged = { txHash: "0xzzz", logIndex: 0 };
   assert.deepEqual(dedupeEvents([aReorged], seen), [aReorged]);
+});
+
+test("escrowScale takes the reader value, never throws, never absurd", async () => {
+  assert.equal(await escrowScale({ escrowDecimals: async () => 6 }), 6);
+  assert.equal(await escrowScale({}), 18);
+  assert.equal(await escrowScale(null), 18);
+  assert.equal(await escrowScale({ escrowDecimals: async () => { throw new Error("rpc down"); } }), 18);
+  assert.equal(await escrowScale({ escrowDecimals: async () => 300 }), 18);
+  assert.equal(await escrowScale({ escrowDecimals: async () => -1 }), 18);
 });
 
 test("dedupeEvents is order-stable across interleaved scans", () => {

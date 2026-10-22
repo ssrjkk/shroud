@@ -129,12 +129,20 @@ cp bot/.env.example bot/.env   # fill TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_IDS
 cd bot && npm ci && npm start
 ```
 
-Commands: `/pool`, `/task <id>`, `/status`, `/limits`, `/help`.
-`/status` also reports shed alerts and recent chain-read failures, so "empty
-pool" vs "RPC dead" stay distinguishable. Heavy commands cost budget
-(`/pool` 15/min-ish pool); over-quota chats get rate replies, then tarpit, then
-plausible shadowban answers without RPC. Replies go through the
-bounded send queue; `droppedSends` is visible in `/status`.
+Entry point: `/menu` (same hub as `/start`). Commands: `/status` (chain, key
+pin, pending rotation with approver state), `/pool` (12 tasks/page, newest
+first), `/task <id>` (spec, epoch commits, quorum), `/how` (60-second
+pipeline), `/protocol` (geek spec), `/role buyer|contributor|node|watcher`
+(3 steps in simple mode, contracts + SDK in geek mode), `/watch` +
+`/watchlist` (empty = everything), `/alerts` + `/settings` (per-chat flags),
+`/limits`, `/help`. RU aliases work (`/статус`, `/таск 12`), a bare `12`
+opens task 12. `/status` also reports shed alerts and recent chain-read
+failures, so "empty pool" vs "RPC dead" stay distinguishable. Heavy commands
+cost budget (`/pool` 15, `/task` 5, `/status` 4, rest 1); over-quota chats get
+rate replies, then tarpit, then plausible shadowban answers without RPC.
+Replies go through the bounded send queue; `droppedSends` is visible in
+`/status`. Every screen carries buttons — including `⌂ menu` — so the chat
+never dead-ends.
 
 ## 7. Browser lab
 

@@ -33,7 +33,15 @@ export const MAX_WATCHED_PER_CHAT = 200;
 export const MAX_CHATS_WITH_STATE = 10_000;
 
 /** Alert flag keys shared with keyboards.js (`a:<key>` toggle payloads). */
-export const ALERT_KEYS = ["mm", "disp", "rot", "tre"];
+export const ALERT_KEYS = ["mm", "disp", "rot", "tre", "ver"];
+
+/** Preference keys a chat may override. `lang`: "ru" | "en" | null (auto).
+ * `mode`: "simple" | "pro" | null (simple for onboarded chats, pro otherwise). */
+export const PREF_KEYS = ["lang", "mode"];
+export const PREF_VALUES = {
+  lang: ["ru", "en"],
+  mode: ["simple", "pro"],
+};
 
 /** Map alert keys to the global config flag names in config.js. */
 export function globalFlagFor(key) {
@@ -46,6 +54,8 @@ export function globalFlagFor(key) {
       return "keyRotation";
     case "tre":
       return "treasury";
+    case "ver":
+      return "verifierRotation";
     default:
       return null;
   }
@@ -61,6 +71,7 @@ function chatEntry(state, chatId) {
   const entry = state.chats[key];
   if (!Array.isArray(entry.watched)) entry.watched = [];
   if (!entry.alerts || typeof entry.alerts !== "object") entry.alerts = {};
+  if (!entry.prefs || typeof entry.prefs !== "object") entry.prefs = {};
   return entry;
 }
 
@@ -87,7 +98,13 @@ export function normaliseState(raw) {
         }
       }
     }
-    state.chats[chatId] = { watched, alerts };
+    const prefs = {};
+    if (entry.prefs && typeof entry.prefs === "object") {
+      for (const key of PREF_KEYS) {
+        if (PREF_VALUES[key].includes(entry.prefs[key])) prefs[key] = entry.prefs[key];
+      }
+    }
+    state.chats[chatId] = { watched, alerts, prefs };
   }
   return state;
 }
@@ -145,6 +162,8 @@ export function createMemoryStore(initial = emptyState()) {
     addWatch: (chatId, taskId) => addWatch(state, chatId, taskId),
     removeWatch: (chatId, taskId) => removeWatch(state, chatId, taskId),
     setAlert: (chatId, key, value) => setAlertOverride(state, chatId, key, value),
+    getPrefs: (chatId) => getPrefs(state, chatId),
+    setPref: (chatId, key, value) => setPref(state, chatId, key, value),
     save: async () => {},
   };
 }
@@ -172,6 +191,12 @@ export function createFileStore(file = WATCHLIST_FILE, initial = emptyState()) {
     setAlert: async (chatId, key, value) => {
       const res = setAlertOverride(state, chatId, key, value);
       await persist();
+      return res;
+    },
+    getPrefs: (chatId) => getPrefs(state, chatId),
+    setPref: async (chatId, key, value) => {
+      const res = setPref(state, chatId, key, value);
+      if (res.ok) await persist();
       return res;
     },
     save: persist,
@@ -237,7 +262,33 @@ export function effectiveAlerts(global, state, chatId) {
     disp: pick("disp", global.disputes),
     rot: pick("rot", global.keyRotation),
     tre: pick("tre", global.treasury),
+    ver: pick("ver", global.verifierRotation),
   };
+}
+
+/**
+ * Read a chat's prefs. Unknown chats get `{}` — callers apply their own
+ * defaults (autodetect language, simple mode for onboarded chats).
+ */
+export function getPrefs(state, chatId) {
+  const prefs = state.chats[String(chatId)]?.prefs;
+  return prefs && typeof prefs === "object" ? { ...prefs } : {};
+}
+
+/**
+ * Set one pref (`lang` | `mode`), validated against PREF_VALUES. Unknown keys
+ * and values are rejected, never stored. `null` clears back to default.
+ */
+export function setPref(state, chatId, key, value) {
+  if (!PREF_KEYS.includes(key)) return { ok: false };
+  if (value !== null && !PREF_VALUES[key].includes(value)) return { ok: false };
+  if (!state.chats[String(chatId)] && Object.keys(state.chats).length >= MAX_CHATS_WITH_STATE) {
+    return { ok: false };
+  }
+  const entry = chatEntry(state, chatId);
+  if (value === null) delete entry.prefs[key];
+  else entry.prefs[key] = value;
+  return { ok: true };
 }
 
 /**

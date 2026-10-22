@@ -23,6 +23,8 @@ import { TelegramBot } from "./telegram.js";
 import { ChatAbuseGuard, loadAbuseConfig } from "./abuse.mjs";
 import { ChainReader, makeInterfaces, poolPage } from "./chain.js";
 import { redactRpcUrl, scrubRpcSecret } from "./redact.js";
+import { t, pickLang, isLang } from "./i18n.js";
+import { renderRole, isRole, ROLE_ALIASES } from "./roles.js";
 import {
   renderStatus,
   renderPool,
@@ -35,6 +37,12 @@ import {
   renderHelp,
   renderWatchlist,
   renderAlerts,
+  renderStart,
+  renderMenu,
+  renderHow,
+  renderProtocol,
+  renderSettings,
+  renderAlert,
   htmlEscape,
 } from "./format.js";
 import {
@@ -45,6 +53,14 @@ import {
   alertsKeyboard,
   taskLinkKeyboard,
   rotationKeyboard,
+  startKeyboard,
+  menuKeyboard,
+  howKeyboard,
+  protoKeyboard,
+  settingsKeyboard,
+  hubLinkKeyboard,
+  navRow,
+  roleKeyboard,
   isTaskId,
   callbackCost,
 } from "./keyboards.js";
@@ -53,15 +69,26 @@ import {
   loadWatchlist,
   effectiveAlerts,
   passesWatchlist,
+  getPrefs,
+  setPref,
   ALERT_KEYS,
 } from "./watchlist.js";
 
 const CURSOR_FILE = resolve(ROOT, "state", "cursor.json");
 
 const COMMANDS = [
+  { command: "menu", description: "hub: status, tasks, guides, trust" },
+  { command: "start", description: "hub + onboarding: simple or geek" },
   { command: "status", description: "chain, key pin and pending rotation" },
   { command: "pool", description: "recent tasks" },
   { command: "task", description: "<id> — one task with its epoch commits" },
+  { command: "how", description: "how Shroud works in 60 seconds" },
+  { command: "protocol", description: "geek spec: binding, disputes, money, keys" },
+  { command: "role", description: "<buyer|contributor|node|watcher> — guided path" },
+  { command: "settings", description: "language, depth and alert flags" },
+  { command: "pro", description: "geek mode: every digest and quorum" },
+  { command: "simple", description: "plain-words mode" },
+  { command: "lang", description: "ru|en — switch language" },
   { command: "watch", description: "<id> — alert only on this task" },
   { command: "unwatch", description: "<id> — stop watching a task" },
   { command: "watchlist", description: "tasks this chat watches" },
@@ -250,6 +277,68 @@ export function commandFromVerdict(verdict, text) {
 }
 
 /**
+ * User-input normalization: RU aliases, plurals and bare ids.
+ *
+ * Lets a RU chat type `/статус`, `/пул`, `/таск 12` or just `12` and land on
+ * the same handler as the English command. Runs *before* the abuse guard so
+ * accounting (pool=15, task=5) matches dispatch. Unknown names pass through
+ * untouched and fall back to /help downstream — never to an RPC.
+ */
+const ALIAS_GROUPS = {
+  menu: ["menu", "меню"],
+  start: ["start", "старт"],
+  status: ["status", "статус"],
+  pool: ["pool", "пул", "tasks", "таски"],
+  task: ["task", "таск", "задача"],
+  how: ["how", "как"],
+  protocol: ["protocol", "proto", "протокол", "спека"],
+  role: ["role", "роль", "гайд", "гайды", "guide", "guides"],
+  settings: ["settings", "setting", "настройки", "параметры"],
+  pro: ["pro", "гик", "профи", "geek"],
+  simple: ["simple", "просто"],
+  lang: ["lang", "язык"],
+  watch: ["watch", "следить", "вотч", "подписаться"],
+  unwatch: ["unwatch", "отписаться"],
+  watchlist: ["watchlist", "вотчлист", "подписки"],
+  alerts: ["alerts", "алерты", "уведомления"],
+  limits: ["limits", "лимиты", "честность"],
+  help: ["help", "помощь", "хелп"],
+};
+
+const REVERSE_ALIAS = Object.fromEntries(
+  Object.entries(ALIAS_GROUPS).flatMap(([canon, variants]) => variants.map((v) => [v, canon]))
+);
+
+/** Russian role names → English handler args. Applied in normalizeInput so the
+ *  abuse guard only ever sees Latin args (its charset gate stays untouched). */
+const ROLE_ARG_ALIAS = {
+  "покупатель": "buyer",
+  "контрибьютор": "contrib",
+  "узел": "node",
+  "нода": "node",
+  "наблюдатель": "watch",
+};
+
+export function normalizeInput(text) {
+  if (typeof text !== "string") return "";
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  if (/^\/?\d{1,20}$/.test(trimmed)) {
+    return `/task ${trimmed.replace(/^\//, "")}`;
+  }
+  const parts = trimmed.split(/\s+/);
+  const raw = parts[0].split("@")[0].replace(/^\//, "").toLowerCase();
+  const canon = REVERSE_ALIAS[raw] ?? raw;
+  let rest = parts.slice(1).join(" ");
+  if (canon === "role" && rest) {
+    const [first, ...tail] = rest.split(/\s+/);
+    const mapped = ROLE_ARG_ALIAS[first.toLowerCase()] ?? first;
+    rest = tail.length ? `${mapped} ${tail.join(" ")}` : mapped;
+  }
+  return rest ? `/${canon} ${rest}` : `/${canon}`;
+}
+
+/**
  * Bounded-concurrency dispatcher for poll-loop updates.
  *
  * Long polling used to handle updates strictly one at a time: one tarpit
@@ -334,6 +423,25 @@ export function replyText(reply) {
 }
 
 /**
+ * Escrow-token scale for money displays, fail-soft to 18.
+ *
+ * Old readers and unit stubs have no `escrowDecimals()`; a throwing reader
+ * (dead RPC mid-command) must not take the reply down with it. A wrong scale
+ * is a display bug, a thrown command is an outage — so this never throws.
+ */
+export async function escrowScale(chain) {
+  try {
+    if (chain && typeof chain.escrowDecimals === "function") {
+      const d = await chain.escrowDecimals();
+      if (Number.isInteger(d) && d >= 0 && d <= 77) return d;
+    }
+  } catch {
+    // Fail-soft below.
+  }
+  return 18;
+}
+
+/**
  * Command handlers over an already-resolved chain reader.
  *
  * Exported for tests: `main` wires the real reader, tests hand a stub whose calls
@@ -349,29 +457,51 @@ export function replyText(reply) {
 export function createHandlers(chain, config, ops = {}) {
   const store = ops.store ?? null;
 
-  async function renderPoolPage(page) {
+  /**
+   * Resolve display language and depth for a chat. Stored prefs win; without
+   * them the language is auto-detected from the Telegram client (RU stays RU,
+   * everything else is EN) and depth defaults to pro — the historical
+   * behaviour, so existing chats see exactly what they always saw until they
+   * tap /start, /pro, /simple or /lang.
+   */
+  const prefsOf = (ctx = {}) => {
+    const stored = store ? getPrefs(store.state(), ctx.chatId) : {};
+    const lang = stored.lang || (ctx.langCode ? pickLang(ctx.langCode) : "en");
+    const mode = stored.mode || "pro";
+    return { lang: isLang(lang) ? lang : "en", mode: mode === "simple" ? "simple" : "pro" };
+  };
+
+  async function renderPoolPage(page, ctx = {}) {
+    const { lang, mode } = prefsOf(ctx);
     const count = await chain.taskCount();
     const { ids, page: p, pages, total } = poolPage(count, page);
     // One RPC per task, all in flight at once: the sequential loop made /pool the
     // slowest command (12 round trips serialized). Promise.all preserves input order,
     // so newest-first output is unchanged.
-    const items = await Promise.all(ids.map((id) => chain.task(id)));
+    const [items, decimals] = await Promise.all([
+      Promise.all(ids.map((id) => chain.task(id))),
+      escrowScale(chain),
+    ]);
     return {
-      text: renderPool(items, total, { page: p, pages }),
-      markup: poolKeyboard(ids.map(String), p, pages),
+      text: renderPool(items, total, { page: p, pages }, lang, mode, decimals),
+      // Empty pool has no task buttons, so the keyboard would be undefined:
+      // fall back to a hub row so the screen is never a dead end.
+      markup: poolKeyboard(ids.map(String), p, pages, lang, mode) ?? navRow(lang),
     };
   }
 
-  async function renderTaskView(id, chatId) {
+  async function renderTaskView(id, chatId, ctx = {}) {
+    const { lang, mode } = prefsOf({ ...ctx, chatId });
     const t = await chain.task(id);
     // Independent reads once the task (and its running epoch) is known.
-    const [commits, winner, quorum] = t
+    const [commits, winner, quorum, decimals] = t
       ? await Promise.all([
           chain.commitsForEpoch(id, t.nextEpoch),
           chain.epochWinner(id, t.nextEpoch),
           chain.disputeQuorum(id),
+          escrowScale(chain),
         ])
-      : [[], null, null];
+      : [[], null, null, 18];
     const watched =
       store && chatId !== undefined ? store.listWatched(chatId).includes(String(id)) : false;
     // Neighbour navigation needs the pool top: one extra eth_call, skipped when
@@ -386,25 +516,106 @@ export function createHandlers(chain, config, ops = {}) {
       if (count && n < BigInt(count)) nextId = String(n + 1n);
     }
     return {
-      text: renderTask({ task: t, commits, winner, quorum }, id),
-      markup: t ? taskKeyboard(String(id), { watched, prevId, nextId }) : undefined,
+      text: renderTask({ task: t, commits, winner, quorum }, id, lang, mode, decimals),
+      markup: t ? taskKeyboard(String(id), { watched, prevId, nextId, lang, mode }) : navRow(lang),
     };
   }
 
   return {
-    async help() {
-      return { text: renderHelp(), markup: undefined };
+    async start(args, ctx = {}) {
+      const chatId = ctx.chatId;
+      let lang = pickLang(ctx.langCode);
+      let mode = "simple";
+      if (store && chatId !== undefined) {
+        // Onboarding writes once: a chat that already chose keeps its choice,
+        // a fresh chat gets the detected language and the plain-words mode.
+        const cur = getPrefs(store.state(), chatId);
+        lang = cur.lang || lang;
+        mode = cur.mode || "simple";
+        if (!cur.lang && ctx.langCode) await store.setPref(chatId, "lang", lang);
+        if (!cur.mode) await store.setPref(chatId, "mode", "simple");
+      }
+      if (!isLang(lang)) lang = "en";
+      return { text: renderStart(lang, mode), markup: startKeyboard(lang, mode) };
     },
-    async limits() {
-      return { text: renderLimits(), markup: undefined };
+    async menu(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      return { text: renderMenu(lang, mode), markup: menuKeyboard(lang, mode) };
     },
-    async status() {
+    async how(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      return { text: renderHow(lang, mode), markup: howKeyboard(lang, mode) };
+    },
+    async protocol(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      return { text: renderProtocol(lang), markup: protoKeyboard(lang, mode) };
+    },
+    async settings(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      if (ctx.chatId === undefined || !store) {
+        return { text: t(lang, "common.noAlerts"), markup: undefined };
+      }
+      const eff = effectiveAlerts(config.alerts ?? {}, store.state(), ctx.chatId);
+      const inherited = {};
+      const override = store.state().chats[String(ctx.chatId)]?.alerts ?? {};
+      for (const key of ALERT_KEYS) inherited[key] = override[key] !== true && override[key] !== false;
+      return { text: renderSettings(eff, inherited, lang, mode), markup: settingsKeyboard(eff, lang, mode) };
+    },
+    async role(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      const key = String(args[0] || "").toLowerCase();
+      const r = ROLE_ALIASES[key];
+      if (!r) {
+        return { text: t(lang, "role.pick"), markup: roleKeyboard(lang, mode, "buyer") };
+      }
+      return { text: renderRole(r, lang, mode), markup: roleKeyboard(lang, mode, r) };
+    },
+    async pro(args, ctx = {}) {
+      const { lang } = prefsOf(ctx);
+      if (!store || ctx.chatId === undefined) return { text: t(lang, "common.unavailable"), markup: undefined };
+      await store.setPref(ctx.chatId, "mode", "pro");
+      return { text: t(lang, "status.modeLine", { mode: t(lang, "common.modePro"), lang }), markup: navRow(lang) };
+    },
+    async simple(args, ctx = {}) {
+      const { lang } = prefsOf(ctx);
+      if (!store || ctx.chatId === undefined) return { text: t(lang, "common.unavailable"), markup: undefined };
+      await store.setPref(ctx.chatId, "mode", "simple");
+      return { text: t(lang, "status.modeLine", { mode: t(lang, "common.modeSimple"), lang }), markup: navRow(lang) };
+    },
+    async lang(args, ctx = {}) {
+      const { lang: cur, mode } = prefsOf(ctx);
+      const want = String(args[0] || "").toLowerCase();
+      if (want !== "ru" && want !== "en") {
+        return { text: t(cur, "status.modeLine", { mode: t(cur, mode === "simple" ? "common.modeSimple" : "common.modePro"), lang: cur }), markup: navRow(cur) };
+      }
+      if (store && ctx.chatId !== undefined) await store.setPref(ctx.chatId, "lang", want);
+      const upd = prefsOf({ ...ctx });
+      return { text: t(want, "status.modeLine", { mode: t(want, upd.mode === "simple" ? "common.modeSimple" : "common.modePro"), lang: want }), markup: navRow(want) };
+    },
+    async help(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      return { text: renderHelp(lang), markup: hubLinkKeyboard(lang, mode, "help") };
+    },
+    async limits(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      return { text: renderLimits(lang), markup: hubLinkKeyboard(lang, mode, "lim") };
+    },
+    async status(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
       const [chainIdNow, blockNumber] = await Promise.all([chain.chainId(), chain.blockNumber()]);
       const np = await chain.networkParams();
       const pending = np ? await chain.pendingRotation() : null;
+      // The verifier slot is optional (devnet points it at a mock): old stubs
+      // and unconfigured deployments simply report nothing here.
+      const pendingVerifier =
+        config.verifier && typeof chain.pendingVerifierRotation === "function"
+          ? await chain.pendingVerifierRotation()
+          : null;
       const out = renderStatus(
-        { chainId: chainIdNow, blockNumber, networkParams: np, pendingRotation: pending },
-        config
+        { chainId: chainIdNow, blockNumber, networkParams: np, pendingRotation: pending, pendingVerifier },
+        config,
+        lang,
+        mode
       );
       // Shed alerts are invisible by design (the queue drops newest-first overflow) —
       // surfacing the counter here is the only way an operator learns alerts were lost.
@@ -419,72 +630,74 @@ export function createHandlers(chain, config, ops = {}) {
       if (readError) {
         // Error text comes from the RPC layer (proxies answer with HTML bodies);
         // it is content, never markup.
-        text += `\n\n${"⚠️"} <b>chain reads failing:</b> ${htmlEscape(readError)}`;
+        text += `\n\n${"⚠️"} <b>${t(lang, "status.errReads", { err: htmlEscape(readError) })}</b>`;
       } else if (queueWait > 10_000) {
-        text += `\n\n${"⚠️"} <b>slowest queued send waited ${Math.round(queueWait / 1000)}s</b> — ` +
-          `Telegram is answering slowly and alerts are delayed behind it. ` +
-          `Treat recent silence as backlog, not as calm.`;
+        text += `\n\n${"⚠️"} <b>${t(lang, "status.errSlow", { s: Math.round(queueWait / 1000) })}</b>`;
       } else if (dropped > 0) {
-        text += `\n\n${"⚠️"} <b>${dropped} alert(s) shed by the send queue</b> — ` +
-          `the bot dropped outbound messages faster than Telegram drained them. ` +
-          `Treat recent silence as data loss, not as calm.`;
+        text += `\n\n${"⚠️"} <b>${t(lang, "status.errDrop", { n: dropped })}</b>`;
       }
-      return { text, markup: statusKeyboard() };
+      return { text, markup: statusKeyboard(lang, mode) };
     },
-    async pool(args = []) {
+    async pool(args = [], ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
       // `/pool 3` — page 3 of the newest-first window. Non-numeric input falls
       // back to page 1 (the abuse guard already rejected hostile charsets; a
       // plain word here is a typo, not an attack, and deserves the first page).
       const page = args.length && /^\d{1,4}$/.test(args[0]) ? Number(args[0]) : 1;
-      return renderPoolPage(page);
+      return renderPoolPage(page, ctx);
     },
     async task(args, ctx = {}) {
-      if (!args.length) return { text: "usage: /task &lt;id&gt;", markup: undefined };
+      const { lang } = prefsOf(ctx);
+      if (!args.length) return { text: t(lang, "common.usageTask"), markup: navRow(lang) };
       // Санитизация до RPC: id — короткий decimal. Длинная строка здесь — либо мусор,
       // либо попытка заставить ноду жевать BigInt из килобайта цифр.
-      if (!isTaskId(args[0])) return { text: "task ids are decimal integers. Try /pool.", markup: undefined };
-      return renderTaskView(BigInt(args[0]), ctx.chatId);
+      if (!isTaskId(args[0])) return { text: t(lang, "common.badId"), markup: navRow(lang) };
+      return renderTaskView(BigInt(args[0]), ctx.chatId, ctx);
     },
     async watch(args, ctx = {}) {
+      const { lang } = prefsOf(ctx);
       if (ctx.chatId === undefined || !store) {
-        return { text: "watchlist unavailable in this context.", markup: undefined };
+        return { text: t(lang, "common.noWatch"), markup: undefined };
       }
       if (!args.length || !isTaskId(args[0])) {
-        return { text: "usage: /watch &lt;id&gt;", markup: undefined };
+        return { text: t(lang, "common.usageWatch"), markup: navRow(lang) };
       }
       const res = await store.addWatch(ctx.chatId, args[0]);
       const list = store.listWatched(ctx.chatId);
       return {
-        text: `${htmlEscape(res.reason)}\n\n${renderWatchlist(list)}`,
-        markup: taskLinkKeyboard(args[0]),
+        text: `${htmlEscape(res.reason)}\n\n${renderWatchlist(list, lang)}`,
+        markup: taskLinkKeyboard(args[0], lang),
       };
     },
     async unwatch(args, ctx = {}) {
+      const { lang } = prefsOf(ctx);
       if (ctx.chatId === undefined || !store) {
-        return { text: "watchlist unavailable in this context.", markup: undefined };
+        return { text: t(lang, "common.noWatch"), markup: undefined };
       }
       if (!args.length || !isTaskId(args[0])) {
-        return { text: "usage: /unwatch &lt;id&gt;", markup: undefined };
+        return { text: t(lang, "common.usageUnwatch"), markup: navRow(lang) };
       }
       const res = await store.removeWatch(ctx.chatId, args[0]);
       const list = store.listWatched(ctx.chatId);
-      return { text: `${htmlEscape(res.reason)}\n\n${renderWatchlist(list)}`, markup: undefined };
+      return { text: `${htmlEscape(res.reason)}\n\n${renderWatchlist(list, lang)}`, markup: navRow(lang) };
     },
     async watchlist(args, ctx = {}) {
+      const { lang } = prefsOf(ctx);
       if (ctx.chatId === undefined || !store) {
-        return { text: "watchlist unavailable in this context.", markup: undefined };
+        return { text: t(lang, "common.noWatch"), markup: undefined };
       }
-      return { text: renderWatchlist(store.listWatched(ctx.chatId)), markup: undefined };
+      return { text: renderWatchlist(store.listWatched(ctx.chatId), lang), markup: navRow(lang) };
     },
     async alerts(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
       if (ctx.chatId === undefined || !store) {
-        return { text: "per-chat alerts unavailable in this context.", markup: undefined };
+        return { text: t(lang, "common.noAlerts"), markup: undefined };
       }
       const eff = effectiveAlerts(config.alerts ?? {}, store.state(), ctx.chatId);
       const inherited = {};
       const override = store.state().chats[String(ctx.chatId)]?.alerts ?? {};
       for (const key of ALERT_KEYS) inherited[key] = override[key] !== true && override[key] !== false;
-      return { text: renderAlerts(eff, inherited), markup: alertsKeyboard(eff) };
+      return { text: renderAlerts(eff, inherited, lang), markup: alertsKeyboard(eff, lang, mode) };
     },
     // Test seam: shared renderers for the callback router below.
     renderPoolPage,
@@ -501,48 +714,134 @@ export function createHandlers(chain, config, ops = {}) {
  * answer with a toast via `onToast` and re-render the underlying view so the
  * button flips in place.
  */
-export async function routeCallback(parsed, { chain, config, store, chatId, onToast }) {
+export async function routeCallback(parsed, { chain, config, store, chatId, onToast, langCode }) {
   const toast = onToast ?? (async () => {});
   const say = async (t) => toast(t);
+  // Display prefs for re-renders: stored win, the pressing chat's client is
+  // the fallback. No stored prefs and no language hint means English pro —
+  // the historical default.
+  const prefs = () => {
+    const stored = store ? getPrefs(store.state(), chatId) : {};
+    const lang = stored.lang || (langCode ? pickLang(langCode) : "en");
+    const mode = stored.mode || "pro";
+    return { lang: isLang(lang) ? lang : "en", mode: mode === "simple" ? "simple" : "pro" };
+  };
+  const handlers = () => createHandlers(chain, config, { store });
+  // Re-render any screen by target descriptor (see keyboards.isTarget): used
+  // by the mode/language toggles so the reader never leaves their context.
+  const renderTarget = async (target) => {
+    const [head, ...rest] = target.split(":");
+    const { lang, mode } = prefs();
+    if (head === "s") return handlers().status([], { chatId, langCode });
+    if (head === "h" || head === "menu") return { text: renderMenu(lang, mode), markup: menuKeyboard(lang, mode) };
+    if (head === "how") return { text: renderHow(lang, mode), markup: howKeyboard(lang, mode) };
+    if (head === "proto") return { text: renderProtocol(lang), markup: protoKeyboard(lang, mode) };
+    if (head === "set") return handlers().settings([], { chatId, langCode });
+    if (head === "a") return handlers().alerts([], { chatId, langCode });
+    if (head === "lim") return handlers().limits([], { chatId, langCode });
+    if (head === "help") return handlers().help([], { chatId, langCode });
+    if (head === "r") {
+      const role = rest[0];
+      if (!isRole(role)) return { text: t(lang, "role.pick"), markup: roleKeyboard(lang, mode, "buyer") };
+      return { text: renderRole(role, lang, mode), markup: roleKeyboard(lang, mode, role) };
+    }
+    if (head === "p") return handlers().renderPoolPage(Number(rest[0]), { chatId, langCode });
+    if (head === "t") return handlers().renderTaskView(BigInt(rest[0]), chatId, { chatId, langCode });
+    return { text: t(lang, "common.unavailable"), markup: undefined };
+  };
+  // Shared toggle body: lowercase "a" lands on the alerts screen, uppercase
+  // "A" (settings keyboard) stays in settings. The toast confirms the flip
+  // either way.
+  const toggleAlert = async (key, target) => {
+    if (!store || chatId === undefined) {
+      const { lang } = prefs();
+      return { text: t(lang, "common.noAlerts"), markup: undefined };
+    }
+    const eff = effectiveAlerts(config.alerts ?? {}, store.state(), chatId);
+    const next = !eff[key];
+    await store.setAlert(chatId, key, next);
+    const { lang } = prefs();
+    const names = { mm: t(lang, "alerts.mm"), disp: t(lang, "alerts.disp"), rot: t(lang, "alerts.rot"), tre: t(lang, "alerts.tre"), ver: t(lang, "alerts.ver") };
+    await say(`${names[key] ?? key} ${next ? t(lang, "common.onState") : t(lang, "common.offState")}`);
+    return renderTarget(target);
+  };
   switch (parsed.op) {
     case "p": {
-      const handlers = createHandlers(chain, config, { store });
-      return handlers.renderPoolPage(Number(parsed.arg));
+      return renderTarget(`p:${parsed.arg}`);
     }
     case "t": {
-      const handlers = createHandlers(chain, config, { store });
-      return handlers.renderTaskView(BigInt(parsed.arg), chatId);
+      return renderTarget(`t:${parsed.arg}`);
     }
     case "w": {
-      if (!store || chatId === undefined) return { text: "watchlist unavailable.", markup: undefined };
+      if (!store || chatId === undefined) {
+        const { lang } = prefs();
+        return { text: t(lang, "common.noWatch"), markup: undefined };
+      }
       const res = await store.addWatch(chatId, parsed.arg);
       await say(res.added ? `watching #${parsed.arg}` : res.reason);
-      const handlers = createHandlers(chain, config, { store });
-      return handlers.renderTaskView(BigInt(parsed.arg), chatId);
+      return renderTarget(`t:${parsed.arg}`);
     }
     case "u": {
-      if (!store || chatId === undefined) return { text: "watchlist unavailable.", markup: undefined };
+      if (!store || chatId === undefined) {
+        const { lang } = prefs();
+        return { text: t(lang, "common.noWatch"), markup: undefined };
+      }
       const res = await store.removeWatch(chatId, parsed.arg);
       await say(res.removed ? `unwatched #${parsed.arg}` : res.reason);
-      const handlers = createHandlers(chain, config, { store });
-      return handlers.renderTaskView(BigInt(parsed.arg), chatId);
+      return renderTarget(`t:${parsed.arg}`);
     }
     case "s": {
-      const handlers = createHandlers(chain, config, { store });
-      return handlers.status();
+      return renderTarget("s");
+    }
+    case "h":
+    case "menu": {
+      return renderTarget("h");
+    }
+    case "how": {
+      return renderTarget("how");
+    }
+    case "proto": {
+      return renderTarget("proto");
+    }
+    case "set": {
+      return renderTarget("set");
+    }
+    case "lim": {
+      return renderTarget("lim");
+    }
+    case "help": {
+      return renderTarget("help");
     }
     case "a": {
-      if (!store || chatId === undefined) return { text: "per-chat alerts unavailable.", markup: undefined };
-      const eff = effectiveAlerts(config.alerts ?? {}, store.state(), chatId);
-      const next = !eff[parsed.arg];
-      await store.setAlert(chatId, parsed.arg, next);
-      const after = effectiveAlerts(config.alerts ?? {}, store.state(), chatId);
-      const override = store.state().chats[String(chatId)]?.alerts ?? {};
-      const inherited = {};
-      for (const key of ALERT_KEYS) inherited[key] = override[key] !== true && override[key] !== false;
-      const names = { mm: "mismatch", disp: "disputes", rot: "rotation" };
-      await say(`${names[parsed.arg]} ${next ? "on" : "off"} for this chat`);
-      return { text: renderAlerts(after, inherited), markup: alertsKeyboard(after) };
+      if (!parsed.arg) return renderTarget("a");
+      return toggleAlert(parsed.arg, "a");
+    }
+    case "A": {
+      return toggleAlert(parsed.arg, "set");
+    }
+    case "r": {
+      if (!isRole(parsed.arg)) return { text: t(prefs().lang, "role.pick"), markup: roleKeyboard(prefs().lang, prefs().mode, "buyer") };
+      const { lang, mode } = prefs();
+      return { text: renderRole(parsed.arg, lang, mode), markup: roleKeyboard(lang, mode, parsed.arg) };
+    }
+    case "m": {
+      // Flip whatever the chat currently sees (stored or default pro), then
+      // re-render in place. Toggling from the raw stored value alone would make
+      // the first press a no-op for chats that never chose: no stored mode
+      // reads as pro, and "not pro" flipped naively stays pro.
+      if (store && chatId !== undefined) {
+        const cur = prefs().mode;
+        await store.setPref(chatId, "mode", cur === "pro" ? "simple" : "pro");
+      }
+      return renderTarget(parsed.arg);
+    }
+    case "l": {
+      // Set the language (validated by parseCallback), then re-render.
+      const j = parsed.arg.indexOf(":");
+      const lang = parsed.arg.slice(0, j);
+      const target = parsed.arg.slice(j + 1);
+      if (store && chatId !== undefined) await store.setPref(chatId, "lang", lang);
+      return renderTarget(target);
     }
     default:
       return { text: "that button is from an older bot — send the command again.", markup: undefined };
@@ -668,7 +967,8 @@ async function main() {
   const abuseGuard = new ChatAbuseGuard(loadAbuseConfig(process.env));
 
   async function handleCommand(msg, chatId) {
-    const text = msg.text ?? "";
+    const text = normalizeInput(msg.text ?? "");
+    const langCode = msg.from?.language_code;
     let verdict;
     try {
       verdict = await abuseGuard.guardChat(chatId ?? msg.chat?.id ?? "unknown", text);
@@ -678,15 +978,22 @@ async function main() {
     if (verdict.action === "deny-usage" || verdict.action === "deny-rate" || verdict.action === "shadow") {
       return { text: verdict.reply, markup: undefined };
     }
+    const guessLang = () => {
+      if (store) {
+        const cur = getPrefs(store.state(), chatId ?? msg.chat?.id);
+        if (isLang(cur.lang)) return cur.lang;
+      }
+      return pickLang(langCode);
+    };
     try {
       return await abuseGuard.runHandler(chatId ?? msg.chat?.id ?? "unknown", async () => {
         const { name, args } = commandFromVerdict(verdict, text);
         const handler = handlers[name];
         if (!handler || typeof handler !== "function") {
-          return handlers.help();
+          return handlers.help([], { chatId, langCode });
         }
         try {
-          return await handler(args, { chatId });
+          return await handler(args, { chatId, langCode });
         } catch (err) {
           // A failing command must not kill the process: an ops bot that crashes on
           // one bad RPC read is worse than one that says "that failed".
@@ -695,14 +1002,15 @@ async function main() {
           // It is scrubbed too: the reply lands in a chat, and an error that quotes
           // the RPC URL would put the provider's key in the chat's history.
           const message = htmlEscape(scrubRpcSecret(err.message, config.rpcUrl));
-          return { text: `could not complete /${name}: ${message}`, markup: undefined };
+          const lang = guessLang();
+          return { text: t(lang, "common.failed", { name, err: message }), markup: undefined };
         }
       });
     } catch (err) {
       // A failing command must not kill the process: an ops bot that crashes on
       // one bad RPC read is worse than one that says "that failed".
       const message = htmlEscape(scrubRpcSecret(err.message, config.rpcUrl));
-      return { text: `could not complete: ${message}`, markup: undefined };
+      return { text: t(guessLang(), "common.failedNoName", { err: message }), markup: undefined };
     }
   }
 
@@ -715,7 +1023,7 @@ async function main() {
    * priced through the same abuse guard as its command equivalent (synthetic
    * text), so refresh-spam costs RPC budget like retyping the command.
    */
-  const CALLBACK_TEXT = { p: "/pool", t: "/task x", w: "/watch x", u: "/watch x", s: "/status", a: "/alerts" };
+  const CALLBACK_TEXT = { p: "/pool", t: "/task x", w: "/watch x", u: "/watch x", s: "/status", a: "/alerts", A: "/alerts", h: "/help", r: "/role", m: "/pro", l: "/lang", menu: "/help", how: "/help", proto: "/help", set: "/alerts", lim: "/limits", help: "/help" };
 
   async function handleCallback(query) {
     const data = query.data ?? "";
@@ -763,6 +1071,7 @@ async function main() {
           config,
           store: watchStore,
           chatId,
+          langCode: query.from?.language_code,
           onToast: (t) => bot.answerCallbackQuery(query.id, t),
         })
       );
@@ -888,10 +1197,11 @@ async function main() {
         if (prev && prev !== ev.args.traceDigest) {
           const args = mismatchArgs(ev, prev);
           alerts.push({
-            text: renderCommitMismatch(args),
+            kind: "mismatch",
             taskId: String(args.taskId),
             key: "mm",
-            markup: taskLinkKeyboard(String(args.taskId)),
+            link: { type: "task", id: String(args.taskId) },
+            payload: args,
           });
         }
       }
@@ -899,43 +1209,89 @@ async function main() {
 
     if (config.cipherTask) {
       const events = dedupeEvents(await chain.disputeEvents(cursor + 1, head), seen);
+      // Settlement amounts render at delivery; the scale is read once per scan
+      // (cached in the reader afterwards) and travels on the alert itself.
+      const decimals = events.length ? await escrowScale(chain) : 18;
       for (const ev of events) {
-        const rendered = renderDispute(ev);
-        if (rendered) {
-          const taskId = ev.args?.taskId !== undefined ? String(ev.args.taskId) : null;
-          alerts.push({
-            text: rendered,
-            taskId,
-            key: "disp",
-            markup: taskId !== null ? taskLinkKeyboard(taskId) : undefined,
-          });
-        }
+        // Rendered at delivery, per chat language — see deliverAlert. Unknown
+        // event shapes stay silent rather than push an empty message.
+        if (!ev.args) continue;
+        const taskId = ev.args.taskId !== undefined ? String(ev.args.taskId) : null;
+        alerts.push({
+          kind: "dispute",
+          taskId,
+          key: "disp",
+          decimals,
+          link: taskId !== null ? { type: "task", id: taskId } : null,
+          payload: ev,
+        });
       }
     }
 
     if (config.networkParams) {
-      const { executed, proposed } = await chain.rotationEvents(cursor + 1, head);
+      const { executed, proposed, approved = [], cancelled = [] } = await chain.rotationEvents(cursor + 1, head);
       for (const ev of dedupeEvents(proposed, seen)) {
         alerts.push({
-          text: renderRotation("proposed", {
-            proposer: ev.args.proposer,
-            expectedHash: ev.args.expectedHash,
-            scheduledAt: ev.args.scheduledAt,
-          }),
+          kind: "rotation",
           taskId: null,
           key: "rot",
-          markup: rotationKeyboard(),
+          link: { type: "status" },
+          payload: {
+            variant: "proposed",
+            args: {
+              proposer: ev.args.proposer,
+              expectedHash: ev.args.expectedHash,
+              scheduledAt: ev.args.scheduledAt,
+            },
+          },
+        });
+      }
+      // Approval is the point of no return: after the timelock anyone can
+      // execute, so an unexpected approval deserves the same noise as a proposal.
+      for (const ev of dedupeEvents(approved, seen)) {
+        alerts.push({
+          kind: "rotation",
+          taskId: null,
+          key: "rot",
+          link: { type: "status" },
+          payload: {
+            variant: "approved",
+            args: {
+              approver: ev.args.approver,
+              expectedHash: ev.args.expectedHash,
+            },
+          },
+        });
+      }
+      // A cancellation closes the story: the queued key will never activate.
+      // Also fires when an approver rotation drops an unapproved queue.
+      for (const ev of dedupeEvents(cancelled, seen)) {
+        alerts.push({
+          kind: "rotation",
+          taskId: null,
+          key: "rot",
+          link: { type: "status" },
+          payload: {
+            variant: "cancelled",
+            args: {
+              scheduledAt: ev.args.scheduledAt,
+            },
+          },
         });
       }
       for (const ev of dedupeEvents(executed, seen)) {
         alerts.push({
-          text: renderRotation("executed", {
-            keyVersion: ev.args.keyVersion,
-            fhePublicKeyHash: ev.args.fhePublicKeyHash,
-          }),
+          kind: "rotation",
           taskId: null,
           key: "rot",
-          markup: rotationKeyboard(),
+          link: { type: "status" },
+          payload: {
+            variant: "executed",
+            args: {
+              keyVersion: ev.args.keyVersion,
+              fhePublicKeyHash: ev.args.fhePublicKeyHash,
+            },
+          },
         });
       }
     }
@@ -946,22 +1302,70 @@ async function main() {
       // reported on its own, not only the moment it lands.
       for (const ev of dedupeEvents(await chain.treasuryEvents(cursor + 1, head), seen)) {
         const name = ev.name ?? "";
-        let rendered = null;
+        let variant = null;
+        let args = null;
         if (name === "TreasuryProposed") {
-          rendered = renderTreasury("proposed", { to: ev.args?.to, eta: ev.args?.eta });
+          variant = "proposed";
+          args = { to: ev.args?.to, eta: ev.args?.eta };
         } else if (name === "TreasuryChanged") {
-          rendered = renderTreasury("executed", { from: ev.args?.from, to: ev.args?.to });
+          variant = "executed";
+          args = { from: ev.args?.from, to: ev.args?.to };
         } else if (name === "TreasuryRotationCancelled") {
-          rendered = renderTreasury("cancelled", { dropped: ev.args?.dropped });
+          variant = "cancelled";
+          args = { dropped: ev.args?.dropped };
         }
-        if (rendered) {
+        if (variant) {
           alerts.push({
-            text: rendered,
+            kind: "treasury",
             taskId: null,
             key: "tre",
-            markup: rotationKeyboard(),
+            link: { type: "status" },
+            payload: { variant, args },
           });
         }
+      }
+    }
+
+    if (config.verifier) {
+      // The verifier gates every payout, so its rotation is money rotation:
+      // propose (owner) → 7-day timelock → execute (anyone) or cancel (owner).
+      // No approver step here, unlike the key rotation.
+      const { rotated, proposed, cancelled } = await chain.verifierEvents(cursor + 1, head);
+      for (const ev of dedupeEvents(proposed, seen)) {
+        alerts.push({
+          kind: "verifier",
+          taskId: null,
+          key: "ver",
+          link: { type: "status" },
+          payload: {
+            variant: "proposed",
+            args: { to: ev.args.to, executableAt: ev.args.executableAt },
+          },
+        });
+      }
+      for (const ev of dedupeEvents(cancelled, seen)) {
+        alerts.push({
+          kind: "verifier",
+          taskId: null,
+          key: "ver",
+          link: { type: "status" },
+          payload: {
+            variant: "cancelled",
+            args: { dropped: ev.args.verifier },
+          },
+        });
+      }
+      for (const ev of dedupeEvents(rotated, seen)) {
+        alerts.push({
+          kind: "verifier",
+          taskId: null,
+          key: "ver",
+          link: { type: "status" },
+          payload: {
+            variant: "executed",
+            args: { from: ev.args.from, to: ev.args.to },
+          },
+        });
       }
     }
 
@@ -970,17 +1374,27 @@ async function main() {
 
   /**
    * Deliver one scanned alert to every chat that wants it (see
-   * `shouldDeliverAlert` for the routing matrix, pinned by tests).
+   * `shouldDeliverAlert` for the routing matrix, pinned by tests). Text and
+   * buttons render per chat in its language: the stored prefs win, otherwise
+   * English — alerts fired before any /start are in the historical language.
    */
   function deliverAlert(alert) {
     const jobs = [];
     for (const chatId of config.allowedChatIds) {
       if (!shouldDeliverAlert(alert, config.alerts, watchStore.state(), chatId)) continue;
+      const stored = watchStore ? getPrefs(watchStore.state(), chatId) : {};
+      const lang = stored.lang || "en";
+      const text = renderAlert(alert, lang, alert.decimals ?? 18);
+      if (!text) continue; // unknown event shape: never push an empty message
+      const markup =
+        alert.link?.type === "task"
+          ? taskLinkKeyboard(alert.link.id, lang)
+          : rotationKeyboard(lang);
       jobs.push(
         bot
-          .sendQueued(chatId, alert.text, {
+          .sendQueued(chatId, text, {
             ...(config.html ? { parse_mode: "HTML" } : {}),
-            ...(alert.markup ? { reply_markup: alert.markup } : {}),
+            ...(markup ? { reply_markup: markup } : {}),
           })
           .catch((err) => {
             log("error", config)(`send to ${chatId} failed:`, err.message);
@@ -1026,7 +1440,9 @@ async function main() {
     `🕶 <b>Shroud bot online</b>\n\nchain ${chainId} · head ${await chain.blockNumber()}\n` +
       `alerts: commit mismatch ${config.alerts.commitMismatch ? "on" : "off"}, ` +
       `disputes ${config.alerts.disputes ? "on" : "off"}, ` +
-      `key rotation ${config.alerts.keyRotation ? "on" : "off"}`
+      `key rotation ${config.alerts.keyRotation ? "on" : "off"}, ` +
+      `treasury ${config.alerts.treasury ? "on" : "off"}, ` +
+      `verifier ${config.alerts.verifierRotation ? "on" : "off"}`
   );
 
   await Promise.all([pollCommands(), pollAlerts()]);

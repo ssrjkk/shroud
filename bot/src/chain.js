@@ -24,10 +24,10 @@ const ABI_DIR = resolve(ROOT, "..", "packages", "sdk", "src", "abi");
  * among them, so its ABI is read straight from the compiled Hardhat artifact,
  * which is the source of truth.
  */
-function loadArtifact(name, { contract }) {
+function loadArtifact(name, { contract, dir = "src" }) {
   const candidates = [
     resolve(ABI_DIR, `${name}.json`),
-    resolve(ROOT, "..", "packages", "contracts", "artifacts", "src", `${contract}.sol`, `${contract}.json`),
+    resolve(ROOT, "..", "packages", "contracts", "artifacts", dir, `${contract}.sol`, `${contract}.json`),
   ];
   for (const path of candidates) {
     if (!existsSync(path)) continue;
@@ -47,6 +47,8 @@ export function makeInterfaces() {
     cipherTask: new Interface(loadArtifact("CipherTask", { contract: "CipherTask" })),
     paymentVault: new Interface(loadArtifact("PaymentVault", { contract: "PaymentVault" })),
     networkParams: new Interface(loadArtifact("NetworkParams", { contract: "NetworkParams" })),
+    // Lives in src/zk/, not src/ — the only artifact that needs a subdir.
+    verifier: new Interface(loadArtifact("ProofVerifier", { contract: "ProofVerifier", dir: "src/zk" })),
   };
 }
 
@@ -183,7 +185,7 @@ export class ChainReader {
     // would let the bot start happily against a dead RPC and only fail later,
     // per poll. `getBlockNumber()` genuinely round-trips, so it is called
     // explicitly for that reason.
-    const head = await provider.getBlockNumber();
+    await provider.getBlockNumber();
 
     // Also report the chain the RPC actually serves, so a config pointing at the
     // wrong chain is caught before the bot says anything about it.
@@ -193,7 +195,6 @@ export class ChainReader {
         `RPC_URL serves chain ${seen.chainId}, but CHAIN_ID is ${config.chainId}. Refusing to report state from the wrong chain.`
       );
     }
-    log(`connected to chain ${seen.chainId}, head block ${head}`);
     return new ChainReader(provider, ifaces, config);
   }
 
@@ -202,6 +203,8 @@ export class ChainReader {
   }
 
   #lastReadError = null;
+
+  #escrowDecimals = null;
 
   /**
    * Latest read failure (`where: message`), or null when no recent read failed.
@@ -591,6 +594,35 @@ export class ChainReader {
     }
   }
 
+  /**
+   * Decimals of the escrow token, cached for the life of the reader.
+   *
+   * The devnet escrow token is 6-decimal USDC-style, not 18: formatting every
+   * budget with a hardcoded 10^18 renders a 1000-USDC budget as "0". The token
+   * address comes from `escrowToken()` and the scale from its `decimals()`.
+   * Both are immutable on a deployment, so one successful read is cached
+   * forever; a failure falls back to 18 and records a read error (visible in
+   * /status) rather than failing the reply.
+   */
+  async escrowDecimals() {
+    if (this.#escrowDecimals !== null) return this.#escrowDecimals;
+    const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
+    if (!c) {
+      this.#escrowDecimals = 18;
+      return 18;
+    }
+    try {
+      const token = await c.escrowToken();
+      const d = await getTokenDecimals(token, this.#provider);
+      this.#escrowDecimals = d;
+      return d;
+    } catch (e) {
+      this.#noteReadError("escrowDecimals", e);
+      this.#escrowDecimals = 18;
+      return 18;
+    }
+  }
+
   /** The queued rotation, or `null` when none is pending. */
   async pendingRotation() {
     if (!this.#config.networkParams) return null;
@@ -622,9 +654,71 @@ const grab = async (name) =>
           toBlock
         )
       );
+    // Full lifecycle, not just the endpoints: an approval means the queued key
+    // becomes executable after the timelock, and a cancellation (owner or an
+    // approver rotation dropping the queue) means the threat is gone. Both are
+    // worth one alert each — the scanner dedupes by txHash:logIndex.
     const executed = await grab("RotationExecuted");
     const proposed = await grab("RotationProposed");
-    return { executed, proposed, pending: await this.pendingRotation() };
+    let approved = [];
+    let cancelled = [];
+    try {
+      approved = await grab("RotationApproved");
+    } catch {
+      // Not every build emits every event; absence is not an error.
+    }
+    try {
+      cancelled = await grab("RotationCancelledEvent");
+    } catch {
+      // Not every build emits every event; absence is not an error.
+    }
+    return { executed, proposed, approved, cancelled, pending: await this.pendingRotation() };
+  }
+
+  // --- ProofVerifier rotation ------------------------------------------------
+  //
+  // Same trust shape as the key rotation: this contract gates every payout —
+  // a verifier that accepts anything pays fraudsters — so propose → 7-day
+  // timelock → execute (anyone) / cancel (owner only). The devnet points the
+  // verifier slot at a mock, so VERIFIER_ADDRESS stays unset there and every
+  // reader below degrades to null/[] instead of failing the reply.
+
+  /** The queued verifier rotation, or `null` when none is pending. */
+  async pendingVerifierRotation() {
+    if (!this.#config.verifier) return null;
+    const c = this.#contract("verifier", this.#config.verifier, this.#ifaces.verifier);
+    try {
+      const [verifier, executableAt] = await c.pendingRotation();
+      if (verifier === "0x" + "0".repeat(40)) return null;
+      return { to: verifier, executableAt: Number(executableAt) };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Verifier-rotation lifecycle events, oldest first. */
+  async verifierEvents(fromBlock, toBlock) {
+    const grab = async (name) =>
+      this.#decode(
+        this.#ifaces.verifier,
+        name,
+        await this.#queryLogs(
+          this.#ifaces.verifier,
+          name,
+          this.#config.verifier,
+          fromBlock,
+          toBlock
+        )
+      );
+    const rotated = await grab("VerifierRotated");
+    const proposed = await grab("VerifierRotationProposed");
+    let cancelled = [];
+    try {
+      cancelled = await grab("VerifierRotationCancelled");
+    } catch {
+      // Not every build emits every event; absence is not an error.
+    }
+    return { rotated, proposed, cancelled };
   }
 }
 

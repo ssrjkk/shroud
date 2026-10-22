@@ -22,23 +22,64 @@ the caller passes `networkParams` + `fhePublicKeyHash`, and the node's `enforce_
 check runs once, at startup. A malicious sequencer can swap the key and
 harvest ciphertexts, and the only detection is forensic, after the fact.
 
-So the bot watches `RotationProposed` and `RotationExecuted` and says so loudly.
-If a rotation appears that you did not initiate, the correct response is to stop,
-not to keep uploading.
+So the bot watches the full lifecycle — `RotationProposed`, `RotationApproved`,
+`RotationCancelledEvent` and `RotationExecuted` — and says so loudly. An approval
+means the key becomes executable after the timelock; a cancellation means the
+queue is dropped. If a rotation appears that you did not initiate, the correct
+response is to stop, not to keep uploading.
+
+The same watch covers the payout verifier (`VERIFIER_ADDRESS`, the timelocked
+`ProofVerifier` wrapper — not the STARK backend it points at). A permissive
+verifier pays fraudsters, so `VerifierRotationProposed` /
+`VerifierRotationCancelled` / `VerifierRotated` alert like their key-rotation
+twins, and `/status` shows the queued verifier with its executable-at time.
+Leave `VERIFIER_ADDRESS` unset (as on devnet, where the slot holds a mock) and
+the bot reports it as not configured instead of alerting on nothing.
 
 ## Commands
 
 | command | what it answers |
 |---|---|
+| `/menu` | hub: status, tasks, how-it-works, guides, trust — everything in 6 buttons |
+| `/start` | same hub + onboarding: client language, simple mode, four role guides |
 | `/status` | chain, head, pinned FHE key hash, committee threshold, **pending rotation** |
 | `/pool [page]` | the most recent tasks with status, budget and contributor count, 12 per page |
 | `/task <id>` | one task, plus that epoch's commits — and whether they disagree |
+| `/how` | how Shroud works in 60 seconds, 7 steps (simple or geek by mode) |
+| `/protocol` | geek spec: binding, compute, disputes, money, keys — no plain words |
+| `/role buyer\|contributor\|node\|watcher` | guided path for your side, 3 steps in simple, contracts+SDK in geek |
+| `/settings` | language, depth and alert flags on one screen |
+| `/pro` / `/simple` | geek detail / plain words (per chat, remembered) |
+| `/lang ru\|en` | switch language (per chat, remembered; auto-detected from the client on /start) |
 | `/watch <id>` | narrow this chat's task alerts to a task (repeat per task) |
 | `/unwatch <id>` | stop watching a task |
 | `/watchlist` | tasks this chat watches — empty means everything |
 | `/alerts` | per-chat alert flags with tap-to-toggle buttons |
 | `/limits` | what this deployment does *not* protect against |
 | `/help` | the list above |
+
+Two dimensions cut across every command: **language** (RU/EN) and **depth**
+(simple/geek). A fresh chat that runs /start gets its client's language and
+simple mode; everything else keeps the historical default (English, geek)
+until the chat opts in — nothing changes under existing users. Buttons carry
+a mode toggle and RU/EN switch that re-render the same screen in place,
+so nobody has to memorise commands to change how the bot talks.
+Simple = 3 plain steps, no jargon. Geek = contract calls, digests, quorum,
+EIP-712 slices (PaymentVault only), timelocks — for ML/web3 readers.
+
+Shortcuts: RU aliases (`/статус`, `/пул`, `/таск 12`, `/меню`, `/как`,
+`/протокол`, `/настройки`, `/помощь`, `/лимиты`), RU role args
+(`/роль покупатель|контрибьютор|узел|наблюдатель`), plurals
+(`/tasks` → `/pool`, `/proto` → `/protocol`, `/guide` → `/role`) and bare ids
+(`12` → `/task 12`) are normalized before the abuse guard, so pricing matches
+dispatch. Every screen keeps you moving: help/limits toggles re-render in
+place, settings toggles stay in settings (alerts toggles stay in alerts),
+confirmations, empty states and missing tasks carry a `⌂ menu` row back, and
+deep pools get `« 1` / `N »` jump buttons next to the pager.
+Honest crypto notes: contributions are plain tx (EIP-712 is slices + PoP only),
+SDK default encryptor is dev-only `NoopEncryptor` (confidential path is FHEWasm
+or `@shroud/sdk/relayer`), rotations need timelock ≥ 7 days (NetworkParams adds
+an approver signature; only `owner` cancels, anyone executes after).
 
 Every reply carries inline buttons that do the same as the commands: pool
 pages (`‹ prev` / `next ›`, task shortcuts), task refresh / watch / neighbour
@@ -50,8 +91,9 @@ abuse budget as typing (`/pool`-equivalent presses cost 15, `/task` 5,
 
 ## Watchlist and per-chat alerts
 
-`state/watchlist.json` holds, per chat id, the watched task ids (max 200)
-and alert-flag overrides. Writes are atomic (tmp file + rename); a corrupt
+`state/watchlist.json` holds, per chat id, the watched task ids (max 200),
+alert-flag overrides, and UI prefs (`lang`: ru|en, `mode`: simple|pro).
+Writes are atomic (tmp file + rename); a corrupt
 file is moved aside to `watchlist.corrupt-<timestamp>.json` and replaced
 with an empty state, so one bad byte never bricks the bot.
 
@@ -77,6 +119,7 @@ Configurable in `.env`, all off-by-default-risk since they only *add* output:
 | `ALERT_DISPUTES` | on | disputes, epoch rejections, settlements, status changes |
 | `ALERT_KEY_ROTATION` | on | any network parameter rotation |
 | `ALERT_TREASURY` | on | a treasury change is proposed, executed or cancelled |
+| `ALERT_VERIFIER_ROTATION` | on | a verifier rotation is proposed, executed or cancelled |
 
 `ALERT_TREASURY` watches the treasury rotation on the orchestrator. The treasury
 receives slashed contribution bonds and every committee leg, and it moves through a
@@ -147,7 +190,7 @@ know.
 npm test
 ```
 
-117 tests, no bot token and no chain required. They cover the parts that fail
+162 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -200,3 +243,8 @@ quietly in production:
 - **It has never been run against a live deployment.** Reads are pinned against a
   stub JSON-RPC server returning ABI-encoded responses, not against running
   contracts. Formatting, config and access control are tested.
+- **Money is shown in the escrow token's own decimals.** The bot reads the scale
+  from `escrowToken()` → `decimals()` once and caches it (the devnet token is
+  6-decimal USDC-style — a hardcoded 18 would render a 1000-USDC budget as
+  "0"). If the scale is unreadable it falls back to 18 and says so in
+  `/status` via the chain-read error line.

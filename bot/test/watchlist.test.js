@@ -55,6 +55,7 @@ test("alert overrides resolve against the global config", () => {
     disp: false,
     rot: true,
     tre: true,
+    ver: false,
   });
   setAlertOverride(state, 1, "disp", true);
   assert.equal(effectiveAlerts(global, state, 1).disp, true);
@@ -63,7 +64,7 @@ test("alert overrides resolve against the global config", () => {
   assert.equal(effectiveAlerts(global, state, 1).disp, false);
   assert.ok(!setAlertOverride(state, 1, "nope", true).ok);
   assert.ok(!setAlertOverride(state, 1, "mm", "yes").ok);
-  assert.deepEqual([...ALERT_KEYS].sort(), ["disp", "mm", "rot", "tre"]);
+  assert.deepEqual([...ALERT_KEYS].sort(), ["disp", "mm", "rot", "tre", "ver"]);
 });
 
 test("removeWatch on an unknown chat reports, never creates state", () => {

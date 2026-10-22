@@ -6,6 +6,23 @@ first tagged release.
 
 ## Unreleased
 
+### Bot: speaks Russian, has a front door, and explains itself simply or fully
+
+- New /start with role guides (buyer/contributor/node/watcher), RU/EN with
+  auto-detect from the Telegram client, and simple/pro depth modes; mode and
+  language buttons re-render the same screen in place. Alerts render per chat
+  in its language. Historical default (EN, pro) is unchanged until a chat
+  opts in via /start, /pro, /simple or /lang.
+- Fixed a startup crash: `connect()` called a nonexistent `log`, so the bot
+  died against a healthy chain; covered by a connect-against-stub test.
+- Ops hub and geek track: `/menu` hub, `/how` pipeline, `/protocol` geek spec,
+  `/settings` one-screen prefs; mode labels are simple/geek (stored value stays
+  `pro`). RU command aliases, bare-id input (`12` → `/task 12`), RU role args.
+  Full key-rotation lifecycle alerts (approve/cancel), ProofVerifier rotation
+  alerts with `/status` queue state, escrow-decimal money scaling (6-decimal
+  USDC no longer renders as "0"), first/last pool page jumps, dead-key i18n
+  guard, dead-end keyboards on every confirmation screen.
+
 ### Tests: stateful vault invariants in Foundry (roadmap: Foundry-инварианты)
 
 - The roadmap lists Foundry invariants; only the Dividend math had them. New

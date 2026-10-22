@@ -141,6 +141,7 @@ export function loadConfig() {
     cipherTask: address("CIPHER_TASK_ADDRESS"),
     paymentVault: address("PAYMENT_VAULT_ADDRESS"),
     networkParams: address("NETWORK_PARAMS_ADDRESS"),
+    verifier: address("VERIFIER_ADDRESS"),
 
     pollIntervalMs: optionalInt("POLL_INTERVAL_SECONDS", 15) * 1000,
     catchupBlocks: optionalInt("CATCHUP_BLOCKS", 2000),
@@ -150,6 +151,7 @@ export function loadConfig() {
       disputes: flag("ALERT_DISPUTES", true),
       keyRotation: flag("ALERT_KEY_ROTATION", true),
       treasury: flag("ALERT_TREASURY", true),
+      verifierRotation: flag("ALERT_VERIFIER_ROTATION", true),
     },
 
     html: flag("HTML_MODE", true),
@@ -175,5 +177,8 @@ export function configuredContracts(config) {
     { name: "CipherTask", address: config.cipherTask },
     { name: "PaymentVault", address: config.paymentVault },
     { name: "NetworkParams", address: config.networkParams },
+    // Optional like the rest: a deployment that points CipherTask at a mock
+    // verifier (as devnet does) leaves this unset and the bot says so.
+    { name: "ProofVerifier", address: config.verifier },
   ].map((c) => ({ ...c, configured: Boolean(c.address) }));
 }
