@@ -178,9 +178,9 @@ macro_rules! submit_tx {
             Some(limit) => builder.gas(limit),
             None => builder,
         };
-        let pending = builder.send().await.map_err(|e| Error::alloy(e))?;
+        let pending = builder.send().await.map_err(Error::alloy)?;
         let hash = *pending.tx_hash();
-        let receipt = pending.get_receipt().await.map_err(|e| Error::alloy(e))?;
+        let receipt = pending.get_receipt().await.map_err(Error::alloy)?;
         ensure_success(receipt.status(), $method, format!("{hash:#x}"))?;
         hash
     }};
@@ -228,11 +228,7 @@ impl OrchestratorClient {
 
     /// Verify the RPC actually serves the configured chain.
     pub async fn verify_chain(&self, expected: u64) -> Result<()> {
-        let actual = self
-            .provider
-            .get_chain_id()
-            .await
-            .map_err(|e| Error::alloy(e))?;
+        let actual = self.provider.get_chain_id().await.map_err(Error::alloy)?;
         if expected != 0 && actual != expected {
             return Err(Error::Chain(format!(
                 "configured chain {expected} but RPC serves {actual}"
@@ -255,7 +251,7 @@ impl OrchestratorClient {
             .provider
             .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
             .await
-            .map_err(|e| Error::alloy(e))?
+            .map_err(Error::alloy)?
             .ok_or_else(|| Error::Chain("latest block not available".into()))?;
         Ok((block.header.number, block.header.timestamp))
     }
@@ -269,7 +265,7 @@ impl OrchestratorClient {
         c.nodeRegistered(task_id, self.operator)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// Our commit for an epoch, or `None` if we never committed.
@@ -288,7 +284,7 @@ impl OrchestratorClient {
             .commits(task_id, epoch, node)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))?;
+            .map_err(Error::alloy)?;
         if commit.committedAt == 0 {
             return Ok(None);
         }
@@ -302,10 +298,7 @@ impl OrchestratorClient {
     /// The task's current status byte, for the pre-write check in the worker loop.
     pub async fn status_of(&self, task_id: U256) -> Result<u8> {
         let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
-        c.statusOf(task_id)
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))
+        c.statusOf(task_id).call().await.map_err(Error::alloy)
     }
 
     /// The channel the contract opened for `epoch` of `task_id`. `U256::ZERO` means none.
@@ -314,7 +307,7 @@ impl OrchestratorClient {
         c.epochChannel(task_id, epoch)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// The node the contract will pay for `epoch`, once it has a winner.
@@ -323,7 +316,7 @@ impl OrchestratorClient {
         c.epochWinner(task_id, epoch)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// The task as the contract holds it, for the pre-write gates in the worker.
@@ -333,7 +326,7 @@ impl OrchestratorClient {
     /// this rather than discovering the mismatch through a failed transaction.
     pub async fn task(&self, task_id: U256) -> Result<TaskOnChain> {
         let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
-        let t = c.tasks(task_id).call().await.map_err(|e| Error::alloy(e))?;
+        let t = c.tasks(task_id).call().await.map_err(Error::alloy)?;
         Ok(TaskOnChain {
             status: t.status,
             budget: t.budget,
@@ -362,7 +355,7 @@ impl OrchestratorClient {
         c.contributionOf(task_id, U256::from(leaf_index))
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// The contribution `contributor` made to `task_id`: CID, digest and acceptance.
@@ -379,7 +372,7 @@ impl OrchestratorClient {
             .contributions(task_id, contributor)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))?;
+            .map_err(Error::alloy)?;
         Ok(ContributionOnChain {
             contributor,
             ciphertext_cid: s.ciphertextCid,
@@ -395,19 +388,13 @@ impl OrchestratorClient {
     /// a remembered one.
     pub async fn settle_cursor(&self, task_id: U256) -> Result<U256> {
         let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
-        c.settleCursor(task_id)
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))
+        c.settleCursor(task_id).call().await.map_err(Error::alloy)
     }
 
     /// The `ctRoot` the contract sealed for this task.
     pub async fn ct_root(&self, task_id: U256) -> Result<B256> {
         let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
-        c.ctRootOf(task_id)
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))
+        c.ctRootOf(task_id).call().await.map_err(Error::alloy)
     }
 
     /// `(need, have)` of the dispute quorum for the epoch the contract is currently running.
@@ -422,7 +409,7 @@ impl OrchestratorClient {
             .disputeQuorum(task_id)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))?;
+            .map_err(Error::alloy)?;
         Ok((q.need, q.have))
     }
 
@@ -433,19 +420,13 @@ impl OrchestratorClient {
     /// maturity (F-22) — without guessing from a constant that lives in another repo layer.
     pub async fn settle_page_size(&self) -> Result<U256> {
         let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
-        c.SETTLE_PAGE_SIZE()
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))
+        c.SETTLE_PAGE_SIZE().call().await.map_err(Error::alloy)
     }
 
     /// Channel ids the vault opened for `task_id`, in opening order.
     pub async fn channel_ids(&self, task_id: U256) -> Result<Vec<U256>> {
         let v = IPaymentVault::new(self.vault, self.provider.clone());
-        v.channelIds(task_id)
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))
+        v.channelIds(task_id).call().await.map_err(Error::alloy)
     }
 
     /// Whether `task_id` still has an open reward channel whose window has not matured.
@@ -457,7 +438,7 @@ impl OrchestratorClient {
         v.hasImmatureChannels(task_id)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// Earliest chain time at which no channel of `task_id` is immature anymore.
@@ -483,7 +464,7 @@ impl OrchestratorClient {
             .channelInfo(channel_id)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))?;
+            .map_err(Error::alloy)?;
         Ok(ChannelOnChain {
             node: ch.node,
             streamer: ch.streamer,
@@ -502,13 +483,13 @@ impl OrchestratorClient {
         v.pendingWithdrawal(account)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// The FHE public key hash the network is currently using.
     pub async fn current_key_hash(&self) -> Result<B256> {
         let p = INetworkParams::new(self.network_params, self.provider.clone());
-        let ret = p.current().call().await.map_err(|e| Error::alloy(e))?;
+        let ret = p.current().call().await.map_err(Error::alloy)?;
         Ok(ret.fhePublicKeyHash)
     }
 
@@ -570,11 +551,7 @@ impl OrchestratorClient {
     /// The bond `registerNode` pulls, read from the vault so the node never hardcodes money.
     pub async fn registration_bond(&self) -> Result<u128> {
         let vault = IPaymentVault::new(self.vault, self.provider.clone());
-        vault
-            .REGISTRATION_BOND()
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))
+        vault.REGISTRATION_BOND().call().await.map_err(Error::alloy)
     }
 
     /// This operator's bond on a task, or zero when never posted, released or slashed.
@@ -584,7 +561,7 @@ impl OrchestratorClient {
             .nodeBond(task_id, node)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))
+            .map_err(Error::alloy)
     }
 
     /// Release our bond once the task can no longer slash it. The contract decides
@@ -608,17 +585,13 @@ impl OrchestratorClient {
     async fn ensure_bond_allowance(&self) -> Result<()> {
         let bond = self.registration_bond().await?;
         let task = ICipherTaskView::new(self.cipher_task, self.provider.clone());
-        let token = task
-            .escrowToken()
-            .call()
-            .await
-            .map_err(|e| Error::alloy(e))?;
+        let token = task.escrowToken().call().await.map_err(Error::alloy)?;
         let erc20 = IERC20::new(token, self.provider.clone());
         let allowance: U256 = erc20
             .allowance(self.operator, self.vault)
             .call()
             .await
-            .map_err(|e| Error::alloy(e))?;
+            .map_err(Error::alloy)?;
         if allowance >= U256::from(bond) {
             return Ok(());
         }
