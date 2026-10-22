@@ -6,6 +6,14 @@ first tagged release.
 
 ## Unreleased
 
+### Site: the settlement card tells the truth about the dust
+
+- The SETTLE card said "treasury = the remainder" and "all division remainders go to
+  the largest address". The code says otherwise: the treasury gets the fixed committee
+  leg, contributor-pool dust goes to the highest address, and the epoch-lock remainder
+  plus everything unclaimed is refunded to the buyer. The card now says exactly that,
+  in both languages.
+
 ### Paper theme: code and journal headings were unreadable
 
 - In the light theme the keyword color and the journal headings rendered dark-on-dark
