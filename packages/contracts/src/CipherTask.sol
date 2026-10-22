@@ -134,6 +134,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => mapping(uint32 => mapping(address => EpochCommit))) private _commits;
     mapping(uint256 => mapping(address => bool)) private _nodeRegistered;
     mapping(uint256 => uint32) private _nodeCount;
+    /// @dev A running commitment to the registered node set, in registration order. It
+    ///      enters the epoch's dispute sortition seed, so the sequencer cannot choose the
+    ///      committee; see `_registerNode`.
+    mapping(uint256 => bytes32) public nodeSetHash;
     mapping(uint256 => address[]) private _contributorList;
     mapping(uint256 => mapping(uint32 => address)) private _epochWinner;
     mapping(uint256 => mapping(uint32 => uint256)) private _epochChannel;
@@ -470,6 +474,13 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         unchecked {
             _nodeCount[taskId] += 1;
         }
+        // A running commitment to the registered node set, in registration order. The
+        // epoch's dispute sortition draws its committee from a seed that includes it, so
+        // the sequencer cannot pick the committee: the set is fixed by the registrations,
+        // and every registration posts a bond. Without this the seed was the block's
+        // randomness alone, which a sequencer that proposes the blocks can grind in a
+        // handful of hashes until it draws its own Sybil identities (threat model F-04).
+        nodeSetHash[taskId] = keccak256(abi.encode(nodeSetHash[taskId], node, blsPubKey));
         vault.takeBond(taskId, node, blsPubKey);
         emit NodeRegistered(taskId, node, blsPubKey);
     }
@@ -602,6 +613,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDisputeWithSalt(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest, bytes32 salt) external whenNotPaused {
         DisputeLib.reveal(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
+            nodeSetHash[taskId],
             taskId, epoch, msg.sender, reexecutedDigest, salt,
             vault.taskBondTotal(taskId), vault.nodeBond(taskId, msg.sender)
         );
@@ -625,6 +637,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     function reportDispute(uint256 taskId, uint32 epoch, bytes32 reexecutedDigest) external whenNotPaused {
         DisputeLib.report(
             _disputes, _nodeRegistered, _tasks[taskId], _commits, _claimedDigest,
+            nodeSetHash[taskId],
             taskId, epoch, msg.sender, reexecutedDigest,
             vault.taskBondTotal(taskId), vault.nodeBond(taskId, msg.sender)
         );

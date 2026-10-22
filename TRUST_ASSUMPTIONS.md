@@ -17,4 +17,6 @@ documented. If any row is unacceptable for your use case, do not escrow value.
 | T-10 | One BLS identity per node (no key reuse across nodes) | A single operator poses as a quorum | Enforced on-chain (key uniqueness + proof-of-possession) |
 | T-11 | The relayer serves the correct key and does not censor inputs | Wrong-key ciphertexts; censored contributions miss the window | Key bytes hashed into `publicKeyHash` and pinned on-chain; `contractAddress` binding required (`assertInputBinding`); ordering/censorship by the relayer itself is not mitigated |
 
+| T-12 | The registered node set of a task is what the dispute committee is drawn from | A Sybil ring that registers enough identities buys its way into the committee, and a dispute is decided by the ring | Every registration posts a bond and the draw is weighted by it, so the ring's weight is priced (F-04); the sequencer cannot pick the committee at all (F-59) |
+
 Removing a row requires code + tests + docs in the same change, never docs alone.

@@ -1076,6 +1076,17 @@ pub fn commit_gate(task: &TaskOnChain, epoch: u32, now: u64, min_window: Duratio
     if Duration::from_secs(task.epoch_deadline.saturating_sub(now)) < min_window {
         return Gate::Skip("less than node.min_epoch_window is left");
     }
+    // A dispute is only worth filing if a re-execution can finish inside the dispute
+    // window, and a re-execution takes about as long as the epoch does. A task whose
+    // dispute window is shorter than the node's own minimum therefore has an
+    // unreachable dispute: the committee cannot check the claim, and the epoch is
+    // settled on the claimant's word alone. The node refuses rather than take part in
+    // a dispute mechanism that cannot work.
+    if (task.dispute_window as u64) < min_window.as_secs() {
+        return Gate::Skip(
+            "the dispute window is too short to hold a re-execution; the dispute would be unreachable",
+        );
+    }
     Gate::Ready
 }
 
@@ -1294,6 +1305,25 @@ mod tests {
     #[test]
     fn an_epoch_we_could_still_commit_in_is_ready() {
         let t = task(TaskStatus::EpochOpen, 3);
+        assert_eq!(
+            commit_gate(&t, 3, 700, Duration::from_secs(300)),
+            Gate::Ready
+        );
+    }
+
+    #[test]
+    fn an_epoch_whose_dispute_window_cannot_hold_a_re_execution_is_refused() {
+        // A dispute nobody can finish checking is not a dispute: the committee would
+        // have to take the claimant's word, and the epoch would settle on it. The node
+        // refuses the epoch rather than take part in a mechanism that cannot work.
+        let mut t = task(TaskStatus::EpochOpen, 3);
+        t.dispute_window = 10; // far shorter than a re-execution
+        assert!(matches!(
+            commit_gate(&t, 3, 700, Duration::from_secs(300)),
+            Gate::Skip("the dispute window is too short to hold a re-execution; the dispute would be unreachable")
+        ));
+        // With a window that can hold one, the same epoch is committable.
+        t.dispute_window = 600;
         assert_eq!(
             commit_gate(&t, 3, 700, Duration::from_secs(300)),
             Gate::Ready

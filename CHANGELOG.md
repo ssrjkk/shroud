@@ -6,6 +6,37 @@ first tagged release.
 
 ## Unreleased
 
+### Design: the dispute committee is no longer the sequencer's to pick
+
+- The committee that may report a dispute for an epoch is drawn by a weighted
+  lottery, so a Sybil ring cannot count arbitrary identities toward quorum. But
+  the draw needs a seed, and the seed was the block's randomness alone. On a
+  chain whose sequencer proposes the blocks — this protocol's own L3 — that is a
+  handful of hashes to search until the seed draws the sequencer's own
+  identities and excludes the honest one: **the sequencer picked the committee,
+  for free**, while every bond in the design is priced.
+- The seed now also commits to the registered node set, and that set is fixed by
+  the registrations — each of which posts a bond. The sequencer can no longer
+  choose the committee, and a Sybil cannot buy its way in either: it cannot see
+  the seed before it registers, and every identity it adds costs a bond. The
+  chain's randomness still enters, so the draw stays uniform for a fixed set.
+- No ABI change: the commitment is a running hash over the registrations, kept
+  in one new public mapping, and the seed derivation moved into the dispute
+  library where the lottery already lived. **F-59.**
+
+### Design: a task whose dispute could never be checked is refused
+
+- A dispute is only worth filing if a re-execution can finish inside the dispute
+  window, and a re-execution takes about as long as the epoch does. A task whose
+  dispute window is shorter than the training time has an **unreachable
+  dispute**: the committee cannot check the claim, and the epoch settles on the
+  claimant's word alone — the one thing the dispute protocol exists to prevent.
+- The contract cannot know how long a re-execution takes, so the guard lives in
+  the node, which does: it refuses such an epoch loudly instead of taking part
+  in a mechanism that cannot work. The node's own `min_epoch_window` is the
+  yardstick, so an operator who knows their training time sets it once.
+  **F-60.**
+
 ### Gates: the threat model's regression references must name a real test
 
 - Every finding fixed in this pass carries the test that pins it, and that

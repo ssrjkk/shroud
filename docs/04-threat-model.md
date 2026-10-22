@@ -95,6 +95,10 @@ closes while a commitment is open). `registerNodeWithPop` binds the BLS key to a
 per identity and ends key-theft repudiation for adopters. Neither changes the flat quorum of 3.
 
 F-15 removes the variant where the attack is free.
+Two of the three ways this finding named are now closed, and the third is priced rather
+than prevented. The committee is no longer the sequencer's to pick (F-59), and an epoch whose
+dispute could not be checked at all is refused by the node (F-60); what remains is the ring's
+weight, and every identity it adds posts a bond.
 Regression: `packages/contracts/test/Hardening.spec.ts` — *"slashed weight leaves the denominator: honest shares are undiluted"*.
 
 ### F-15 — Dispute-target hijack by a losing committer (ADV2) — **Mitigated**
@@ -780,6 +784,29 @@ version, the query string, the fragment and the URL's own credentials are masked
 endpoint is a location rather than a credential, so its path stays visible; a presigned query
 signature does not. Regression: `node/src/redact.rs` — *"the key does not survive the
 redaction"*.
+
+### F-59 — The sequencer could choose the dispute committee (ADV5, ADV3) — **Mitigated**
+The committee that may report a dispute for an epoch is drawn by a weighted lottery, so a Sybil
+ring cannot count arbitrary identities toward quorum. The draw needs a seed, and the seed was
+the block's randomness alone. On a chain whose sequencer proposes the blocks — this protocol's
+own L3 — that is a handful of hashes to search until the seed draws the sequencer's own
+identities and excludes the honest one: the sequencer picked the committee, for free, while
+every bond in the design is priced. The seed now also commits to the registered node set, and
+that set is fixed by the registrations, each of which posts a bond. The sequencer can no longer
+choose the committee, and a Sybil cannot buy its way in either: it cannot see the seed before
+it registers, and every identity it adds costs a bond. Regression:
+`packages/contracts/test/Sortition.spec.ts` — *"the epoch's seed commits to the registered node
+set"*.
+
+### F-60 — A task could be created whose dispute could never be checked (ADV1, ADV4) — **Mitigated**
+A dispute is only worth filing if a re-execution can finish inside the dispute window, and a
+re-execution takes about as long as the epoch does. A task whose dispute window is shorter than
+the training time therefore has an unreachable dispute: the committee cannot check the claim, and
+the epoch settles on the claimant's word alone — the one thing the dispute protocol exists to
+prevent. The task parameters are still accepted on chain, because the contract cannot know how
+long a re-execution takes; the guard therefore lives in the node, which does know, and it
+refuses the epoch loudly instead of taking part in a mechanism that cannot work. Regression:
+`node/src/worker.rs` — *"an epoch whose dispute window cannot hold a re-execution is refused"*.
 
 ## 3. Explicitly out of scope
 

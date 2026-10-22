@@ -89,6 +89,7 @@ library DisputeLib {
         ICipherTask.Task storage t,
         mapping(uint256 => mapping(uint32 => mapping(address => ICipherTask.EpochCommit))) storage commits,
         mapping(uint256 => mapping(uint32 => bytes32)) storage claimed,
+        bytes32 nodeSetHash,
         uint256 taskId,
         uint32 epoch,
         address reporter,
@@ -109,7 +110,7 @@ library DisputeLib {
             revert ICipherTask.CommitmentMismatch(taskId, epoch, reporter);
         }
         delete s.commitment[taskId][epoch][reporter];
-        record(s, registered, t, commits, claimed, taskId, epoch, reporter, digest, committeeTotal, reporterWeight);
+        record(s, registered, t, commits, claimed, nodeSetHash, taskId, epoch, reporter, digest, committeeTotal, reporterWeight);
     }
 
     /// @notice Bare report path (backward compatible). Reverts while the reporter has an open
@@ -120,6 +121,7 @@ library DisputeLib {
         ICipherTask.Task storage t,
         mapping(uint256 => mapping(uint32 => mapping(address => ICipherTask.EpochCommit))) storage commits,
         mapping(uint256 => mapping(uint32 => bytes32)) storage claimed,
+        bytes32 nodeSetHash,
         uint256 taskId,
         uint32 epoch,
         address reporter,
@@ -130,7 +132,7 @@ library DisputeLib {
         if (s.commitment[taskId][epoch][reporter] != bytes32(0)) {
             revert ICipherTask.CommitmentPending(taskId, epoch, reporter);
         }
-        record(s, registered, t, commits, claimed, taskId, epoch, reporter, digest, committeeTotal, reporterWeight);
+        record(s, registered, t, commits, claimed, nodeSetHash, taskId, epoch, reporter, digest, committeeTotal, reporterWeight);
     }
 
     /// @dev Pure eligibility predicate, separated so the host can expose it as a view
@@ -146,10 +148,31 @@ library DisputeLib {
         return uint256(keccak256(abi.encode(seed, reporter))) % totalWeight < COMMITTEE_SIZE * weight;
     }
 
+    /// @notice The epoch's sortition seed.
+    /// @dev The seed decides which registered nodes may report a dispute for an epoch, so
+    ///      it has to be something the chain's sequencer cannot choose. `block.prevrandao`
+    ///      alone was not: on a chain whose sequencer proposes the blocks it can search a
+    ///      handful of values until the seed draws its own Sybil identities and excludes
+    ///      the honest one - a handful of hashes, for free. The registered node set enters
+    ///      the seed as well, and that set is fixed by the registrations, each of which
+    ///      posts a bond - so the sequencer can no longer pick the committee, and a Sybil
+    ///      cannot buy its way in either (it cannot see the seed before it registers, and
+    ///      every identity it adds costs a bond). The chain's randomness still enters, so
+    ///      the draw stays uniform for a fixed node set.
+    function epochSeed(
+        bytes32 nodeSetHash,
+        uint256 prevrandao,
+        uint256 taskId,
+        uint32 epoch
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encode(nodeSetHash, prevrandao, taskId, epoch));
+    }
+
     /// @dev Sortition gate for `record`: fixes the epoch seed on first use, then admits
     ///      only drawn members. Inlined into the host (internal), so no DELEGATECALL.
     function isEligible(
         State storage s,
+        bytes32 nodeSetHash,
         uint256 taskId,
         uint32 epoch,
         address reporter,
@@ -158,7 +181,7 @@ library DisputeLib {
     ) internal returns (bool) {
         bytes32 seed = s.seed[taskId][epoch];
         if (seed == bytes32(0)) {
-            seed = keccak256(abi.encode(block.prevrandao, taskId, epoch));
+            seed = epochSeed(nodeSetHash, block.prevrandao, taskId, epoch);
             s.seed[taskId][epoch] = seed;
         }
         return isEligibleSeed(seed, totalWeight, weight, reporter);
@@ -174,6 +197,7 @@ library DisputeLib {
         ICipherTask.Task storage t,
         mapping(uint256 => mapping(uint32 => mapping(address => ICipherTask.EpochCommit))) storage commits,
         mapping(uint256 => mapping(uint32 => bytes32)) storage claimed,
+        bytes32 nodeSetHash,
         uint256 taskId,
         uint32 epoch,
         address reporter,
@@ -187,7 +211,7 @@ library DisputeLib {
         }
         if (s.recorded[taskId][epoch][reporter]) revert ICipherTask.DuplicateCommit(taskId, epoch, reporter);
         if (digest == claimed[taskId][epoch]) revert ICipherTask.DisputeAgreesWithClaim(taskId, epoch, reporter);
-        if (!isEligible(s, taskId, epoch, reporter, committeeTotal, reporterWeight)) {
+        if (!isEligible(s, nodeSetHash, taskId, epoch, reporter, committeeTotal, reporterWeight)) {
             revert ICipherTask.NotCommitteeMember(taskId, epoch, reporter);
         }
 
