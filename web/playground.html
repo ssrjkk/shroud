@@ -37,7 +37,7 @@
 
 <main id="main">
 <section class="sect">
-  <div class="sect-head"><span class="sect-num" data-i18n="lab.n">LAB / 01–06</span><h2 class="sect-title" data-i18n="lab.t">Протокол — руками, в браузере</h2></div>
+  <div class="sect-head"><span class="sect-num" data-i18n="lab.n">LAB / 01–06</span><h1 class="sect-title" data-i18n="lab.t">Протокол — руками, в браузере</h1></div>
   <p class="sect-lede" data-i18n="lab.lede">Шесть стендов плюс журнал с итогами. Математика — как в node/src/fhe.rs и @shroud/sdk (квантование, reference-SGD, keccak-транскрипт, STAR-референс), сверено скриптом web/tests/equiv.mjs. Демо-раскладка шарда — shroud/noop/v1 (боевая — relayer/TFHE, смысл байтов тот же). Итог — веса, дайджесты и JSON-отчёт.</p>
   <div class="notice warn"><b class="t" data-i18n="lab.honest">Честно о стенде</b><span data-i18n="lab.honestp">Reference-движок считает в открытую из демо-байтов (dev-путь узла: shroud/noop/v1, без шифрования). Боевой TFHE-путь включается флагом prover, полной ончейн-проверки STARK пока нет, первого живого commitEpoch ещё не было — см. docs/05 §8. Дефолтный lr 0.05 даёт lrQ16 3277, а золотые векторы пинят 3276 (см. vectors.json) — сверяйся с векторами при том же lrQ16. Стенд показывает порядок шагов и форматы, а не криптографические гарантии.</span></div>
 
@@ -54,12 +54,12 @@
 
     <fieldset class="bench"><legend data-i18n="lab.b1">Стенд 01 — данные</legend><div class="bench-in">
       <p class="hint" data-i18n="lab.b1h">CSV «признаки,метка», по строке на запись. Числа с точкой; разделитель — запятая, точка с запятой, пробел или табуляция. Только неотрицательные — TFHE шифрует беззнаковые целые.</p>
-      <div class="field"><label data-i18n="lab.preset">Пресет</label><select id="preset">
+      <div class="field"><label data-i18n="lab.preset" for="preset">Пресет</label><select id="preset">
         <option value="housing" data-i18n="lab.p1">Жильё — 2 признака + цена</option>
         <option value="medical" data-i18n="lab.p2">Медицина — 3 признака + риск</option>
         <option value="credit" data-i18n="lab.p3">Скоринг — 4 признака + лимит</option>
       </select></div>
-      <div class="field"><label data-i18n="lab.csv">CSV</label><textarea id="csv">1.2,3,2.1
+      <div class="field"><label data-i18n="lab.csv" for="csv">CSV</label><textarea id="csv">1.2,3,2.1
 1.8,3,2.8
 2.0,2,3.0
 1.1,4,2.4
@@ -67,8 +67,8 @@
 1.6,2,2.5
 2.9,4,4.2
 1.4,3,2.3</textarea></div>
-      <div class="field-row"><div class="field"><label data-i18n="lab.feat">features (колонок)</label><input type="number" id="features" value="3" min="2" max="33" /></div>
-      <div class="field"><label data-i18n="lab.scale">scale (квант)</label><input type="number" id="scale" value="1000" min="1" max="100000" /></div></div>
+      <div class="field-row"><div class="field"><label data-i18n="lab.feat" for="features">features (колонок)</label><input type="number" id="features" value="3" min="2" max="33" /></div>
+      <div class="field"><label data-i18n="lab.scale" for="scale">scale (квант)</label><input type="number" id="scale" value="1000" min="1" max="100000" /></div></div>
       <div class="btnrow"><button class="btn btn-dark btn-sm" id="parseBtn" data-i18n="lab.parse">Разобрать CSV</button></div>
       <div aria-live="polite" id="msg1"></div>
       <div class="field" style="margin-top:12px"><label data-i18n="lab.prev">Предпросмотр</label><div class="datapreview" id="preview" data-i18n="lab.prev0">нажмите «Разобрать CSV»</div></div>
@@ -83,13 +83,13 @@
 
     <fieldset class="bench only-pro"><legend data-i18n="lab.b3">Стенд 03 — задача и бюджет</legend><div class="bench-in">
       <p class="hint" data-i18n="lab.b3h">createTask(budget, params) эскроуирует ровно названное. Деление пулов — как в CipherTask._settle.</p>
-      <div class="field-row r3"><div class="field"><label data-i18n="lab.budget">Бюджет USDC</label><input type="number" id="budget" value="10000" min="1" /></div>
-      <div class="field"><label data-i18n="lab.epochs">Эпох</label><input type="number" id="epochs" value="3" min="1" max="20" /></div>
-      <div class="field"><label data-i18n="lab.taskid">taskId</label><input type="number" id="taskId" value="1" min="1" /></div></div>
-      <div class="field-row"><div class="field"><label data-i18n="lab.chain">chainId</label><input type="number" id="chainId" value="31337" /></div>
-      <div class="field"><label data-i18n="lab.ct">CipherTask</label><input type="text" id="cipherTask" value="0x5FbDB2315678afecb367f032d93F642f64180aa3" /></div></div>
-      <div class="field-row only-pro"><div class="field"><label data-i18n="lab.seed">seed трейса</label><input type="number" id="seed" value="42" min="0" /></div>
-      <div class="field"><label data-i18n="lab.prev0x">prevDigest (hex, пусто = нули)</label><input type="text" id="prevDigest" value="" /></div></div>
+      <div class="field-row r3"><div class="field"><label data-i18n="lab.budget" for="budget">Бюджет USDC</label><input type="number" id="budget" value="10000" min="1" /></div>
+      <div class="field"><label data-i18n="lab.epochs" for="epochs">Эпох</label><input type="number" id="epochs" value="3" min="1" max="20" /></div>
+      <div class="field"><label data-i18n="lab.taskid" for="taskId">taskId</label><input type="number" id="taskId" value="1" min="1" /></div></div>
+      <div class="field-row"><div class="field"><label data-i18n="lab.chain" for="chainId">chainId</label><input type="number" id="chainId" value="31337" /></div>
+      <div class="field"><label data-i18n="lab.ct" for="cipherTask">CipherTask</label><input type="text" id="cipherTask" value="0x5FbDB2315678afecb367f032d93F642f64180aa3" /></div></div>
+      <div class="field-row only-pro"><div class="field"><label data-i18n="lab.seed" for="seed">seed трейса</label><input type="number" id="seed" value="42" min="0" /></div>
+      <div class="field"><label data-i18n="lab.prev0x" for="prevDigest">prevDigest (hex, пусто = нули)</label><input type="text" id="prevDigest" value="" /></div></div>
       <div class="btnrow"><button class="btn btn-dark btn-sm" id="taskBtn" data-i18n="lab.fix">Зафиксировать задачу</button></div>
       <div aria-live="polite" id="msg3"></div>
       <div class="field" style="margin-top:12px"><label data-i18n="lab.out">Выход</label><div class="datapreview" id="taskOut" data-i18n="lab.task0">ждёт фиксации</div></div>
@@ -97,9 +97,9 @@
 
     <fieldset class="bench only-pro"><legend data-i18n="lab.b4">Стенд 04 — эпоха узла</legend><div class="bench-in">
       <p class="hint" data-i18n="lab.b4h">Детерминированный fixed-point SGD (reference-cpu). Тот же шаг повторит любой узел — иначе спор.</p>
-      <div class="field-row r3"><div class="field"><label data-i18n="lab.lr">learning rate</label><input type="text" id="lr" value="0.05" /></div>
-      <div class="field"><label data-i18n="lab.l2">L2</label><input type="text" id="l2" value="0" /></div>
-      <div class="field"><label data-i18n="lab.mb">minibatch</label><input type="number" id="minibatch" value="8" min="1" /></div></div>
+      <div class="field-row r3"><div class="field"><label data-i18n="lab.lr" for="lr">learning rate</label><input type="text" id="lr" value="0.05" /></div>
+      <div class="field"><label data-i18n="lab.l2" for="l2">L2</label><input type="text" id="l2" value="0" /></div>
+      <div class="field"><label data-i18n="lab.mb" for="minibatch">minibatch</label><input type="number" id="minibatch" value="8" min="1" /></div></div>
       <div class="btnrow"><button class="btn btn-red btn-sm" id="execBtn" data-i18n="lab.exec">Выполнить эпоху</button><button class="btn btn-sm" id="dlWeights" data-i18n="lab.dlw">Скачать weights-demo.hex</button><button class="btn btn-sm" id="resetEpochs" data-i18n="lab.reset">Сброс</button></div>
       <div aria-live="polite" id="msg4"></div>
       <div class="field" style="margin-top:12px"><label data-i18n="lab.out">Выход</label><div class="datapreview" id="execOut" data-i18n="lab.exec0">ждёт эпохи</div></div>
@@ -128,8 +128,8 @@
 
 <footer class="foot"><div class="foot-in">
   <div><p class="foot-brand">Shroud</p><p data-i18n="f.labnote">Стенд считает локально. Боевой путь — devnet: контракты → SDK → узел. См. «Протокол».</p></div>
-  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
-  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud/tree/HEAD/packages/sdk">SDK</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/node">Node</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
+  <div><h2 data-i18n="f.map">Карта</h2><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h2 data-i18n="f.src">Исходники</h2><p><a href="https://github.com/ssrjkk/shroud/tree/HEAD/packages/sdk">SDK</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/node">Node</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
 </div><div class="foot-base"><span>© 2026 ssrjkk</span><span data-i18n="f.base2">bench 01–06 · reproducible</span></div></footer>
 
 <script src="./assets/crypto.js"></script>

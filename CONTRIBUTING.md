@@ -61,6 +61,8 @@ grep -rnE '(tree|blob)/main/' web/ README.md *.md docs/ && exit 1 || echo "branc
 node web/tests/equiv.mjs              # site math vs golden vectors
 node web/tests/i18n.mjs               # ru/en symmetry, markup coverage, dead keys
 node web/tests/nav.mjs                # same menu on every page, active item, anchors
+node web/tests/findings.mjs           # the finding count quoted by the site matches docs/04
+node web/tests/a11y.mjs               # one h1 per page, no level jumps, named fields
 ```
 
 Enable the versioned hook once with `git config core.hooksPath .githooks`

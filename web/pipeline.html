@@ -44,7 +44,7 @@
 </div></div>
 
 <section class="sect">
-  <div class="sect-head"><span class="sect-num" data-i18n="pip.n">01 / PIPELINE</span><h2 class="sect-title" data-i18n="pip.t">Конвейер: от plaintext до денег</h2></div>
+  <div class="sect-head"><span class="sect-num" data-i18n="pip.n">01 / PIPELINE</span><h1 class="sect-title" data-i18n="pip.t">Конвейер: от plaintext до денег</h1></div>
   <p class="sect-lede" data-i18n="pip.l">В боевом пути шифрование происходит на устройстве контрибьютора (SDK/relayer); стенд считает локально. С этого момента ни цепочка, ни память узла plaintext не содержат. Полная последовательность из 29 шагов — на странице «Протокол»; здесь — скелет.</p>
   <div class="scheme rv">
     <div class="scheme-head"><span data-i18n="pip.sch.head">Схема A — движение данных и денег</span><span data-i18n="pip.sch.side">лист 01 · масштаб 1:1</span></div>
@@ -70,9 +70,9 @@
     <div class="scheme-foot" data-i18n="pip.sch.foot">покупатель ──► CipherTask (escrow + автомат состояний + платёжные каналы) ◄── STARK-дайджест эпохи</div>
   </div>
   <div class="cols3">
-    <article class="card solid rv"><span class="tag">FHE</span><h3 data-i18n="pip.c1t">Считаем, не глядя</h3><p data-i18n="pip.c1p">ZK доказывает, что посчитано. FHE убирает саму нужду показывать вход. Разница между «проверь результат» и «тебе вообще нечего смотреть».</p><div class="foot-line" data-i18n="pip.c1f">вход: euint32 · масштаб 1e4 · батч 8</div></article>
-    <article class="card solid rv"><span class="tag">PROOF</span><h3 data-i18n="pip.c2t">Доказательство работы</h3><p data-i18n="pip.c2p">Эпоха привязана к chainId, задаче, корню датасета и прошлым весам. Три ре-экзекьютора с другим дайджестом — эпоха отклонена, выплат нет.</p><div class="foot-line" data-i18n="pip.c2f">кворум 3 · бонд победителя сжигается в refund</div></article>
-    <article class="card solid rv"><span class="tag">MONEY</span><h3 data-i18n="pip.c3t">Потоковые выплаты</h3><p data-i18n="pip.c3p">PaymentVault платит слайсами по мере эпох. Невостребованное узел забирает сам через reclaim; покупатель чужого не тронет — пулы не пересекаются.</p><div class="foot-line" data-i18n="pip.c3f">settleFrom · курсор · 200 за вызов</div></article>
+    <article class="card solid rv"><span class="tag">FHE</span><h2 data-i18n="pip.c1t">Считаем, не глядя</h2><p data-i18n="pip.c1p">ZK доказывает, что посчитано. FHE убирает саму нужду показывать вход. Разница между «проверь результат» и «тебе вообще нечего смотреть».</p><div class="foot-line" data-i18n="pip.c1f">вход: euint32 · масштаб 1e4 · батч 8</div></article>
+    <article class="card solid rv"><span class="tag">PROOF</span><h2 data-i18n="pip.c2t">Доказательство работы</h2><p data-i18n="pip.c2p">Эпоха привязана к chainId, задаче, корню датасета и прошлым весам. Три ре-экзекьютора с другим дайджестом — эпоха отклонена, выплат нет.</p><div class="foot-line" data-i18n="pip.c2f">кворум 3 · бонд победителя сжигается в refund</div></article>
+    <article class="card solid rv"><span class="tag">MONEY</span><h2 data-i18n="pip.c3t">Потоковые выплаты</h2><p data-i18n="pip.c3p">PaymentVault платит слайсами по мере эпох. Невостребованное узел забирает сам через reclaim; покупатель чужого не тронет — пулы не пересекаются.</p><div class="foot-line" data-i18n="pip.c3f">settleFrom · курсор · 200 за вызов</div></article>
   </div>
   <p style="margin-top:18px"><a href="./use.html" data-i18n="nav.use">Практика</a> · <a href="./protocol.html" data-i18n="nav.proto">Протокол</a></p>
 </section>
@@ -80,8 +80,8 @@
 
 <footer class="foot"><div class="foot-in">
   <div><p class="foot-brand">Shroud</p><p data-i18n="f.about">Приватное программируемое ML с проверяемыми вычислениями и потоковыми выплатами. Референсная реализация, не продукт.</p></div>
-  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
-  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
+  <div><h2 data-i18n="f.map">Карта</h2><p><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./security.html" data-i18n="nav.sec">Безопасность</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h2 data-i18n="f.src">Исходники</h2><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.rep">Сообщить об уязвимости</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
 </div><div class="foot-base"><span>© 2026 ssrjkk · SHR-2026-01</span><span data-i18n="f.base">plaintext никогда не покидает устройство</span></div></footer>
 
 <script src="./assets/i18n.js"></script>

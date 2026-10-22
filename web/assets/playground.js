@@ -107,21 +107,21 @@
     var wd = "—";
     try { wd = C.weightsDigest(w0); } catch (e) {}
     var html = "";
-    html += "<h4>" + esc(t("lab.j.set")) + "</h4><table class=\"ltable\">" +
+    html += "<h2>" + esc(t("lab.j.set")) + "</h2><table class=\"ltable\">" +
       "<tr><td>" + esc(t("lab.j.rows")) + "</td><td>" + n + " / " + S.features + "</td></tr>" +
       "<tr><td>scale</td><td>" + S.scale + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.commit")) + "</td><td>" + esc(short(S.ctDigest)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.shard")) + "</td><td>" + esc(short(S.cid)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.pin")) + "</td><td>" + esc(short(S.pin)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.bytes")) + "</td><td>" + (S.shardBytes ? S.shardBytes.length : "—") + "</td></tr></table>";
-    html += "<h4>" + esc(t("lab.j.task")) + "</h4><table class=\"ltable\">" +
+    html += "<h2>" + esc(t("lab.j.task")) + "</h2><table class=\"ltable\">" +
       "<tr><td>" + esc(t("lab.j.te")) + "</td><td>" + S.taskId + " / " + S.epoch + " " + esc(t("lab.j.of")) + " " + S.epochs + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.budget")) + "</td><td>" + S.budget + " USDC</td></tr>" +
       "<tr><td>" + esc(t("lab.j.pools")) + "</td><td>" + Math.floor(S.budget * 0.8) + " / " + Math.floor(S.budget * 0.15) + " / " + (S.budget - Math.floor(S.budget * 0.8) - Math.floor(S.budget * 0.15)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.weights")) + "</td><td>[" + w0.join(", ") + "]</td></tr>" +
       "<tr><td>" + esc(t("lab.j.wd")) + "</td><td>" + esc(short(wd)) + "</td></tr>" +
       "<tr><td>" + esc(t("lab.j.trace")) + "</td><td>" + esc(short(S.prevTrace)) + "</td></tr></table>";
-    html += "<h4>" + esc(t("lab.j.how")) + "</h4><div class=\"lout\">" + esc(t("lab.j.howv")) + "</div>";
+    html += "<h2>" + esc(t("lab.j.how")) + "</h2><div class=\"lout\">" + esc(t("lab.j.howv")) + "</div>";
     $("ledger").innerHTML = html;
   }
 

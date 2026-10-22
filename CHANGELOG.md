@@ -6,6 +6,26 @@ first tagged release.
 
 ## Unreleased
 
+### Site: the front door is readable by assistive tech
+
+- Every page except the landing one opened with `h2` — the document had no `h1` at all.
+  The first section title is now the `h1`, the headings under it moved down one level,
+  and the footer's `h5` column titles (a `h2 → h5` jump on every page) are `h2`. `card`,
+  `plain-card`, `perm-grid` and `ledger` headings keep their look through grouped
+  selectors, and the new levels were checked against the computed styles.
+- The lab's fourteen fields had a `<label>` *next to* them, not associated with them:
+  a screen reader announced "edit text, blank" and nothing else. Each label now carries
+  `for=`. The journal's section headings are `h2` (they were `h4` under an `h1`).
+- New `web/tests/a11y.mjs` (in the `site` workflow and the CONTRIBUTING pre-push list):
+  one `h1` and no downward level jumps per page, every field has an accessible name,
+  every image has `alt`, every link and button has text, every document has `lang`.
+  It was run against six deliberate regressions — each one fails the gate.
+- Lighthouse on all pages: accessibility 1.00 (was 0.98 on six pages and 0.87 on the
+  lab), best practices 1.00, SEO 1.00. The 404 page was checked at `/shroud/`, where
+  GitHub Pages serves it, so its absolute asset paths are exercised too.
+- CONTRIBUTING's pre-push list gained `findings.mjs` (it was in CI but not in the list)
+  and `a11y.mjs`.
+
 ### Devnet: the owner controls are exercised on a live deployment
 
 - The unit suite proves the treasury rotation and the proof-requirement ratchet in

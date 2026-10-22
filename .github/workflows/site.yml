@@ -75,6 +75,8 @@ jobs:
         run: node web/tests/i18n.mjs
       - name: check navigation across pages
         run: node web/tests/nav.mjs
+      - name: check accessibility invariants
+        run: node web/tests/a11y.mjs
       - name: check the site's finding count matches the threat model
         run: node web/tests/findings.mjs
       - uses: actions/upload-pages-artifact@v3

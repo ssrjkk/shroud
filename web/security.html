@@ -38,18 +38,18 @@
 
 <main id="main">
 <section class="sect">
-  <div class="sect-head"><span class="sect-num" data-i18n="sec.n">SEC / STATUS</span><h2 class="sect-title" data-i18n="sec.t">Что enforced. И что нет.</h2></div>
+  <div class="sect-head"><span class="sect-num" data-i18n="sec.n">SEC / STATUS</span><h1 class="sect-title" data-i18n="sec.t">Что enforced. И что нет.</h1></div>
   <p class="sect-lede" data-i18n="sec.lede">Протокол двигает деньги. Зелёная таблица без красного стоила бы ничего — поэтому провалы лежат здесь с тем же кеглем, что победы. Решаешь, доверять ли ценность, — читай красный раздел первым. Полный разбор: docs/04-threat-model.md (62 находок) и docs/05-honest-limitations.md.</p>
   <div class="notice"><b class="t" data-i18n="sec.st">Статус</b><span data-i18n="sec.stp">Код двигает средства и не проходил внешнего аудита. Не использовать с реальной ценностью. Актуальные числа прогонов — в CI. «Протестировано» ≠ «аудировано».</span></div>
   <div class="cols3">
-    <article class="card rv" style="border-left:6px solid var(--good)"><h3 data-i18n="sec.c1t">18 — enforced и покрыто</h3><p data-i18n="sec.c1p">Учёт эскроу, реентрантность, пулы, abort, таргет споров, commit-reveal, оплата ре-экзекьюторов, порог раскрытия, key-pin в SDK (fail-closed), запрет cleartext по умолчанию, hostile-DA, ротации без перезаписи, fee-tokens fail-closed, сегментированный путь.</p></article>
-    <article class="card rv" style="border-left:6px solid var(--warn)"><h3 data-i18n="sec.c2t">3 — задокументировано, не реализовано</h3><p data-i18n="sec.c2p">Devnet-нюансы, часть экономики (взвешенное назначение ре-экзекьюторов), настоящий STARK-прувер — описаны как отсутствие, а не как механизм.</p></article>
-    <article class="card rv" style="border-left:6px solid var(--bad)"><h3 data-i18n="sec.c3t">4 — известные пробелы</h3><p data-i18n="sec.c3p">Sybil-кворум (плоские 3), бонд взносов opt-in без fraud-proof, полная STARK-проверка, подмена ключа внутри эпохи (ловится только на старте). Ниже — каждый с последствиями.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--good)"><h2 data-i18n="sec.c1t">18 — enforced и покрыто</h2><p data-i18n="sec.c1p">Учёт эскроу, реентрантность, пулы, abort, таргет споров, commit-reveal, оплата ре-экзекьюторов, порог раскрытия, key-pin в SDK (fail-closed), запрет cleartext по умолчанию, hostile-DA, ротации без перезаписи, fee-tokens fail-closed, сегментированный путь.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--warn)"><h2 data-i18n="sec.c2t">3 — задокументировано, не реализовано</h2><p data-i18n="sec.c2p">Devnet-нюансы, часть экономики (взвешенное назначение ре-экзекьюторов), настоящий STARK-прувер — описаны как отсутствие, а не как механизм.</p></article>
+    <article class="card rv" style="border-left:6px solid var(--bad)"><h2 data-i18n="sec.c3t">4 — известные пробелы</h2><p data-i18n="sec.c3p">Sybil-кворум (плоские 3), бонд взносов opt-in без fraud-proof, полная STARK-проверка, подмена ключа внутри эпохи (ловится только на старте). Ниже — каждый с последствиями.</p></article>
   </div>
 </section>
 
 <section class="sect only-new">
-  <div class="plain-card rv"><h3 data-i18n="sec.sn">Что это значит для тебя</h3><ul><li data-i18n="sec.sp1">Не клади реальные деньги — аудита не было.</li><li data-i18n="sec.sp2">Зелёное — проверено тестами, красное — известные дыры.</li><li data-i18n="sec.sp3">Главный риск: сговор трёх адресов может сжечь награду узла.</li></ul></div>
+  <div class="plain-card rv"><h2 data-i18n="sec.sn">Что это значит для тебя</h2><ul><li data-i18n="sec.sp1">Не клади реальные деньги — аудита не было.</li><li data-i18n="sec.sp2">Зелёное — проверено тестами, красное — известные дыры.</li><li data-i18n="sec.sp3">Главный риск: сговор трёх адресов может сжечь награду узла.</li></ul></div>
 </section>
 
 <section class="sect">
@@ -101,8 +101,8 @@
 
 <footer class="foot"><div class="foot-in">
   <div><p class="foot-brand">Shroud</p><p data-i18n="f.secnote">Протокол двигает деньги. Красное читай первым.</p></div>
-  <div><h5 data-i18n="f.map">Карта</h5><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
-  <div><h5 data-i18n="f.src">Исходники</h5><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.secp">Security policy</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
+  <div><h2 data-i18n="f.map">Карта</h2><p><a href="./index.html" data-i18n="nav.home">Главная</a><br /><a href="./pipeline.html" data-i18n="nav.pipe">Конвейер</a><br /><a href="./use.html" data-i18n="nav.use">Практика</a><br /><a href="./playground.html" data-i18n="nav.lab">Лаборатория</a><br /><a href="./protocol.html" data-i18n="nav.proto">Протокол</a><br /><a href="./license.html" data-i18n="nav.lic">Лицензия</a></p></div>
+  <div><h2 data-i18n="f.src">Исходники</h2><p><a href="https://github.com/ssrjkk/shroud">github.com/ssrjkk/shroud</a><br /><a href="https://github.com/ssrjkk/shroud/blob/HEAD/SECURITY.md" data-i18n="f.secp">Security policy</a><br /><a href="https://github.com/ssrjkk/shroud/tree/HEAD/docs" data-i18n="f.docs">Документы</a></p></div>
 </div><div class="foot-base"><span>© 2026 ssrjkk</span><span data-i18n="f.base4">threats 39 · honest first</span></div></footer>
 <script src="./assets/i18n.js"></script>
 <script src="./assets/app.js"></script>
