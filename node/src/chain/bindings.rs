@@ -122,6 +122,10 @@ sol! {
         function escrowToken() external view returns (address);
         function pendingPayout(address account) external view returns (uint128);
         function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have);
+        /// Zero until the first dispute action on the epoch fixes the sortition seed; after
+        /// that only drawn members may report.
+        function committeeSeed(uint256 taskId, uint32 epoch) external view returns (bytes32);
+        function isCommitteeEligible(uint256 taskId, uint32 epoch, address reporter) external view returns (bool);
         /// Contributors paid per settlement call. Read rather than hardcoded so a future
         /// paging change moves the node with it; the worker uses it to recognise the final
         /// page, which is the only one gated on reward-channel maturity (F-22).

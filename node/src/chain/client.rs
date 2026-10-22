@@ -413,6 +413,36 @@ impl OrchestratorClient {
         Ok((q.need, q.have))
     }
 
+    /// The epoch's dispute sortition seed, zero until the first dispute action fixes it.
+    ///
+    /// The seed is derived on first use (see `DisputeLib.isEligible`) so nobody can grind it
+    /// in advance. That makes "zero" mean "the committee is not drawn yet, and this node may
+    /// be the one that fixes it" — not "ineligible".
+    pub async fn committee_seed(&self, task_id: U256, epoch: u32) -> Result<B256> {
+        let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        c.committeeSeed(task_id, epoch)
+            .call()
+            .await
+            .map_err(Error::alloy)
+    }
+
+    /// Whether `reporter` is drawn into the epoch's dispute committee.
+    ///
+    /// False before the seed exists. Read it only after `committee_seed` came back non-zero;
+    /// `reportDispute` from outside the draw reverts `NotCommitteeMember` after paying gas.
+    pub async fn is_committee_eligible(
+        &self,
+        task_id: U256,
+        epoch: u32,
+        reporter: Address,
+    ) -> Result<bool> {
+        let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        c.isCommitteeEligible(task_id, epoch, reporter)
+            .call()
+            .await
+            .map_err(Error::alloy)
+    }
+
     /// Contributors paid per settlement call (`CipherTask.SETTLE_PAGE_SIZE`).
     ///
     /// Read rather than hardcoded so a future paging change moves the node with it. The

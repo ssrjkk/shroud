@@ -6,6 +6,20 @@ first tagged release.
 
 ## Unreleased
 
+### Node: stop filing disputes the sortition did not pick
+
+- `reportDispute` counts a report only from an address the epoch's sortition drew, and the
+  first dispute action fixes the seed. The node's `dispute_gate` mirrored the standing checks
+  — verified commit, matching digest, claim not ours — but not the draw, so a node that had
+  committed honestly and disagreed would send a transaction the contract rejects with
+  `NotCommitteeMember`, paying for it and logging a failure that reads like a bug. A new
+  `committee_gate` reads `committeeSeed`/`isCommitteeEligible` first and skips with "not drawn
+  into this epoch's dispute committee". A zero seed means nobody has fixed it yet, and that
+  case is deliberately let through: the seed is derived from the first reporter's own block,
+  so refusing there would make the initial report impossible rather than cheaper.
+- `ICipherTaskView` gains `committeeSeed` and `isCommitteeEligible`, so the node reads the
+  draw from the contract instead of re-deriving it.
+
 ### Site: the front door is readable by assistive tech
 
 - Every page except the landing one opened with `h2` — the document had no `h1` at all.

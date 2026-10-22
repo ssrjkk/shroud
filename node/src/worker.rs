@@ -793,6 +793,19 @@ impl Worker {
         if gate != Gate::Ready {
             return Ok(outcome_of(gate));
         }
+        // Standing is necessary but not sufficient. Once any dispute action has fixed the
+        // epoch's seed, `reportDispute` admits only drawn members; before that the seed is
+        // zero and we may be the reporter who fixes it, so the draw must not be consulted.
+        let seed = self.client.committee_seed(task_id, epoch).await?;
+        let drawn = seed != B256::ZERO
+            && self
+                .client
+                .is_committee_eligible(task_id, epoch, me)
+                .await?;
+        let gate = committee_gate(seed, drawn);
+        if gate != Gate::Ready {
+            return Ok(outcome_of(gate));
+        }
         let salt = transcript::dispute_salt(me, task_id, epoch);
         let commitment = transcript::dispute_commitment(our_digest, salt, me);
         if self
@@ -1223,6 +1236,23 @@ pub fn dispute_gate(
     Gate::Ready
 }
 
+/// The part of `reportDispute`'s standing that is not on `TaskOnChain`: the draw.
+///
+/// `DisputeLib` derives the epoch's sortition seed on the first dispute action and admits
+/// only nodes the draw picked. A node that committed, disagrees and was not drawn therefore
+/// has standing and still reverts `NotCommitteeMember`, after paying for the transaction.
+///
+/// `seed == 0` is not "not drawn": nobody has fixed the seed yet, it is derived from the
+/// first reporter's transaction, and refusing here would make the first dispute impossible.
+/// That asymmetry is also why this cannot live in `dispute_gate`, which is pure over the
+/// task's on-chain state.
+pub fn committee_gate(seed: B256, drawn: bool) -> Gate {
+    if seed != B256::ZERO && !drawn {
+        return Gate::Skip("not drawn into this epoch's dispute committee");
+    }
+    Gate::Ready
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1635,6 +1665,20 @@ mod tests {
             dispute_gate(&t, Some(&commit(0xbb, true)), false, ours),
             Gate::Ready
         );
+    }
+
+    #[test]
+    fn the_first_reporter_fixes_the_seed_and_later_ones_must_be_drawn() {
+        // No seed yet: the first dispute action derives it, so refusing here would make the
+        // first dispute impossible.
+        assert_eq!(committee_gate(B256::ZERO, false), Gate::Ready);
+        // Seed fixed and the draw picked us.
+        assert_eq!(committee_gate(B256::repeat_byte(0x7a), true), Gate::Ready);
+        // Seed fixed and it did not: `NotCommitteeMember` would burn gas for nothing.
+        assert!(matches!(
+            committee_gate(B256::repeat_byte(0x7a), false),
+            Gate::Skip("not drawn into this epoch's dispute committee")
+        ));
     }
 
     #[test]
