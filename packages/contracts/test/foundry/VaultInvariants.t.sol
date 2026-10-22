@@ -53,10 +53,13 @@ contract VaultHandler is Test {
         address node = _node(nodeSeed);
         bytes32 key = keccak256(abi.encode("shroud-test-key", keyNonce++));
         deal(address(token), node, vault.REGISTRATION_BOND());
-        vm.startPrank(node);
+        // The approval comes from the node, but `takeBond` itself must arrive from
+        // the task manager (this handler): a single-shot `prank` covers exactly the
+        // approve, so a stray persistent prank cannot silently flip every later call
+        // into a revert.
+        vm.prank(node);
         token.approve(address(vault), vault.REGISTRATION_BOND());
         vault.takeBond(taskId, node, key);
-        vm.stopPrank();
         bytes32 id = keccak256(abi.encode(taskId, node));
         if (!bonded[id]) {
             bonded[id] = true;
