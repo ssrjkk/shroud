@@ -31,8 +31,13 @@ contract VaultHandler is Test {
     uint256 public reclaimsDone;
 
     /// Channels this handler opened, for slice/reclaim driving.
-    uint256[] public openIds;
     mapping(uint256 => uint64) public nextSlice;
+
+    /// The newest channel this handler earns from. Picks by lottery (`openIds`)
+    /// almost never land on an open handler-owned channel once the array fills
+    /// with closed ones, so redeem/reclaim drive this slot instead of rolling dice.
+    uint256 public lastHandlerChannel;
+    bool public hasHandlerChannel;
 
     /// Set while the handler presents a slice to `redeem`: the EIP-1271 hook
     /// below answers the vault's staticcall, so only a slice the handler is
@@ -119,7 +124,11 @@ contract VaultHandler is Test {
         address node = nodeSeed % 3 == 0 ? address(this) : _node(nodeSeed);
         vault.openTaskChannel(taskId, node, uint128(lock), unlockAt);
         uint256[] memory ids = vault.channelIds(taskId);
-        openIds.push(ids[ids.length - 1]);
+        uint256 id = ids[ids.length - 1];
+        if (node == address(this)) {
+            lastHandlerChannel = id;
+            hasHandlerChannel = true;
+        }
         channelsOpened++;
     }
 
@@ -129,17 +138,15 @@ contract VaultHandler is Test {
         sweepsRun++;
     }
 
-    /// Redeem the next slice of an open channel. Slice indices must strictly increase
-    /// and the amount is cumulative, so the handler tracks both per channel and only
-    /// ever moves forward — a reverted redeem is a harness bug, not fuzz noise.
-    function redeem(uint256 channelSeed, uint256 amount, uint64 inDays) external {
-        if (openIds.length == 0) return;
-        uint256 id = openIds[bound(channelSeed, 0, openIds.length - 1)];
+    /// Redeem the next slice of this handler's newest channel. Slice indices must
+    /// strictly increase and the amount is cumulative, so the handler tracks both
+    /// per channel and only ever moves forward — a reverted redeem is a harness
+    /// bug, not fuzz noise.
+    function redeem(uint256 amount, uint64 inDays) external {
+        if (!hasHandlerChannel) return;
+        uint256 id = lastHandlerChannel;
         PaymentVault.Channel memory ch = vault.channelInfo(id);
         if (ch.closed) return;
-        // Only the earner may redeem: a stranger's channel is swept or reclaimed,
-        // never redeemed by this handler.
-        if (ch.node != address(this)) return;
         amount = bound(amount, 1, ch.maxCumulative);
         uint64 slice = nextSlice[id];
         nextSlice[id] = slice + 1;
@@ -150,13 +157,13 @@ contract VaultHandler is Test {
         redeemsDone++;
     }
 
-    /// Reclaim a matured channel this handler earns from. Strangers' channels are
-    /// never touched: only the earner may reclaim, and the fuzzer is not them.
-    function reclaim(uint256 channelSeed) external {
-        if (openIds.length == 0) return;
-        uint256 id = openIds[bound(channelSeed, 0, openIds.length - 1)];
+    /// Reclaim this handler's newest channel once matured. Closed or immature
+    /// channels are skipped, not forced: warp drives maturity on its own schedule.
+    function reclaim() external {
+        if (!hasHandlerChannel) return;
+        uint256 id = lastHandlerChannel;
         PaymentVault.Channel memory ch = vault.channelInfo(id);
-        if (ch.closed || ch.node != address(this)) return;
+        if (ch.closed) return;
         if (block.timestamp < ch.unlockAt) return;
         vault.reclaim(id);
         reclaimsDone++;
