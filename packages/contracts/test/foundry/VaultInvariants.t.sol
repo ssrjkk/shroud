@@ -27,6 +27,17 @@ contract VaultHandler is Test {
     uint256 public creditsPosted;
     uint256 public claimsMade;
     uint256 public warpsDone;
+    uint256 public redeemsDone;
+    uint256 public reclaimsDone;
+
+    /// Channels this handler opened, for slice/reclaim driving.
+    uint256[] public openIds;
+    mapping(uint256 => uint64) public nextSlice;
+
+    /// Set while the handler presents a slice to `redeem`: the EIP-1271 hook
+    /// below answers the vault's staticcall, so only a slice the handler is
+    /// actively redeeming ever validates — never a standing approval.
+    bool internal _authNow;
 
     constructor(PaymentVault _vault, TestToken _token) {
         vault = _vault;
@@ -82,6 +93,15 @@ contract VaultHandler is Test {
         topUpsPosted++;
     }
 
+    /// EIP-1271 for the vault's streamer check: this handler *is* the streamer of
+    /// the channels it opens, and it authorises exactly the slice it is redeeming.
+    /// Signature content is intentionally unchecked — authorization, not
+    /// cryptography, is what the accounting invariants exercise (auth itself is
+    /// pinned by the Hardhat EIP-712 suite).
+    function isValidSignature(bytes32, bytes calldata) external view returns (bytes4) {
+        return _authNow ? bytes4(0x1626ba7e) : bytes4(0xffffffff);
+    }
+
     /// Open a reward channel as task manager, capped by what the task actually holds
     /// (opening past the balance reverts, and a reverting handler call fails the run).
     function open(uint256 taskSeed, uint256 nodeSeed, uint256 lock, uint64 window) external {
@@ -91,7 +111,12 @@ contract VaultHandler is Test {
         uint256 cap = balance > type(uint128).max ? uint256(type(uint128).max) : balance;
         lock = bound(lock, 1, cap);
         window = uint64(bound(window, 1, 7 days));
-        vault.openTaskChannel(taskId, _node(nodeSeed), uint128(lock), window);
+        // Every third channel names this handler as the earner so `reclaim` has
+        // something to close; the rest go to arbitrary nodes like production's.
+        address node = nodeSeed % 3 == 0 ? address(this) : _node(nodeSeed);
+        vault.openTaskChannel(taskId, node, uint128(lock), window);
+        uint256[] memory ids = vault.channelIds(taskId);
+        openIds.push(ids[ids.length - 1]);
         channelsOpened++;
     }
 
@@ -99,6 +124,39 @@ contract VaultHandler is Test {
     function sweep(uint256 taskSeed) external {
         vault.sweepTaskChannels(_task(taskSeed));
         sweepsRun++;
+    }
+
+    /// Redeem the next slice of an open channel. Slice indices must strictly increase
+    /// and the amount is cumulative, so the handler tracks both per channel and only
+    /// ever moves forward — a reverted redeem is a harness bug, not fuzz noise.
+    function redeem(uint256 channelSeed, uint256 amount, uint64 inDays) external {
+        if (openIds.length == 0) return;
+        uint256 id = openIds[bound(channelSeed, 0, openIds.length - 1)];
+        PaymentVault.Channel memory ch = vault.channelInfo(id);
+        if (ch.closed) return;
+        // Only the earner may redeem: a stranger's channel is swept or reclaimed,
+        // never redeemed by this handler.
+        if (ch.node != address(this)) return;
+        amount = bound(amount, 1, ch.maxCumulative);
+        uint64 slice = nextSlice[id];
+        nextSlice[id] = slice + 1;
+        uint256 deadline = block.timestamp + bound(inDays, 1, 30 days);
+        _authNow = true;
+        vault.redeem(id, slice, uint128(amount), deadline, hex"00");
+        _authNow = false;
+        redeemsDone++;
+    }
+
+    /// Reclaim a matured channel this handler earns from. Strangers' channels are
+    /// never touched: only the earner may reclaim, and the fuzzer is not them.
+    function reclaim(uint256 channelSeed) external {
+        if (openIds.length == 0) return;
+        uint256 id = openIds[bound(channelSeed, 0, openIds.length - 1)];
+        PaymentVault.Channel memory ch = vault.channelInfo(id);
+        if (ch.closed || ch.node != address(this)) return;
+        if (block.timestamp < ch.unlockAt) return;
+        vault.reclaim(id);
+        reclaimsDone++;
     }
 
     /// Credit a share out of a task sub-balance (to this handler, who can claim it,
@@ -174,5 +232,7 @@ contract VaultInvariants is Test {
         assertGt(handler.creditsPosted(), 0, "credit never ran");
         assertGt(handler.claimsMade(), 0, "claim never ran");
         assertGt(handler.warpsDone(), 0, "warp never ran");
+        assertGt(handler.redeemsDone(), 0, "redeem never ran");
+        assertGt(handler.reclaimsDone(), 0, "reclaim never ran");
     }
 }
