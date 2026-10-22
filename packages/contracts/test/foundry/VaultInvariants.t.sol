@@ -17,6 +17,19 @@ contract VaultHandler is Test {
     bytes32[] public bondedKeys;
     mapping(bytes32 => bool) public bonded;
 
+    /// Calls that completed without reverting, per operation. `afterInvariant`
+    /// asserts every operation ran at least once: a green run that never posted
+    /// a bond (or never swept) proves nothing about that path, and raw revert
+    /// counts cannot tell a dead path from a healthy one.
+    uint256 public fundsPosted;
+    uint256 public bondsPosted;
+    uint256 public topUpsPosted;
+    uint256 public channelsOpened;
+    uint256 public sweepsRun;
+    uint256 public creditsPosted;
+    uint256 public claimsMade;
+    uint256 public warpsDone;
+
     struct BondRef {
         uint256 taskId;
         address node;
@@ -44,6 +57,7 @@ contract VaultHandler is Test {
         token.mint(address(this), amount);
         token.approve(address(vault), amount);
         vault.fundTask(taskId, amount, address(this));
+        fundsPosted++;
     }
 
     /// Post a registration bond for a node (fresh BLS key every time: keys are
@@ -66,6 +80,7 @@ contract VaultHandler is Test {
             bondedKeys.push(id);
             bondRefs[id] = BondRef(taskId, node);
         }
+        bondsPosted++;
     }
 
     /// Top up a bond this handler previously posted. Only the bond owner may top up
@@ -80,6 +95,7 @@ contract VaultHandler is Test {
         token.approve(address(vault), amount);
         vault.topUpNodeBond(ref.taskId, amount);
         vm.stopPrank();
+        topUpsPosted++;
     }
 
     /// Open a reward channel as task manager, capped by what the task actually holds
@@ -92,11 +108,13 @@ contract VaultHandler is Test {
         lock = bound(lock, 1, cap);
         window = uint64(bound(window, 1, 7 days));
         vault.openTaskChannel(taskId, _node(nodeSeed), uint128(lock), window);
+        channelsOpened++;
     }
 
     /// Sweep matured locks back to the sub-balance.
     function sweep(uint256 taskSeed) external {
         vault.sweepTaskChannels(_task(taskSeed));
+        sweepsRun++;
     }
 
     /// Credit a share out of a task sub-balance (to this handler, who can claim it,
@@ -109,6 +127,7 @@ contract VaultHandler is Test {
         amount = bound(amount, 1, cap);
         address to = toSeed % 2 == 0 ? address(this) : _node(toSeed);
         vault.creditFromTask(taskId, to, uint128(amount));
+        creditsPosted++;
     }
 
     /// Claim whatever this handler was credited (skips when there is nothing: `claim`
@@ -116,12 +135,14 @@ contract VaultHandler is Test {
     function claimSelf() external {
         if (vault.pendingWithdrawal(address(this)) == 0) return;
         vault.claim();
+        claimsMade++;
     }
 
     /// Move time forward so channels mature (bounded: the all-immature case must also
     /// be hit, and the fuzzer gets there on its own).
     function warp(uint64 dt) external {
         vm.warp(block.timestamp + bound(dt, 0, 30 days));
+        warpsDone++;
     }
 }
 
@@ -155,5 +176,19 @@ contract VaultInvariants is Test {
     /// The vault always holds at least what it owes.
     function invariant_solvency() external view {
         assertGe(token.balanceOf(address(vault)), vault.totalLocked() + vault.pendingTotal());
+    }
+
+    /// Coverage proof: every handler operation completed at least once across the
+    /// campaign. A green run that never posted a bond would prove nothing about the
+    /// bond paths; this fails loudly instead of letting that pass silently.
+    function afterInvariant() external view {
+        assertGt(handler.fundsPosted(), 0, "fund never ran");
+        assertGt(handler.bondsPosted(), 0, "bond never ran");
+        assertGt(handler.topUpsPosted(), 0, "topUp never ran");
+        assertGt(handler.channelsOpened(), 0, "open never ran");
+        assertGt(handler.sweepsRun(), 0, "sweep never ran");
+        assertGt(handler.creditsPosted(), 0, "credit never ran");
+        assertGt(handler.claimsMade(), 0, "claim never ran");
+        assertGt(handler.warpsDone(), 0, "warp never ran");
     }
 }
