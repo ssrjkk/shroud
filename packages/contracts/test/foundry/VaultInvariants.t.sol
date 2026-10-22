@@ -208,6 +208,36 @@ contract VaultHandler is Test {
         redeemsDone++;
     }
 
+    /// Deterministic reclaim: open for this handler, mature past its own window,
+    /// reclaim — all in one call. The organic `reclaim` above depends on winning
+    /// a race with `sweep`/`closeChannel` after a warp, which the fuzzer wins
+    /// too rarely to assert on; this proves the path while the fuzzer still
+    /// interleaves the organic one.
+    function openMatureReclaim(uint256 taskSeed, uint256 lock, uint64 window) external {
+        uint256 taskId = _task(taskSeed);
+        uint256 balance = vault.taskBalance(taskId);
+        if (balance == 0) {
+            uint256 fund = bound(lock, 1, 1_000_000_000_000);
+            token.mint(address(this), fund);
+            token.approve(address(vault), fund);
+            vault.fundTask(taskId, fund, address(this));
+            fundsPosted++;
+            balance = vault.taskBalance(taskId);
+        }
+        lock = bound(lock, 1, balance > type(uint128).max ? uint256(type(uint128).max) : balance);
+        window = uint64(bound(window, 1, 7 days));
+        vault.openTaskChannel(taskId, address(this), uint128(lock), uint64(block.timestamp) + window);
+        uint256[] memory ids = vault.channelIds(taskId);
+        uint256 id = ids[ids.length - 1];
+        channelsOpened++;
+        lastHandlerChannel = id;
+        hasHandlerChannel = true;
+        vm.warp(uint64(block.timestamp) + window + 1);
+        warpsDone++;
+        vault.reclaim(id);
+        reclaimsDone++;
+    }
+
     /// Reclaim this handler's newest channel once matured. Closed or immature
     /// channels are skipped, not forced: warp drives maturity on its own schedule.
     function reclaim() external {
