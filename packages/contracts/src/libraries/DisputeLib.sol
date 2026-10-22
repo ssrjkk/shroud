@@ -46,10 +46,11 @@ library DisputeLib {
         mapping(uint256 => mapping(uint32 => mapping(address => bool))) recorded;
         mapping(uint256 => mapping(uint32 => uint256)) count;
         mapping(uint256 => mapping(uint32 => address[])) reporters;
-        /// Sortition seed per epoch, fixed by the first counted report. `block.prevrandao`
-        /// of that block is unpredictable to anyone registering earlier (registration
-        /// closes before the epoch opens), and every later report in the epoch evaluates
-        /// against the same seed, so eligibility is stable within the epoch.
+        /// Sortition seed per epoch, fixed by the first counted report. It commits to
+        /// the chain's randomness *and* to the registered node set, so the sequencer
+        /// cannot grind a seed that draws its own identities and excludes the honest one
+        /// (F-59) - the randomness alone was not enough. Every later report in the epoch
+        /// evaluates against the same seed, so eligibility is stable within the epoch.
         mapping(uint256 => mapping(uint32 => bytes32)) seed;
     }
 
