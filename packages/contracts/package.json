@@ -10,7 +10,8 @@
                     "typecheck":  "tsc --noEmit",
                     "clean":  "hardhat clean",
                     "deploy:devnet":  "hardhat run scripts/deploy.ts --network localhost",
-                    "devnet:e2e":  "hardhat run scripts/devnet-e2e-check.ts --network localhost"
+                    "devnet:e2e":  "hardhat run scripts/devnet-e2e-check.ts --network localhost",
+                    "devnet:admin":  "hardhat run scripts/devnet-admin-check.ts --network localhost"
                 },
     "dependencies":  {
                          "@fhevm/hardhat-plugin":  "0.13.0-1",

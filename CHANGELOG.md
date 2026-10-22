@@ -6,6 +6,20 @@ first tagged release.
 
 ## Unreleased
 
+### Devnet: the owner controls are exercised on a live deployment
+
+- The unit suite proves the treasury rotation and the proof-requirement ratchet in
+  isolation. `scripts/devnet-admin-check.ts` proves them through the artifact that
+  actually lands on chain: it queues a treasury change, watches an early execute get
+  refused, moves the clock a week, and lets a **non-owner** execute it — then checks
+  that the requirement holds and that the switch which used to weaken it is not in the
+  ABI at all. The contracts workflow runs it between the lifecycle smoke and the SDK
+  check, so "the interface works in a fixture" cannot drift away from "the deployed
+  thing works" again.
+- The README quickstart no longer sends you to Docker first: a plain `npx hardhat node`
+  is enough for the contracts and SDK legs. Docker is what the DA and compute nodes
+  need, and the quickstart now says so.
+
 ### Ops: the bot watches the treasury rotation
 
 - A timelock is only as good as the monitoring around it. The bot already

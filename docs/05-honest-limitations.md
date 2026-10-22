@@ -168,6 +168,10 @@ and both have bitten before:
 `CM_TASK_ADDRESS` / `CM_VAULT_ADDRESS`. The contracts workflow runs the same deploy + E2E
 against a background node, so a regression here fails CI rather than surprising an operator.
 
+Docker is not required for the contracts and SDK legs: a plain `npx hardhat node --hostname
+127.0.0.1 --port 8545` is the same standalone shape, and the README's no-Docker quickstart is
+that plus the two checks the workflow runs. Docker is what the DA and the compute nodes need.
+
 What this does not give you: the verifier and BLS contracts on devnet are **mocks**
 (`MockStarkVerifier` checks a magic prefix, `MockBLS` is an owner allowlist) and the chain is a
 single-node EDR with unlocked accounts. What it *does* give you, proven on every push: the real

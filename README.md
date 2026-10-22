@@ -52,7 +52,28 @@ buyer ──► CipherTask (escrow + FSM + payment channels) ◄─────�
 > [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md). Read that file before
 > trusting any claim below.
 
-## Quickstart (devnet)
+## Quickstart
+
+**No Docker: contracts and the SDK against a standalone node.** Node 22 and nothing else.
+Two terminals:
+
+```sh
+# terminal 1 — a chain with the fhEVM mock coprocessor installed
+cd packages/contracts && npm ci && npx hardhat node --hostname 127.0.0.1 --port 8545
+
+# terminal 2 — deploy, then run the three smoke checks
+cd packages/contracts && npm run deploy:devnet && npm run devnet:e2e && npm run devnet:admin
+cd ../sdk && npm ci && npm run build && npm run devnet:sdk
+```
+
+The checks end in `DEVNET E2E OK` (create → seal → register), `DEVNET ADMIN OK` (propose a
+treasury change, watch it refused before its window, then executed by a non-owner after it)
+and `DEVNET SDK E2E OK` (a real `uploadAndMonetize` with on-chain verification). That proves
+the contracts, the address book and the SDK agree with each other — not that FHE execution
+works: the node and the DA are separate services, and this chain runs the plugin's mock
+coprocessor.
+
+**Full devnet: chain + DA + compute nodes (Docker).**
 
 ```sh
 cd infra && docker compose up -d --build devnet shardstore   # fhEVM chain + DA
@@ -60,9 +81,10 @@ cd ../packages/contracts && npm run deploy:devnet             # deploy contracts
 npx hardhat run scripts/devnet-e2e-check.ts --network localhost  # create → seal → register smoke
 ```
 
-`--network localhost` is load-bearing: the fhevm plugin instruments a standalone node only
-under that name (port 8545, chainId 31337). Anything else resolves to provider type `Unknown`,
-the mock coprocessor is never installed, and `CipherTask`'s constructor reverts with no reason.
+`--network localhost` is load-bearing in both paths: the fhevm plugin instruments a
+standalone node only under that name (port 8545, chainId 31337). Anything else resolves to
+provider type `Unknown`, the mock coprocessor is never installed, and `CipherTask`'s
+constructor reverts with no reason.
 
 ## Who is this for, and how to use it
 

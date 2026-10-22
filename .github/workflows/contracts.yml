@@ -84,6 +84,10 @@ jobs:
       - run: sleep 12
       - run: npm run deploy:devnet
       - run: npm run devnet:e2e
+      # The owner controls on the same deployment: propose → refused early → executed by a
+      # non-owner after the window. It time-travels a week, so it runs before the SDK check
+      # (which creates its own task and does not care about the older one).
+      - run: npm run devnet:admin
       # The SDK speaks to the same chain this job just deployed: real `uploadAndMonetize`
       # (explicit dev-only `allowUnencrypted`) with on-chain verification, not mocks. Runs
       # after the contracts smoke so a red SDK never masks a red deploy.
