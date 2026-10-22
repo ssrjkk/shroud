@@ -19,6 +19,17 @@ first tagged release.
   named in Russian, and the citation now quotes them as they are).
 - The gate was verified to fail on a renamed test and to pass again afterwards.
 
+### Gates: the digest of a negative weight lane is pinned too
+
+- A weight lane is an `i32` in `u32` clothing — linear models legitimately go
+  negative — and the digest `commitEpoch` stores is over the `u32` words. The
+  SDK and the node agreed on that, but the *digest* of a negative lane was
+  pinned on neither side: the existing goldens only carried positive lanes. A
+  divergence would not have failed loudly; the node would have compared the seed
+  it downloaded against a digest the buyer computed differently and fallen back
+  to genesis zeros with a warning in the log. Both sides now pin the same
+  value for the same negative lanes.
+
 ### Node: the provider's key no longer reaches the log
 
 - A managed RPC URL carries the provider's API key in its path. The node

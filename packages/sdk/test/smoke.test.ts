@@ -1451,6 +1451,15 @@ test("weights files match the node's shroud/weights/v1 layout byte for byte", as
 
   // Signed lanes round-trip through the u32 words (the node's i32-in-u32 convention).
   assert.deepEqual(decodeWeights(encodeWeights(2, [-1, -2147483648]), 2), [-1, -2147483648]);
+  // ...and the digest of a negative lane is the node's, byte for byte. A divergence
+  // would not fail loudly: the node would compare the seed it downloaded against a
+  // digest the buyer computed differently and fall back to genesis zeros with a
+  // warning in the log. The node pins the same value
+  // (node/crates/shroud-core/src/weights.rs).
+  assert.equal(
+    weightsDigest([-1, -2147483648]),
+    "0x121713bd4b4a879ea1eada54b936cc07f82bcd1e189bbceb52aa0067139e8f9f"
+  );
 
   // The digest commits to the lanes: deterministic and sensitive.
   const d = weightsDigest([60000, 30000]);

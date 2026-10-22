@@ -129,4 +129,23 @@ mod tests {
         assert_eq!(a, b);
         assert_eq!(a.len(), 32);
     }
+
+    #[test]
+    fn the_digest_of_a_negative_lane_is_pinned() {
+        // A negative lane is an i32 in u32 clothing, and the digest is over the u32
+        // words. The SDK computes the same digest for the same lanes
+        // (`packages/sdk/src/weights.ts`), and the two must agree: a divergence would
+        // not fail loudly, it would leave the node comparing the seed it downloaded
+        // against a digest the buyer computed differently and falling back to genesis
+        // zeros with a warning in the log.
+        let w = Weights {
+            features: 2,
+            lanes: vec![u32::MAX, 0x8000_0000],
+        };
+        let hex: String = w.digest().iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "121713bd4b4a879ea1eada54b936cc07f82bcd1e189bbceb52aa0067139e8f9f"
+        );
+    }
 }
