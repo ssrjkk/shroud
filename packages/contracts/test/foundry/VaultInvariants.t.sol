@@ -43,6 +43,12 @@ contract VaultHandler is Test {
     /// must return. `invariant_strayAccounts` pins the identity.
     uint256 public strayOwed;
 
+    /// Ghost ledger per tracked earner: credited minus claimed, which must equal
+    /// the vault's `pendingWithdrawal` exactly. The global solvency invariant
+    /// cannot see a per-account drift (one account up, another down); this one can.
+    mapping(address => uint256) public ghostCredited;
+    mapping(address => uint256) public ghostClaimed;
+
     /// Slice indices per channel, so every redeem moves strictly forward.
     mapping(uint256 => uint64) public nextSlice;
 
@@ -250,16 +256,26 @@ contract VaultHandler is Test {
         reclaimsDone++;
     }
 
-    /// Credit a share out of a task sub-balance (to this handler, who can claim it,
-    /// or to a stranger, whose pending piles up exactly like unclaimed rewards do).
+    /// Credit a share out of a task sub-balance. Three of four credits go to
+    /// tracked earners (this handler plus two fixed addresses); the fourth goes
+    /// to a stranger, whose pending piles up exactly like unclaimed rewards do.
     function credit(uint256 taskSeed, uint256 toSeed, uint256 amount) external {
         uint256 taskId = _task(taskSeed);
         uint256 balance = vault.taskBalance(taskId);
         if (balance == 0) return;
         uint256 cap = balance > type(uint128).max ? uint256(type(uint128).max) : balance;
         amount = bound(amount, 1, cap);
-        address to = toSeed % 2 == 0 ? address(this) : _node(toSeed);
+        address to;
+        uint256 pick = toSeed % 4;
+        if (pick == 3) {
+            to = _node(toSeed);
+        } else if (pick == 0) {
+            to = address(this);
+        } else {
+            to = address(uint160(0x3000 + pick)); // 0x3001, 0x3002: tracked earners
+        }
         vault.creditFromTask(taskId, to, uint128(amount));
+        ghostCredited[to] += amount;
         creditsPosted++;
     }
 
@@ -267,7 +283,8 @@ contract VaultHandler is Test {
     /// reverts on zero, and an empty claim is not a counterexample).
     function claimSelf() external {
         if (vault.pendingWithdrawal(address(this)) == 0) return;
-        vault.claim();
+        uint256 paid = vault.claim();
+        ghostClaimed[address(this)] += paid;
         claimsMade++;
     }
 
@@ -282,12 +299,15 @@ contract VaultHandler is Test {
 /// Stateful vault-accounting invariants.
 ///
 /// Hardhat pins lifecycle *behavior* (open → redeem → sweep → settle pays out); this
-/// fuzzes *interleavings* of the manager-side operations with fresh random sequences on
-/// every run. Two properties, both exact:
+/// fuzzes *interleavings* of the manager- and owner-side operations with fresh random
+/// sequences on every run. Four properties, all exact:
 ///  1. `totalLocked == accountedLocked`: the vault's own bookkeeping identity.
 ///  2. Solvency: the token balance covers everything the vault owes (`totalLocked`
-///     plus credited-but-unclaimed `pendingTotal`). No sequence of manager calls may
+///     plus credited-but-unclaimed `pendingTotal`). No sequence of calls may
 ///     strand escrow or conjure claims beyond the backing tokens.
+///  3. Stray accounting: minted-outside-the-books money equals rescued money.
+///  4. Per-account pending: credited minus claimed, pinned per earner, which the
+///     global solvency check cannot see drift.
 contract VaultInvariants is Test {
     VaultHandler public handler;
     PaymentVault public vault;
@@ -313,6 +333,28 @@ contract VaultInvariants is Test {
     /// The vault always holds at least what it owes.
     function invariant_solvency() external view {
         assertGe(token.balanceOf(address(vault)), vault.totalLocked() + vault.pendingTotal());
+    }
+
+    /// Per-account pending balances match the ghost ledger exactly, for the
+    /// handler and the two fixed earners. `claim` is the only way pending
+    /// decreases, so any drift here is a credit/claim accounting bug the
+    /// global solvency check cannot see.
+    function invariant_pendingPerAccount() external view {
+        assertEq(
+            vault.pendingWithdrawal(address(this)),
+            ghostCredited[address(this)] - ghostClaimed[address(this)],
+            "handler pending drift"
+        );
+        assertEq(
+            vault.pendingWithdrawal(address(uint160(0x3001))),
+            ghostCredited[address(uint160(0x3001))],
+            "earner1 pending drift"
+        );
+        assertEq(
+            vault.pendingWithdrawal(address(uint160(0x3002))),
+            ghostCredited[address(uint160(0x3002))],
+            "earner2 pending drift"
+        );
     }
 
     /// Stray accounting: the only money outside the books is what `stray` minted
