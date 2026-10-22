@@ -28,6 +28,7 @@ contract VaultHandler is Test {
     uint256 public claimsMade;
     uint256 public warpsDone;
     uint256 public redeemsDone;
+    uint256 public redeemsSeen;
     uint256 public reclaimsDone;
     uint256 public closesDone;
     uint256 public straysDone;
@@ -200,6 +201,7 @@ contract VaultHandler is Test {
     /// per channel and only ever moves forward — a reverted redeem is a harness
     /// bug, not fuzz noise.
     function redeem(uint256 amount, uint64 inDays) external {
+        redeemsSeen++;
         if (!hasHandlerChannel) return;
         uint256 id = lastHandlerChannel;
         PaymentVault.Channel memory ch = vault.channelInfo(id);
@@ -378,7 +380,8 @@ contract VaultInvariants is Test {
         assertGt(handler.creditsPosted(), 0, "credit never ran");
         assertGt(handler.claimsMade(), 0, "claim never ran");
         assertGt(handler.warpsDone(), 0, "warp never ran");
-        assertGt(handler.redeemsDone(), 0, "redeem never ran");
+        assertGt(handler.redeemsSeen(), 0, "fuzzer never called redeem");
+        assertGt(handler.redeemsDone(), 0, "redeem never completed");
         assertGt(handler.reclaimsDone(), 0, "reclaim never ran");
         assertGt(handler.closesDone(), 0, "closeChannel never ran");
         assertGt(handler.straysDone(), 0, "stray never ran");
