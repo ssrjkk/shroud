@@ -30,8 +30,8 @@
  *
  * A <target> names the screen to re-render: s, h, menu, how, proto, set, a,
  * lim, help, r:<role>, p:<page>, t:<id>. Everything stays far under the cap:
- * the longest payload, a task re-render in the other language, is a dozen
- * bytes.
+ * the longest payload, a 20-digit task re-render in the other language
+ * (`l:en:t:` + 20 digits), is 27 bytes of the 64 allowed.
  *
  * Builders return `{ text, reply_markup }`-ready `reply_markup` objects only;
  * rendering stays in format.js so keyboards never interpolate chain data
@@ -84,7 +84,12 @@ export function parseCallback(data) {
   if (i === -1) return null;
   const op = data.slice(0, i);
   const arg = data.slice(i + 1);
-  if (arg.length === 0 || arg.length > 20) return null;
+  // No global arg-length cap: each opcode validates its own shape below
+  // (fixed enums, isTaskId's 20 decimals, the 1..1000 page range), and the
+  // whole payload is already capped at 64 bytes above. A global cap here used
+  // to silently kill mode/language toggles on tasks with 16+ digit ids while
+  // the task buttons themselves parsed fine.
+  if (arg.length === 0) return null;
   switch (op) {
     case "p":
       // Pool page: positive integer, bounded so a crafted button cannot ask
@@ -289,14 +294,16 @@ export function rotationKeyboard(lang = "en") {
 }
 
 /**
- * One row that flips simple/pro and RU/EN in place. `origin` names the screen
+ * One row that flips simple/geek and RU/EN in place. Both buttons name the
+ * TARGET, never the current state: tapping "mode: geek" always lands in geek
+ * mode, like tapping "EN" always lands in English. `origin` names the screen
  * to re-render (s, h, a, r:<role>, p:<n>, t:<id>), so the toggle never kicks
  * the reader out of context.
  */
 export function prefsRow(lang, mode, origin) {
   const other = lang === "ru" ? "en" : "ru";
   return [
-    button(t(lang, mode === "simple" ? "btn.modeSimple" : "btn.modePro"), `m:${origin}`),
+    button(t(lang, mode === "simple" ? "btn.modePro" : "btn.modeSimple"), `m:${origin}`),
     button(other === "ru" ? "RU" : "EN", `l:${other}:${origin}`),
   ];
 }

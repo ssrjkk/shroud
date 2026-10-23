@@ -76,6 +76,21 @@ function chatEntry(state, chatId) {
 }
 
 /**
+ * Canonical task id: strip leading zeros so "007" and "7" are one filter.
+ * Without this, `/watch 007` silently watches nothing — the scanner compares
+ * canonical `String(BigInt)` ids and the watchlist would never match.
+ */
+function canonTaskId(id) {
+  const s = String(id);
+  if (!isTaskId(s)) return s;
+  try {
+    return String(BigInt(s));
+  } catch {
+    return s;
+  }
+}
+
+/**
  * Normalise a loaded document: drop non-string ids, non-object alerts, and
  * unknown alert keys. A state file survives bot upgrades only if loading is
  * liberal here and strict nowhere else.
@@ -88,7 +103,7 @@ export function normaliseState(raw) {
     if (!/^-?\d+$/.test(chatId)) continue;
     if (!entry || typeof entry !== "object") continue;
     const watched = Array.isArray(entry.watched)
-      ? [...new Set(entry.watched.filter(isTaskId))].slice(0, MAX_WATCHED_PER_CHAT)
+      ? [...new Set(entry.watched.filter(isTaskId).map(canonTaskId))].slice(0, MAX_WATCHED_PER_CHAT)
       : [];
     const alerts = {};
     if (entry.alerts && typeof entry.alerts === "object") {
@@ -214,7 +229,7 @@ export function addWatch(state, chatId, taskId) {
     return { added: false, reason: "too many chats hold state; contact the operator." };
   }
   const entry = chatEntry(state, chatId);
-  const id = String(taskId);
+  const id = canonTaskId(taskId);
   if (entry.watched.includes(id)) return { added: false, reason: `task #${id} is already watched.` };
   if (entry.watched.length >= MAX_WATCHED_PER_CHAT) {
     return { added: false, reason: `watchlist is full (${MAX_WATCHED_PER_CHAT} tasks). Unwatch something first.` };
@@ -227,7 +242,7 @@ export function removeWatch(state, chatId, taskId) {
   // Read-only lookup on purpose: removing what was never watched must not
   // create a chat entry as a side effect (unbounded state growth on typos).
   const entry = state.chats[String(chatId)];
-  const id = String(taskId);
+  const id = canonTaskId(String(taskId));
   const i = Array.isArray(entry?.watched) ? entry.watched.indexOf(id) : -1;
   if (i === -1) return { removed: false, reason: `task #${id} is not watched.` };
   entry.watched.splice(i, 1);

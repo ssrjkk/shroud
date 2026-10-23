@@ -55,8 +55,12 @@ export class TelegramBot {
   /** In-flight + queued sends. Bounded: an alert storm must not grow memory without limit. */
   #queued = 0;
   #maxQueued;
-  /** Enqueue timestamps parallel to #queued: the oldest bounds the queue's stall. */
-  #waitSince = [];
+  /**
+   * Sends accepted but not yet started, oldest first. Shedding takes from the
+   * head of this list, so what gets dropped is always waiting — never the
+   * send currently on the wire.
+   */
+  #waiting = [];
   #timeoutMs;
   /** Alerts dropped by the queue cap since boot. Polled by /status operators, never reset. */
   droppedSends = 0;
@@ -86,8 +90,8 @@ export class TelegramBot {
    * it passes the warning threshold, same as shed sends.
    */
   maxQueueWaitMs() {
-    if (!this.#waitSince.length) return 0;
-    return Date.now() - this.#waitSince[0];
+    if (!this.#waiting.length) return 0;
+    return Date.now() - this.#waiting[0].at;
   }
 
   async #call(method, payload = {}, { retries = 3, timeoutMs = this.#timeoutMs } = {}) {
@@ -175,21 +179,48 @@ export class TelegramBot {
    */
   sendQueued(chatId, text, extra = {}) {
     if (this.#queued >= this.#maxQueued) {
+      // Shed the OLDEST *waiting* alert, never the incoming one and never the
+      // send already on the wire: for an ops channel the latest state beats a
+      // backlog. Only when nothing is waiting (single-slot queue with a hung
+      // send) is the incoming alert shed instead — memory stays bounded.
+      const oldest = this.#waiting.shift();
       this.droppedSends++;
-      this.log.warn?.(`send queue full (${this.#queued}/${this.#maxQueued}); dropping alert for ${chatId}`);
-      return Promise.resolve({ dropped: true });
+      if (oldest) {
+        this.#queued--;
+        this.log.warn?.(
+          `send queue full (${this.#queued + 1}/${this.#maxQueued}); shedding oldest unsent alert for ${oldest.chatId} in favour of ${chatId}`
+        );
+        oldest.settle({ dropped: true });
+      } else {
+        this.log.warn?.(`send queue full (${this.#queued}/${this.#maxQueued}) with nothing waiting; dropping alert for ${chatId}`);
+        return Promise.resolve({ dropped: true });
+      }
     }
     this.#queued++;
-    this.#waitSince.push(Date.now());
+    let settle;
+    const gate = new Promise((resolve) => {
+      settle = resolve;
+    });
+    const entry = { at: Date.now(), settle, chatId };
+    this.#waiting.push(entry);
     const next = this.#writeChain
       .catch(() => {})
-      .then(() => this.sendMessage(chatId, text, extra))
-      .finally(() => {
-        this.#queued--;
-        this.#waitSince.shift();
+      .then(async () => {
+        const i = this.#waiting.indexOf(entry);
+        // Shed while waiting: already settled above, nothing to send.
+        if (i === -1) return { dropped: true };
+        this.#waiting.splice(i, 1);
+        try {
+          return await this.sendMessage(chatId, text, extra);
+        } finally {
+          this.#queued--;
+        }
       });
     this.#writeChain = next.catch(() => {});
-    return next;
+    // Resolve (or reject) the caller exactly the way the send resolved.
+    // A rejection here is a real send failure and must stay one.
+    next.then(settle, (err) => settle(Promise.reject(err)));
+    return gate;
   }
 
   /** Publish the command list so Telegram shows a menu instead of a blank bar. */

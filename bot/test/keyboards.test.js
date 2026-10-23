@@ -20,6 +20,7 @@ import {
   alertsKeyboard,
   taskLinkKeyboard,
   rotationKeyboard,
+  prefsRow,
 } from "../src/keyboards.js";
 
 test("isTaskId accepts the same decimal shape the /task gate enforces", () => {
@@ -77,6 +78,26 @@ test("parseCallback rejects garbage without throwing", () => {
 test("encodeCallback refuses payloads past Telegram's 64-byte cap", () => {
   assert.equal(encodeCallback("t", "9".repeat(100)), null);
   assert.ok(encodeCallback("t", "42").length <= CALLBACK_LIMIT);
+});
+
+test("prefsRow buttons name the target, like the language switch", () => {
+  // Both buttons promise where the tap lands: "EN" from a RU chat, and
+  // "mode: geek" from simple mode. Showing the current mode instead once
+  // flipped users into the mode they tried to leave.
+  const [modeBtn, langBtn] = prefsRow("ru", "simple", "s");
+  assert.equal(modeBtn.text, "режим: гик");
+  assert.equal(langBtn.text, "EN");
+  const [backBtn] = prefsRow("en", "pro", "s");
+  assert.equal(backBtn.text, "mode: simple");
+});
+
+test("mode/language toggles parse on long task ids", () => {
+  // The old global 20-char arg cap rejected these while the task buttons
+  // for the same ids parsed fine.
+  const big = "9".repeat(20);
+  assert.deepEqual(parseCallback(`m:t:${big}`), { op: "m", arg: `t:${big}` });
+  assert.deepEqual(parseCallback(`l:en:t:${big}`), { op: "l", arg: `en:t:${big}` });
+  assert.ok(parseCallback(`m:t:${big}`).arg.length + 2 <= CALLBACK_LIMIT);
 });
 
 test("callback payloads the bot emits fit the 64-byte cap", () => {

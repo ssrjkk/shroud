@@ -206,6 +206,17 @@ test("pool and task scale money by the escrow token, not hardcoded 18", async ()
   assert.ok(replyText(await bare.pool([])).includes("0"), "18dp default renders sub-wei dust as 0");
 });
 
+test("toasts speak the chat's language", async () => {
+  const store = createMemoryStore();
+  const chain = stubChain(0);
+  const t = toast();
+  await routeCallback(parseCallback("w:42"), { chain, config: {}, store, chatId: 1, langCode: "ru", ...t });
+  assert.ok(t.seen.some((m) => m.includes("слежу за #42")), JSON.stringify(t.seen));
+  const dead = await routeCallback({ op: "zzz", arg: "" }, { chain, config: {}, store, chatId: 1, langCode: "ru" });
+  assert.ok(replyText(dead).includes("старого бота"));
+  assert.ok(dead.markup.inline_keyboard.flat().some((b) => b.callback_data === "menu"));
+});
+
 test("pro/simple/lang confirmations and usage errors carry a way back", async () => {
   const store = createMemoryStore();
   const h = createHandlers(stubChain(0), {}, { store });

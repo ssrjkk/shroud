@@ -103,7 +103,7 @@ constructor reverts with no reason.
   or build `node/` and point it at a task. The node registers, executes, commits, disputes
   from its own commits, and redeems its reward channels.
 - **Ops — watch a deployment.** Run the Telegram bot (`bot/`, needs `bot/.env` with a token
-  and an allowlist): `/menu` hub, `/pool`, `/task <id>`, mismatch/dispute/rotation/treasury
+  and an allowlist): `/menu` hub, `/pool`, `/task <id>`, mismatch/dispute/rotation/treasury/verifier
   alerts with per-chat filters. Setup and limits: [`bot/README.md`](bot/README.md).
 
 ## Repository

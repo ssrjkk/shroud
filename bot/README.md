@@ -76,7 +76,7 @@ dispatch. Every screen keeps you moving: help/limits toggles re-render in
 place, settings toggles stay in settings (alerts toggles stay in alerts),
 confirmations, empty states and missing tasks carry a `⌂ menu` row back, and
 deep pools get `« 1` / `N »` jump buttons next to the pager.
-Honest crypto notes: contributions are plain tx (EIP-712 is slices + PoP only),
+Honest crypto notes: contributions are plain tx (EIP-712 is slices only; PoP is EIP-191),
 SDK default encryptor is dev-only `NoopEncryptor` (confidential path is FHEWasm
 or `@shroud/sdk/relayer`), rotations need timelock ≥ 7 days (NetworkParams adds
 an approver signature; only `owner` cancels, anyone executes after).
@@ -190,7 +190,7 @@ know.
 npm test
 ```
 
-162 tests, no bot token and no chain required. They cover the parts that fail
+172 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -209,11 +209,13 @@ quietly in production:
   the bot rather than opening it
 - per-chat abuse quotas (heavy commands cost more), input sanitization, flood →
   shadowban escalation, handler deadlines, and the RPC timeout failing fast
-- bounded Telegram send queue (over-cap alerts shed newest-first with a counter,
+- bounded Telegram send queue (over-cap alerts shed oldest-first with a counter
+  so the newest state survives, single-slot overflow sheds the incoming one;
   broadcasts never grow memory without limit)
 - inline keyboards: callback payloads parse total (garbage in, null out, never
   a throw), every emitted payload fits the 64-byte cap, pool pages clamp,
-  watch/unwatch flip state with a toast, alert toggles resolve against globals
+  watch/unwatch flip state with a per-chat-language toast, mode buttons name
+  their target, alert toggles resolve against globals
 - watchlist persistence: atomic tmp+rename writes, corrupt-file backup with an
   empty start, empty-means-everything filtering, file-store mutation contract
 - delivery routing: flag source × watchlist × alert scope matrix, unknown keys

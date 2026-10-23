@@ -18,7 +18,7 @@ import {
   getPrefs,
   setPref,
 } from "../src/watchlist.js";
-import { createHandlers, routeCallback, replyText } from "../src/index.js";
+import { createHandlers, routeCallback, replyText, resolveChatLang } from "../src/index.js";
 import { parseCallback, startKeyboard, roleKeyboard } from "../src/keyboards.js";
 
 const stubChain = () => ({
@@ -143,6 +143,35 @@ test("/role renders guides and rejects ghosts", async () => {
   assert.ok(replyText(await role(["buyer"], {})).includes("Buyer"));
   assert.ok(replyText(await role(["node"], { chatId: 1, langCode: "ru" })).includes("Оператор"));
   assert.ok(replyText(await role(["nope"], {})).length > 0);
+});
+
+test("/role accepts the short forms the buttons send", async () => {
+  // The keyboards emit r:contrib and r:watch; rejecting "contrib"/"watch"
+  // here stranded both button and RU-alias paths on the role picker.
+  const { role } = createHandlers(stubChain(), {}, { store: createMemoryStore() });
+  assert.ok(replyText(await role(["contrib"], {})).includes("Contributor"));
+  assert.ok(replyText(await role(["watch"], {})).includes("Watcher"));
+  assert.ok(replyText(await role(["contrib"], { chatId: 1, langCode: "ru" })).includes("Контрибьютор"));
+});
+
+test("resolveChatLang prefers stored prefs, then the client locale", async () => {
+  const store = createMemoryStore();
+  assert.equal(resolveChatLang(null, 1, "ru-RU"), "ru");
+  assert.equal(resolveChatLang(store, 1, undefined), "en");
+  await store.setPref(1, "lang", "ru");
+  assert.equal(resolveChatLang(store, 1, "en-US"), "ru");
+});
+
+test("/menu renders welcoming for fresh chats, honoring for chosen ones", async () => {
+  const store = createMemoryStore();
+  const { menu } = createHandlers(stubChain(), {}, { store });
+  // No stored prefs: simple lead even though the global default is pro.
+  const fresh = replyText(await menu([], { chatId: 1, langCode: "en" }));
+  assert.ok(fresh.includes("plain words"));
+  // An explicit pro choice is respected.
+  await store.setPref(1, "mode", "pro");
+  const pro = replyText(await menu([], { chatId: 1, langCode: "en" }));
+  assert.ok(pro.includes("eth_call"));
 });
 
 test("start and role keyboards carry mode, language and every role", () => {

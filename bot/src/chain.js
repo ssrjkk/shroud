@@ -106,23 +106,58 @@ async function getTokenDecimals(tokenAddress, provider) {
     tokenDecimalsCache.set(tokenAddress.toLowerCase(), decimals);
     return decimals;
   } catch {
-    tokenDecimalsCache.set(tokenAddress.toLowerCase(), 18);
+    // Deliberately not cached: a transient RPC blip must not pin the wrong
+    // scale until restart. The escrow reader retries on its next call.
     return 18; // Default to 18 if read fails
   }
 }
 
-/** 1e18-scaled token amount as a plain decimal string with 4dp. */
+/**
+ * Token amount as a plain decimal string with 4dp.
+ *
+ * Total by design (see shortId): dust renders as `<0.0001` rather than
+ * silently collapsing to the same `"0"` as a true zero, negatives keep
+ * their sign, and a garbage scale falls back to 18 instead of throwing or
+ * shifting the displayed amount by orders of magnitude.
+ */
+
+/**
+ * Whether the loaded ABI declares an event. A missing event is a deployment
+ * fact (older contract build), not an RPC failure — callers skip it
+ * silently, while RPC errors still propagate to the scan loop for a retry.
+ */
+function hasEvent(iface, eventName) {
+  try {
+    iface.getEvent(eventName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function fmtEth(wei, decimals = 4, tokenDecimals = 18n) {
   try {
     const v = BigInt(wei);
-    const d = BigInt(tokenDecimals);
+    if (v < 0n) return `-${fmtEth(-v, decimals, tokenDecimals)}`;
+    let d = 18n;
+    try {
+      const t = BigInt(tokenDecimals);
+      if (t >= 0n && t <= 77n) d = t;
+    } catch {
+      // Garbage scale: keep the 18 fallback below.
+    }
+    const dp = Number.isInteger(decimals) && decimals >= 0 && decimals <= 18 ? decimals : 4;
     const scale = 10n ** d;
     const whole = v / scale;
     const frac = v % scale;
-    const fracStr = frac.toString().padStart(Number(d), "0").slice(0, decimals);
-    return fracStr.replace(/0+$/, "") === ""
-      ? whole.toString()
-      : `${whole}.${fracStr.replace(/0+$/, "")}`;
+    const fracStr = frac.toString().padStart(Number(d), "0").slice(0, dp);
+    const stripped = fracStr.replace(/0+$/, "");
+    if (stripped !== "") return `${whole}.${stripped}`;
+    // No visible fraction: exact zero, an exact integer, or dust below the
+    // display precision. Dust must not collapse to "0" — a zero budget and
+    // a 1-wei budget are different facts.
+    if (v === 0n || whole !== 0n) return whole.toString();
+    return `<${dp > 0 ? `0.${"0".repeat(dp - 1)}1` : "1"}`;
   } catch {
     return String(wei);
   }
@@ -487,22 +522,22 @@ export class ChainReader {
     const names = ["DisputeCommitted", "DisputeReported", "EpochVerified", "TaskSettled", "TaskStatusChanged"];
     const out = [];
     for (const name of names) {
-      try {
-        const logs = await this.#queryLogs(
-          this.#ifaces.cipherTask,
-          name,
-          this.#config.cipherTask,
-          fromBlock,
-          toBlock
-        );
-        out.push(...this.#decode(this.#ifaces.cipherTask, name, logs));
-      } catch {
-        // Not every build emits every event; absence is not an error.
-      }
+      // Skip events the loaded ABI does not declare (older contract build),
+      // but let RPC failures propagate: the scan loop must retry the range
+      // rather than silently drop it.
+      if (!hasEvent(this.#ifaces.cipherTask, name)) continue;
+      const logs = await this.#queryLogs(
+        this.#ifaces.cipherTask,
+        name,
+        this.#config.cipherTask,
+        fromBlock,
+        toBlock
+      );
+      out.push(...this.#decode(this.#ifaces.cipherTask, name, logs));
     }
     // `NodeBondSlashed` is emitted by the vault, not the orchestrator: same topic the
     // interface declares, different emitting address, so it needs its own query.
-    try {
+    if (hasEvent(this.#ifaces.paymentVault, "NodeBondSlashed")) {
       const logs = await this.#queryLogs(
         this.#ifaces.paymentVault,
         "NodeBondSlashed",
@@ -511,8 +546,6 @@ export class ChainReader {
         toBlock
       );
       out.push(...this.#decode(this.#ifaces.paymentVault, "NodeBondSlashed", logs));
-    } catch {
-      // Not every build emits every event; absence is not an error.
     }
     return out.sort((a, b) => (a.blockNumber ?? 0) - (b.blockNumber ?? 0));
   }
@@ -531,18 +564,15 @@ export class ChainReader {
     const names = ["TreasuryProposed", "TreasuryChanged", "TreasuryRotationCancelled"];
     const out = [];
     for (const name of names) {
-      try {
-        const logs = await this.#queryLogs(
-          this.#ifaces.cipherTask,
-          name,
-          this.#config.cipherTask,
-          fromBlock,
-          toBlock
-        );
-        out.push(...this.#decode(this.#ifaces.cipherTask, name, logs));
-      } catch {
-        // Not every build emits every event; absence is not an error.
-      }
+      if (!hasEvent(this.#ifaces.cipherTask, name)) continue;
+      const logs = await this.#queryLogs(
+        this.#ifaces.cipherTask,
+        name,
+        this.#config.cipherTask,
+        fromBlock,
+        toBlock
+      );
+      out.push(...this.#decode(this.#ifaces.cipherTask, name, logs));
     }
     return out.sort((a, b) => (a.blockNumber ?? 0) - (b.blockNumber ?? 0));
   }
@@ -601,16 +631,14 @@ export class ChainReader {
    * budget with a hardcoded 10^18 renders a 1000-USDC budget as "0". The token
    * address comes from `escrowToken()` and the scale from its `decimals()`.
    * Both are immutable on a deployment, so one successful read is cached
-   * forever; a failure falls back to 18 and records a read error (visible in
-   * /status) rather than failing the reply.
+   * forever. A failure is NOT cached: it falls back to 18, records a read
+   * error (visible in /status), and retries on the next command — caching a
+   * blip would silently mis-scale every amount until restart.
    */
   async escrowDecimals() {
     if (this.#escrowDecimals !== null) return this.#escrowDecimals;
     const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
-    if (!c) {
-      this.#escrowDecimals = 18;
-      return 18;
-    }
+    if (!c) return 18;
     try {
       const token = await c.escrowToken();
       const d = await getTokenDecimals(token, this.#provider);
@@ -618,7 +646,6 @@ export class ChainReader {
       return d;
     } catch (e) {
       this.#noteReadError("escrowDecimals", e);
-      this.#escrowDecimals = 18;
       return 18;
     }
   }
@@ -660,18 +687,12 @@ const grab = async (name) =>
     // worth one alert each — the scanner dedupes by txHash:logIndex.
     const executed = await grab("RotationExecuted");
     const proposed = await grab("RotationProposed");
-    let approved = [];
-    let cancelled = [];
-    try {
-      approved = await grab("RotationApproved");
-    } catch {
-      // Not every build emits every event; absence is not an error.
-    }
-    try {
-      cancelled = await grab("RotationCancelledEvent");
-    } catch {
-      // Not every build emits every event; absence is not an error.
-    }
+    const approved = hasEvent(this.#ifaces.networkParams, "RotationApproved")
+      ? await grab("RotationApproved")
+      : [];
+    const cancelled = hasEvent(this.#ifaces.networkParams, "RotationCancelledEvent")
+      ? await grab("RotationCancelledEvent")
+      : [];
     return { executed, proposed, approved, cancelled, pending: await this.pendingRotation() };
   }
 
@@ -712,12 +733,9 @@ const grab = async (name) =>
       );
     const rotated = await grab("VerifierRotated");
     const proposed = await grab("VerifierRotationProposed");
-    let cancelled = [];
-    try {
-      cancelled = await grab("VerifierRotationCancelled");
-    } catch {
-      // Not every build emits every event; absence is not an error.
-    }
+    const cancelled = hasEvent(this.#ifaces.verifier, "VerifierRotationCancelled")
+      ? await grab("VerifierRotationCancelled")
+      : [];
     return { rotated, proposed, cancelled };
   }
 }

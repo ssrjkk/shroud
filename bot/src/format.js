@@ -39,7 +39,7 @@ const STATUS_TONE = {
   4: "▶",
   5: "◈",
   6: "✓",
-  7: "◔",
+  7: "◍",
   8: "◑",
   9: "★",
   10: "✕",
@@ -49,7 +49,7 @@ const STATUS_TONE = {
 const header = (icon, text) => `${icon} <b>${htmlEscape(text)}</b>`;
 
 /** Truncate a digest or hash for display without pretending it is the whole thing. */
-const shortHash = (h) => (h ? `${String(h).slice(0, 14)}…` : "—");
+const shortHash = (h) => (h === null || h === undefined || h === "" ? "—" : `${String(h).slice(0, 14)}…`);
 
 const isPro = (mode) => mode !== "simple";
 
@@ -59,10 +59,13 @@ const nextHint = (lang) => `\n\n${mono(t(lang, "common.nextHint"))}`;
 /** Human status for simple mode: plain words instead of enum names. */
 export function humanStatus(status, lang = "en") {
   const s = Number(status);
-  if (s === 0 || s === 1) return t(lang, "task.humanOpen");
+  // 0 (None) is not "open": it means uninitialized, and must never read as fundable.
+  if (s === 0) return taskStatusName(0);
+  if (s === 1) return t(lang, "task.humanOpen");
   if (s === 2 || s === 3) return t(lang, "task.humanCollecting");
   if (s === 4 || s === 5) return t(lang, "task.humanTraining");
-  if (s === 6 || s === 7 || s === 8) return t(lang, "task.humanSettling");
+  if (s === 6 || s === 7) return t(lang, "task.humanSettling");
+  if (s === 8) return t(lang, "task.humanRevealing");
   if (s === 9) return t(lang, "task.humanDone");
   if (s === 10 || s === 11) return t(lang, "task.humanStopped");
   return taskStatusName(s);
@@ -529,9 +532,11 @@ export function renderHelp(lang = "en") {
     `${mono("ALERT_VERIFIER_ROTATION")}  ${t(lang, "help.a5")}`,
     "",
     t(lang, "help.mode"),
-    `${mono("/start")}  ${t(lang, "start.pick")}`,
-    `${mono("/role")}  buyer|contributor|node|watcher`,
-    `${mono("/simple")} / ${mono("/pro")} / ${mono("/lang")}`,
+    `${mono("/start")}  ${t(lang, "help.start")}`,
+    `${mono("/role")}  ${t(lang, "help.m4")}`,
+    `${mono("/simple")}  ${t(lang, "help.m1")}`,
+    `${mono("/pro")}  ${t(lang, "help.m2")}`,
+    `${mono("/lang")}  ${t(lang, "help.m3")}`,
     "",
     t(lang, "help.short"),
     "",
@@ -555,7 +560,11 @@ export function renderWatchlist(ids, lang = "en") {
     );
   }
   const lines = [header("👁", `${t(lang, "watch.t")} (${ids.length})`), DIV, ""];
-  for (const id of ids) lines.push(`  ${mono(`#${id}`)}  ${mono(`/task ${id}`)}`);
+  // Bounded like the commit list: 200 long ids would blow past Telegram's
+  // 4096 cap and get cut mid-tag (unparsable → the whole message is dropped).
+  const SHOWN = 30;
+  for (const id of ids.slice(0, SHOWN)) lines.push(`  ${mono(`#${id}`)}  ${mono(`/task ${id}`)}`);
+  if (ids.length > SHOWN) lines.push(`  ${mono(t(lang, "watch.more", { n: ids.length - SHOWN }))}`);
   lines.push("");
   lines.push(t(lang, "watch.drop"));
   return lines.join("\n");

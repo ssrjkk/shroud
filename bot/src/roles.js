@@ -9,8 +9,19 @@
 import { t } from "./i18n.js";
 
 export const ROLES = ["buyer", "contrib", "node", "watch"];
-/** What a user may type after /role (full words welcome). */
-export const ROLE_ALIASES = { buyer: "buyer", contributor: "contrib", node: "node", watcher: "watch" };
+/**
+ * What a user may type after /role. Short forms work too: the buttons send
+ * `r:contrib` / `r:watch` and RU aliases normalize to the same roots, so
+ * rejecting them here stranded both paths on the role picker.
+ */
+export const ROLE_ALIASES = {
+  buyer: "buyer",
+  contributor: "contrib",
+  contrib: "contrib",
+  node: "node",
+  watcher: "watch",
+  watch: "watch",
+};
 const ROLE_KEYS_GEEK = { buyer: "role.buyerB", contrib: "role.contribB", node: "role.nodeB", watch: "role.watchB" };
 const ROLE_KEYS_SIMPLE = { buyer: "role.buyerS", contrib: "role.contribS", node: "role.nodeS", watch: "role.watchS" };
 

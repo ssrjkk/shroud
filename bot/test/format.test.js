@@ -22,6 +22,8 @@ import {
   renderVerifier,
   renderLimits,
   renderHelp,
+  renderWatchlist,
+  humanStatus,
   htmlEscape,
 } from "../src/format.js";
 import { createHandlers, mismatchArgs, replyText } from "../src/index.js";
@@ -48,8 +50,15 @@ test("fmtEth renders wei without losing the integer part", () => {
   assert.equal(fmtEth(1_000_000_000_000_000_000n), "1");
   assert.equal(fmtEth(1_500_000_000_000_000_000n), "1.5");
   assert.equal(fmtEth(1_234_500_000_000_000_000n), "1.2345");
-  // A tiny remainder must not render as "0.0000..." with trailing noise.
-  assert.equal(fmtEth(1n), "0.000000000000000001".slice(0, 0) + fmtEth(1n));
+  // Dust is honest about being dust instead of collapsing to the same "0"
+  // as a true zero balance.
+  assert.equal(fmtEth(1n), "<0.0001");
+  assert.equal(fmtEth(1n, 4, 6), "<0.0001");
+  assert.equal(fmtEth(1_000_000n, 4, 6), "1");
+  // Negatives keep their sign; garbage scales fall back to 18.
+  assert.equal(fmtEth(-5n), "-<0.0001");
+  assert.equal(fmtEth(1_000_000_000_000_000_000n, 4, "abc"), "1");
+  assert.equal(fmtEth(100n, 4, 300), "<0.0001");
 });
 
 test("shortId and shortAddr never return an empty string", () => {
@@ -61,6 +70,19 @@ test("shortId and shortAddr never return an empty string", () => {
   // shortId, shortAddr shows the value instead of aborting the whole reply.
   assert.equal(shortAddr(42), "42…42");
   assert.equal(shortAddr(undefined), "—");
+});
+
+test("humanStatus never markets Nothing as open, nor Revealing as paid", () => {
+  // Status 0 means uninitialized: rendering it "open" would invite funding
+  // a task that does not exist.
+  assert.equal(humanStatus(0, "en"), "None");
+  assert.equal(humanStatus(1, "en"), "open");
+  assert.equal(humanStatus(4, "ru"), "идёт обучение");
+  // Revealing (threshold decryption in flight) is not yet a payout.
+  assert.equal(humanStatus(8, "en"), "revealing");
+  assert.equal(humanStatus(8, "ru"), "раскрытие ключей");
+  assert.equal(humanStatus(6, "en"), "paying out");
+  assert.equal(humanStatus(99, "en"), "Unknown(99)");
 });
 
 test("taskStatusName mirrors the contract enum and admits unknowns", () => {
@@ -249,7 +271,7 @@ test("money scales by escrow decimals, not a hardcoded 18", () => {
   assert.ok(out6.includes("<code>1000</code>"), "budget at 6dp");
   assert.ok(out6.includes("<code>250</code>"), "locked at 6dp");
   const out18 = renderTask({ task: rich, commits: [], winner: null, quorum: null }, "42");
-  assert.ok(out18.includes("<code>0</code>"), "18dp default renders sub-wei dust as 0");
+  assert.ok(out18.includes("0.0001"), "18dp default marks sub-wei dust instead of calling it 0");
   const pool6 = renderPool(
     [{ ...task, taskId: "9", budget: 2_000_000n, status: 2, statusName: "Collecting", contributors: 1 }],
     1, null, "en", "pro", 6
@@ -376,6 +398,30 @@ test("status surfaces a failing chain read instead of showing an empty pool", as
   const out = replyText(await status());
   assert.ok(out.includes("chain reads failing"), "outage is visible");
   assert.ok(out.includes("task: missing response"), "source is named");
+});
+
+test("status truncates a hostile read error before wrapping it in markup", async () => {
+  // Proxies answer RPC failures with HTML bodies; embedding a 5KB body inside
+  // <b> would push the message past 4096 and Telegram would 400 the whole
+  // /status — exactly when the operator needs it most.
+  const stub = {
+    chainId: async () => 31337,
+    blockNumber: async () => 100,
+    networkParams: async () => null,
+    lastReadError: () => "task: <html>" + "x".repeat(5000),
+  };
+  const { status } = createHandlers(stub, {});
+  const out = replyText(await status());
+  assert.ok(out.length < 4096, `status must always fit, got ${out.length}`);
+  assert.ok(out.includes("…"), "truncation is marked");
+});
+
+test("renderWatchlist caps a full book instead of risking truncation", () => {
+  const ids = Array.from({ length: 200 }, (_, i) => String(10 ** 19 + i));
+  const out = renderWatchlist(ids, "en");
+  assert.ok(out.length < 4096, `watchlist must always fit, got ${out.length}`);
+  assert.ok(out.includes("Watchlist (200)"), "count survives the cap");
+  assert.ok(out.includes("more"), "the cut is marked");
 });
 
 test("status warns when the send queue stalls instead of hiding the backlog", async () => {

@@ -67,6 +67,18 @@ test("alert overrides resolve against the global config", () => {
   assert.deepEqual([...ALERT_KEYS].sort(), ["disp", "mm", "rot", "tre", "ver"]);
 });
 
+test("task ids canonicalize so 007 watches task 7", () => {
+  const state = emptyState();
+  assert.ok(addWatch(state, 1, "007").added);
+  assert.deepEqual(state.chats["1"].watched, ["7"]);
+  // The scanner compares canonical ids: a watched "007" must match task "7".
+  assert.ok(passesWatchlist(state, 1, "7"));
+  assert.ok(removeWatch(state, 1, "007").removed);
+  // Loading old state collapses zero-padded dupes instead of double-counting.
+  const messy = normaliseState({ chats: { 1: { watched: ["7", "007"] } } });
+  assert.deepEqual(messy.chats["1"].watched, ["7"]);
+});
+
 test("removeWatch on an unknown chat reports, never creates state", () => {
   const state = emptyState();
   assert.ok(!removeWatch(state, 999, "42").removed);

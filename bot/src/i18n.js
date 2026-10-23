@@ -37,17 +37,21 @@ const EN = {
   "common.modePro": "geek",
   "common.onState": "on",
   "common.offState": "off",
+  "toast.watching": "watching #{id}",
+  "toast.unwatched": "unwatched #{id}",
+  "toast.stale": "that button is stale — send the command again",
+  "toast.failed": "that failed — try again",
+  "toast.oldBot": "that button is from an older bot — send the command again",
   "common.nextHint": "Send /pro for the full picture, /role to pick a guide.",
 
   // --- /start ---------------------------------------------------------------
-  "start.pick": "Who are you here as?",
   "start.roles": "buyer · contributor · node · watcher",
 
   // --- roles ------------------------------------------------------------------
   "role.pick": "Pick a guide:",
   "role.buyerB":
     "<b>Buyer — fund a private training task.</b>\n\n" +
-    "You lock a budget in USDC and publish the model spec; nodes train over ciphertext, and the escrow streams out to contributors, nodes and the committee as epochs settle.\n\n" +
+    "You lock a budget in the escrow token (USDC-style, 6 decimals on devnet) and publish the model spec; nodes train over ciphertext, and the escrow streams out to contributors, nodes and the committee as epochs settle.\n\n" +
     "Here: /pool to browse tasks, /task &lt;id&gt; for epochs, commits and disputes.\n" +
     "Out there: <code>ShroudSdk.uploadAndMonetize</code> is the buyer-side call (see <code>packages/sdk</code>); <code>createTask</code> → <code>sealTask</code> → <code>openEpoch</code> per epoch.\n\n" +
     "Watch /limits before trusting real value: no external audit, quorum is 3 reporters, the STARK is sampled on-chain.",
@@ -58,7 +62,7 @@ const EN = {
     "Out there: <code>sdk.uploadAndMonetize(data, taskId, { features })</code> — it pre-checks everything the chain would revert on, so you never burn gas learning the rules.",
   "role.nodeB":
     "<b>Node operator — execute epochs, commit, dispute, get paid.</b>\n\n" +
-    "Register once per task — bond 10 CMUSD (REGISTRATION_BOND, ~20% of a typical epoch lock) — then execute the FHE epoch, commit the trace digest, and watch the claim: if it disagrees with your re-execution, report it — commit-reveal, never bare in the mempool.\n\n" +
+    "Register once per task — bond 10 CMUSD (REGISTRATION_BOND, ~20% of a typical epoch lock) — then execute the FHE epoch, commit the trace digest, and watch the claim: if it disagrees with your re-execution, report it via commit-reveal (the bare path is a fallback, not the default).\n\n" +
     "Here: /status for chain, key pin and pending rotations; /task &lt;id&gt; for commits and digests per epoch; /alerts for mismatch and dispute pings.\n" +
     "Out there: the Rust node (<code>node/</code>) does watch → execute → commit → dispute → finalize → redeem/reclaim on its own. Never run it against a key rotation you did not verify.",
   "role.watchB":
@@ -68,12 +72,17 @@ const EN = {
 
   // --- /help ------------------------------------------------------------------
   "help.t": "Shroud ops bot",
+  "help.m1": "plain words, key facts first (default for new chats)",
+  "help.m2": "geek version: every digest, window and quorum count",
+  "help.m3": "switch language — /lang ru|en, bare /lang shows current",
+  "help.m4": "guided path for your side — buyer|contributor|node|watcher (contrib, watch work too)",
+  "help.start": "hub + onboarding in your language, plain words first",
   "help.read": "<b>Read</b>",
   "help.watch": "<b>Watch</b>",
-  "help.alerts": "<b>Alerts</b> (enable in .env)",
+  "help.alerts": "<b>Alerts</b> (global flags in .env)",
   "help.mode": "<b>Depth</b>",
   "help.l1": "chain, key pin, pending rotation",
-  "help.l2": "recent tasks, 12 per page",
+  "help.l2": "recent tasks, 12 per page — /pool 2 jumps to page 2",
   "help.l3": "one task, with that epoch's commits",
   "help.l4": "what this deployment does not protect against",
   "help.l5": "this list",
@@ -86,7 +95,7 @@ const EN = {
   "help.a3": "any network key change",
   "help.a4": "any treasury rotation step",
   "help.a5": "any verifier rotation step",
-  "help.short": "Shortcuts: RU aliases work (/статус), bare <code>12</code> opens task 12.",
+  "help.short": "Shortcuts: RU aliases work (/статус), bare <code>12</code> opens task 12, <code>/proto</code> = <code>/protocol</code>.",
   "help.l6": "main menu with everything",
   "help.l7": "how the protocol works in 60 seconds",
   "help.l8": "geek spec: binding, disputes, money, keys",
@@ -164,7 +173,7 @@ const EN = {
   // --- /limits ----------------------------------------------------------------------
   "limits.t": "Known limits — read before trusting this deployment",
   "limits.notenforced": "Not enforced",
-  "limits.l1": "the dispute quorum is <b>not</b> Sybil-resistant; three cheap addresses can deny a node its reward",
+  "limits.l1": "the dispute quorum is <b>not</b> Sybil-resistant: three bonded addresses can deny a node its reward — the bond prices the attack (locked till terminality) but does not prevent it",
   "limits.l2": "the contribution bond is opt-in and attested, not proven; row farming is only rows-weighted",
   "limits.l3": "the chain does <b>not</b> fully verify the STARK",
   "limits.l4": "a substituted FHE public key is <b>not</b> detected by participants at submission time",
@@ -185,18 +194,19 @@ const EN = {
   "watch.everything": "watching <b>everything</b> — task-scoped alerts arrive for all tasks.",
   "watch.narrow": "/watch &lt;id&gt; to narrow to specific tasks.",
   "watch.drop": "/unwatch &lt;id&gt; to drop one, or watch nothing new to keep this filter.",
+  "watch.more": "… and {n} more",
 
   // --- pushed alerts ------------------------------------------------------------------
   "al.mismatchT": "Digest mismatch on epoch {epoch}",
   "al.mismatchPrev": "previously",
   "al.mismatchB": "Node {node} committed twice for the same epoch with different digests. On chain that cannot happen — the contract rejects it — so either the executor is non-deterministic or this is a bug worth stopping the node for.",
   "al.disputeCommitT": "Dispute commitment posted",
-  "al.disputeCommitB": "A node committed to a dispute digest without revealing it yet (commit-reveal against mempool front-running). A commitment with no follow-up reveal is a stuck reporter — or someone testing the quorum.",
+  "al.disputeCommitB": "A node committed to a dispute digest without revealing it yet (commit-reveal against mempool front-running). A commitment with no follow-up reveal is a stuck reporter — or someone testing the quorum. Watch /task: if no reveal lands, the quorum decides without them.",
   "al.disputeReportT": "Dispute reported",
   "al.disputeReportB": "A node re-executed this epoch and disagrees with the winner.",
   "al.epochVerifiedT": "Epoch verified",
   "al.epochRejectedT": "Epoch rejected",
-  "al.epochRejectedB": "The dispute quorum rejected this epoch. Nobody is paid for it.",
+  "al.epochRejectedB": "The dispute quorum rejected this epoch. The winner gets nothing — reporters split a re-execution bounty from the lock.",
   "al.settledT": "Task settled",
   "al.settledContrib": "contributors",
   "al.settledNodes": "nodes",
@@ -272,22 +282,22 @@ const EN = {
   "how.leadSimple": "A buyer locks money, people bring encrypted data, nodes train without seeing it, the chain pays everyone.",
   "how.leadGeek": "Escrow → encrypted contributions → sealed ctRoot → per-epoch FHE execute → transcript-bound commit → dispute quorum → paged settle + threshold reveal.",
   "how.s1t": "Buyer locks a budget",
-  "how.s1dSimple": "Money goes into an on-chain safe (USDC) + a model spec. Nobody is paid yet.",
+  "how.s1dSimple": "Money goes into an on-chain safe (escrow token) + a model spec. Nobody is paid yet.",
   "how.s1dGeek": "createTask(budget, params) escrows exactly the named amount in CipherTask. Spec CID + epochs, windows, pricePerRow.",
   "how.s2t": "People bring data, encrypted",
   "how.s2dSimple": "Rows are encrypted on your own device. Only ciphertext leaves it.",
   "how.s2dGeek": "Encrypt under s_pub (browser FHEWasm or @shroud/sdk/relayer; SDK default NoopEncryptor is dev-only, non-confidential). submitContribution{...} is a plain tx, one shard per address.",
   "how.s3t": "Dataset locks",
   "how.s3dSimple": "The set closes — a lock. After that the rules cannot change mid-game.",
-  "how.s3dGeek": "sealTask pins ctRoot. Contributors/shards fixed, contributionWindow starts ticking.",
+  "how.s3dGeek": "sealTask pins ctRoot and closes the contribution window (it opened at createTask). Contributors/shards fixed.",
   "how.s4t": "Nodes train blind",
   "how.s4dSimple": "Compute nodes learn over ciphertexts. They never see your rows.",
   "how.s4dGeek": "openEpoch(taskId, ...) per epoch — buyer or updateManager only (owner cannot). Node: TFHE SIMD matmul + SGD, hash-chained trace.",
   "how.s5t": "Everyone leaves a fingerprint",
   "how.s5dSimple": "Each node publishes a digest of what it computed. Same input must mean same digest.",
-  "how.s5dGeek": "commitEpoch{traceDigest, proofRef STAR*} — transcript binds chainId, task, epoch, ctRoot, wDigest. Sampled on-chain, full check off-chain.",
+  "how.s5dGeek": "commitEpoch{traceDigest, proofRef STAR*} — transcript keccak('SHROUD/PoC/v1', chainId, CipherTask, task, epoch, ctRoot, weights, trace, node). Sampled on-chain, full check off-chain.",
   "how.s6t": "Disagreement becomes a dispute",
-  "how.s6dSimple": "Digests differ — someone re-executes and 3 reporters decide who is right. Nobody is paid for a rejected epoch.",
+  "how.s6dSimple": "Digests differ — someone re-executes and 3 reporters decide who is right. A rejected epoch pays its winner nothing; reporters earn a re-execution bounty.",
   "how.s6dGeek": "commitDispute → reportDisputeWithSalt (commit-reveal vs mempool front-run). Sortition-weighted set, flat quorum of 3, winner bond slashes to buyer refund.",
   "how.s7t": "Settlement streams the money",
   "how.s7dSimple": "Contributors, nodes, committee get paid from the safe. Change goes back to the buyer.",
@@ -324,6 +334,7 @@ const EN = {
   "task.humanCollecting": "collecting data",
   "task.humanTraining": "training",
   "task.humanSettling": "paying out",
+  "task.humanRevealing": "revealing",
   "task.humanDone": "done",
   "task.humanStopped": "stopped",
   "task.humanOpen": "open",
@@ -353,7 +364,7 @@ const EN = {
   "btn.poolLong": "📋 tasks",
   "btn.alertsLong": "🔔 alerts",
   // --- simple role guides (mode=simple) ---
-  "role.buyerS": "<b>Buyer — 3 steps.</b>\n\n1. Pick a task in /pool — budget and status are in plain words.\n2. Fund it on-chain (the SDK does it: <code>createTask</code> → <code>sealTask</code>).\n3. Watch epochs in /task and get the change back at settlement.\n\nGeek detail: /pro, then re-open this guide.",
+  "role.buyerS": "<b>Buyer — 3 steps.</b>\n\n1. Pick a task in /pool — budget and status are in plain words.\n2. Fund it on-chain (the SDK does it: <code>createTask</code> → <code>sealTask</code>), then open every epoch (<code>openEpoch</code>) — no epoch runs without your transaction.\n3. Watch epochs in /task and get the change back at settlement.\n\nGeek detail: /pro, then re-open this guide.",
   "role.contribS": "<b>Contributor — 3 steps.</b>\n\n1. Pick an open task in /pool.\n2. Encrypt rows on your device (the app does it) — only ciphertext leaves.\n3. Get paid at settlement: your rows × liveness.\n\nOne address = one shard per task. Geek detail: /pro.",
   "role.nodeS": "<b>Node operator — 3 steps.</b>\n\n1. Check /status — chain, key pin, no pending rotation you did not expect.\n2. Register once per task, then the software executes + commits each epoch.\n3. Watch /alerts: a digest mismatch means stop and investigate.\n\nNever run under a rotation you did not verify. Geek detail: /pro.",
   "role.watchS": "<b>Watcher — 2 steps.</b>\n\n1. /watch &lt;id&gt; narrows alerts to one task. Empty list = everything.\n2. /alerts toggles mismatch / disputes / rotations / treasury.\n\nThe two that matter most: a digest mismatch and any rotation proposal.",
@@ -374,17 +385,21 @@ const RU = {
   "common.modePro": "гик",
   "common.onState": "вкл",
   "common.offState": "выкл",
+  "toast.watching": "слежу за #{id}",
+  "toast.unwatched": "больше не слежу за #{id}",
+  "toast.stale": "кнопка устарела — отправь команду заново",
+  "toast.failed": "не вышло — попробуй ещё раз",
+  "toast.oldBot": "кнопка от старого бота — отправь команду заново",
   "common.nextHint": "Отправь /pro для полной картины, /role — выбрать гайд.",
 
   // --- /start -------------------------------------------------------------------
-  "start.pick": "Ты здесь как кто?",
   "start.roles": "покупатель · контрибьютор · узел · наблюдатель",
 
   // --- roles --------------------------------------------------------------------
   "role.pick": "Выбери гайд:",
   "role.buyerB":
     "<b>Покупатель — закажи приватное обучение.</b>\n\n" +
-    "Кладёшь бюджет в USDC и публикуешь спек модели; узлы учатся по шифротекстам, а эскроу по мере эпох растекается контрибьюторам, узлам и комитету.\n\n" +
+    "Кладёшь бюджет в эскроу-токен (USDC-подобный, 6 знаков на девнете) и публикуешь спек модели; узлы учатся по шифротекстам, а эскроу по мере эпох растекается контрибьюторам, узлам и комитету.\n\n" +
     "Здесь: /pool — смотреть таски, /task &lt;id&gt; — эпохи, коммиты и споры.\n" +
     "Там: <code>ShroudSdk.uploadAndMonetize</code> — покупательский вызов (см. <code>packages/sdk</code>); <code>createTask</code> → <code>sealTask</code> → <code>openEpoch</code> на каждую эпоху.\n\n" +
     "Сначала /limits: аудита нет, кворум — 3 репортера, STARK на цепи проверен частично.",
@@ -395,16 +410,21 @@ const RU = {
     "Там: <code>sdk.uploadAndMonetize(data, taskId, { features })</code> — сам всё проверит до траты газа, чтобы цепь не завернула транзакцию.",
   "role.nodeB":
     "<b>Оператор узла — исполняй эпохи, коммить, оспаривай, забирай.</b>\n\n" +
-    "Одна регистрация на таск — бонд 10 CMUSD (REGISTRATION_BOND, ~20% типичного лока эпохи) — дальше исполняешь FHE-эпоху, коммитишь дайджест трейса, следишь за клеймом: не сошёлся с твоим пересчётом — репортишь, commit-reveal, никогда голым в мемпул.\n\n" +
+    "Одна регистрация на таск — бонд 10 CMUSD (REGISTRATION_BOND, ~20% типичного лока эпохи) — дальше исполняешь FHE-эпоху, коммитишь дайджест трейса, следишь за клеймом: не сошёлся с твоим пересчётом — репортишь через commit-reveal (голый репорт — только фолбэк).\n\n" +
     "Здесь: /status — цепь, пин ключа и висящие ротации; /task &lt;id&gt; — коммиты и дайджесты по эпохам; /alerts — пинги про расхождения и споры.\n" +
     "Там: Rust-узел (<code>node/</code>) сам делает watch → execute → commit → dispute → finalize → redeem/reclaim. Не гоняй его под ротацию ключа, которую не проверил.",
   "role.watchB":
     "<b>Наблюдатель — алерты без запуска чего-либо.</b>\n\n" +
-    "Ни ключей, ни бонда, ни узла. Подписался и читаешь: /watch &lt;id&gt; сужает алерты до одного таска (пустой вотчлист — значит все), /alerts переключает mismatch / споры / ротации / казну под этот чат.\n\n" +
+    "Ни ключей, ни бонда, ни узла. Подписался и читаешь: /watch &lt;id&gt; сужает алерты до одного таска (пустой вотчлист — значит все), /alerts переключает расхождение коммита / споры / ротации / казну под этот чат.\n\n" +
     "Два самых важных алерта: расхождение коммита на эпохе (чей-то исполнитель не согласен с клеймом) и любое предложение ротации (ключей или казны) — предложение единственный момент, когда ещё можно сказать «нет».",
 
   // --- /help ----------------------------------------------------------------------
   "help.t": "Shroud ops bot",
+  "help.m1": "простыми словами, главное сначала (по умолчанию для новых чатов)",
+  "help.m2": "версия для гиков: каждый дайджест, окно и счёт кворума",
+  "help.m3": "переключить язык — /lang ru|en, голый /lang покажет текущий",
+  "help.m4": "гайд под твою сторону — buyer|contributor|node|watcher (contrib и watch тоже работают)",
+  "help.start": "хаб + онбординг на твоём языке, сначала простыми словами",
   "help.read": "<b>Читать</b>",
   "help.watch": "<b>Следить</b>",
   "help.alerts": "<b>Алерты</b> (включаются в .env)",
@@ -423,7 +443,7 @@ const RU = {
   "help.a3": "любое изменение сетевого ключа",
   "help.a4": "любой шаг ротации казны",
   "help.a5": "любой шаг ротации верифаера",
-  "help.short": "Шорткаты: работают RU-алиасы (/статус), голое <code>12</code> открывает таск 12.",
+  "help.short": "Шорткаты: работают RU-алиасы (/статус), голое <code>12</code> открывает таск 12, <code>/proto</code> = <code>/protocol</code>.",
   "help.l6": "главное меню со всем",
   "help.l7": "как работает протокол, за 60 секунд",
   "help.l8": "спека для гиков: привязка, споры, деньги, ключи",
@@ -479,10 +499,10 @@ const RU = {
   "task.missing": "таска {id} на этой цепи нет, или CipherTask не задан.",
   "task.status": "Статус",
   "task.budget": "Бюджет",
-  "task.locked": "Замок",
+  "task.locked": "Заблокировано",
   "task.contributors": "Контрибьюторы",
   "task.shards": "Шарды",
-  "task.nextEpoch": "Эпоха",
+  "task.nextEpoch": "След. эпоха",
   "task.ctRoot": "ctRoot",
   "task.ctRootUnset": "не задан",
   "task.params": "Параметры",
@@ -500,8 +520,8 @@ const RU = {
 
   // --- /limits ----------------------------------------------------------------------------
   "limits.t": "Известные ограничения — прочитай, прежде чем доверять деньги",
-  "limits.notenforced": "Не enforced",
-  "limits.l1": "кворум споров <b>не</b> Sybil-устойчив; три дешёвых адреса могут лишить узел награды",
+  "limits.notenforced": "Не обеспечивается",
+  "limits.l1": "кворум споров <b>не</b> Sybil-устойчив: три бондовых адреса могут лишить узел награды — бонд лишь удорожает атаку (возвращается после завершения), а не исключает её",
   "limits.l2": "бонд взносов opt-in и аттестован, а не доказан; фарм строк взвешен только строками",
   "limits.l3": "цепь <b>не</b> проверяет STARK полностью",
   "limits.l4": "подменённый FHE-ключ <b>не</b> палится участниками в момент сабмита",
@@ -522,18 +542,19 @@ const RU = {
   "watch.everything": "слежу за <b>всем</b> — алерты по таскам приходят по всем таскам.",
   "watch.narrow": "/watch &lt;id&gt; — сузить до конкретных тасков.",
   "watch.drop": "/unwatch &lt;id&gt; — убрать один, или ничего нового не вочь — фильтр останется.",
+  "watch.more": "… и ещё {n}",
 
   // --- pushed alerts --------------------------------------------------------------------------
   "al.mismatchT": "Расхождение дайджестов, эпоха {epoch}",
   "al.mismatchPrev": "предыдущий",
   "al.mismatchB": "Узел {node} закоммитил дважды на одну эпоху с разными дайджестами. На цепи так нельзя — контракт такое режектит, — значит исполнитель недетерминирован или это баг, ради которого стоит остановить ноду.",
   "al.disputeCommitT": "Опубликован коммит спора",
-  "al.disputeCommitB": "Узел закоммитил дайджест спора, пока не раскрывая его (commit-reveal против фронтранна из мемпула). Коммит без последующего раскрытия — зависший репортер или кто-то щупает кворум.",
+  "al.disputeCommitB": "Узел закоммитил дайджест спора, пока не раскрывая его (commit-reveal против фронтранна из мемпула). Коммит без последующего раскрытия — зависший репортер или кто-то щупает кворум. Следи за /task: если раскрытия не будет, кворум решит без них.",
   "al.disputeReportT": "Засчитан репорт спора",
   "al.disputeReportB": "Узел переисполнил эту эпоху и не согласен с победителем.",
   "al.epochVerifiedT": "Эпоха проверена",
   "al.epochRejectedT": "Эпоха отклонена",
-  "al.epochRejectedB": "Кворум споров отклонил эту эпоху. За неё не платят никому.",
+  "al.epochRejectedB": "Кворум споров отклонил эту эпоху. Победитель не получает ничего — репортеры делят баунти за переисполнение из лока.",
   "al.settledT": "Таск рассчитан",
   "al.settledContrib": "контрибьюторы",
   "al.settledNodes": "узлы",
@@ -609,22 +630,22 @@ const RU = {
   "how.leadSimple": "Покупатель запирает деньги, люди приносят зашифрованные данные, узлы учат не видя их, цепь платит всем.",
   "how.leadGeek": "Escrow → зашифрованные взносы → закрытый ctRoot → FHE-исполнение по эпохам → transcript-bound коммит → кворум споров → постраничный расчёт + пороговая расшифровка.",
   "how.s1t": "Покупатель запирает бюджет",
-  "how.s1dSimple": "Деньги уходят в сейф на цепи (USDC) + спек модели. Пока никто не платит.",
+  "how.s1dSimple": "Деньги уходят в сейф на цепи (эскроу-токен) + спек модели. Пока никто не платит.",
   "how.s1dGeek": "createTask(budget, params) — ровно названная сумма в CipherTask. CID спека + эпохи, окна, pricePerRow.",
   "how.s2t": "Люди приносят данные, зашифрованными",
   "how.s2dSimple": "Строки шифруются у тебя на устройстве. Наружу уходит только шифротекст.",
   "how.s2dGeek": "Шифруй под s_pub (FHEWasm в браузере или @shroud/sdk/relayer; дефолтный NoopEncryptor в SDK — dev-only, без конфиденциальности). submitContribution{...} — обычная транзакция, один шард на адрес.",
   "how.s3t": "Набор закрывается",
   "how.s3dSimple": "Набор закрыт — замок. Дальше правила уже не поменять посреди игры.",
-  "how.s3dGeek": "sealTask фиксирует ctRoot. Контрибьюторы/шарды зафиксированы, тикает contributionWindow.",
+  "how.s3dGeek": "sealTask фиксирует ctRoot и закрывает окно взносов (открылось при createTask). Контрибьюторы/шарды зафиксированы.",
   "how.s4t": "Узлы учат вслепую",
   "how.s4dSimple": "Узлы считают обучение по шифротекстам. Твои строки они не видят.",
   "how.s4dGeek": "openEpoch(taskId, ...) на каждую эпоху — только покупатель или updateManager (owner не может). Узел: TFHE SIMD matmul + SGD, hash-chain трейс.",
   "how.s5t": "Все оставляют отпечаток",
   "how.s5dSimple": "Каждый публикует дайджест того, что посчитал. Один вход — один отпечаток.",
-  "how.s5dGeek": "commitEpoch{traceDigest, proofRef STAR*} — transcript связывает chainId, task, epoch, ctRoot, wDigest. На цепи — сэмпл, полная проверка — off-chain.",
+  "how.s5dGeek": "commitEpoch{traceDigest, proofRef STAR*} — транскрипт keccak('SHROUD/PoC/v1', chainId, CipherTask, task, epoch, ctRoot, веса, трейс, узел). На цепи — сэмпл, полная проверка — off-chain.",
   "how.s6t": "Расхождение — это спор",
-  "how.s6dSimple": "Дайджесты не сошлись — кто-то пересчитывает, и 3 репортера решают, кто прав. За отклонённую эпоху не платят никому.",
+  "how.s6dSimple": "Дайджесты не сошлись — кто-то пересчитывает, и 3 репортера решают, кто прав. За отклонённую эпоху победителю не платят ничего; репортеры получают баунти за переисполнение.",
   "how.s6dGeek": "commitDispute → reportDisputeWithSalt (commit-reveal против фронтранна). Sortition-взвешенный сет, плоский кворум 3, бонд победителя → возврат покупателю.",
   "how.s7t": "Расчёт раздаёт деньги",
   "how.s7dSimple": "Контрибьюторы, узлы, комитет получают из сейфа. Сдача — назад покупателю.",
@@ -661,6 +682,7 @@ const RU = {
   "task.humanCollecting": "сбор данных",
   "task.humanTraining": "идёт обучение",
   "task.humanSettling": "выплаты",
+  "task.humanRevealing": "раскрытие ключей",
   "task.humanDone": "готово",
   "task.humanStopped": "остановлен",
   "task.humanOpen": "открыт",
@@ -687,13 +709,13 @@ const RU = {
   "btn.settings": "⚙ настройки",
   "btn.limits": "🛡 честность",
   "btn.statusLong": "📊 статус",
-  "btn.poolLong": "📋 задачи",
+  "btn.poolLong": "📋 таски",
   "btn.alertsLong": "🔔 алерты",
   // --- simple role guides (mode=simple) ---
-  "role.buyerS": "<b>Покупатель — 3 шага.</b>\n\n1. Выбери таск в /pool — бюджет и статус простыми словами.\n2. Запри бюджет на цепи (это делает SDK: <code>createTask</code> → <code>sealTask</code>).\n3. Следи за эпохами в /task, сдачу вернёт расчёт.\n\nГик-детали: /pro и переоткрой гайд.",
+  "role.buyerS": "<b>Покупатель — 3 шага.</b>\n\n1. Выбери таск в /pool — бюджет и статус простыми словами.\n2. Запри бюджет на цепи (это делает SDK: <code>createTask</code> → <code>sealTask</code>), затем открывай каждую эпоху (<code>openEpoch</code>) — без твоей транзакции эпоха не стартует.\n3. Следи за эпохами в /task, сдачу вернёт расчёт.\n\nГик-детали: /pro и переоткрой гайд.",
   "role.contribS": "<b>Контрибьютор — 3 шага.</b>\n\n1. Выбери открытый таск в /pool.\n2. Зашифруй строки у себя (это делает приложение) — наружу только шифротекст.\n3. Получи выплату при расчёте: твои строки × живость.\n\nОдин адрес = один шард на таск. Гик-детали: /pro.",
   "role.nodeS": "<b>Оператор узла — 3 шага.</b>\n\n1. Проверь /status — цепь, пин ключа, нет ли ротации, которой ты не ждал.\n2. Зарегистрируйся раз на таск, дальше софт сам считает и коммитит эпохи.\n3. Следи за /alerts: расхождение дайджестов — остановить и разобраться.\n\nНе гоняй под ротацией, которую не проверил. Гик-детали: /pro.",
-  "role.watchS": "<b>Наблюдатель — 2 шага.</b>\n\n1. /watch &lt;id&gt; сужает алерты до одного таска. Пусто = всё.\n2. /alerts переключает mismatch / споры / ротации / казну.\n\nДва главных: расхождение дайджестов и любое предложение ротации.",
+  "role.watchS": "<b>Наблюдатель — 2 шага.</b>\n\n1. /watch &lt;id&gt; сужает алерты до одного таска. Пусто = всё.\n2. /alerts переключает расхождение коммита / споры / ротации / казну.\n\nДва главных: расхождение дайджестов и любое предложение ротации.",
 };
 
 const DICT = { en: EN, ru: RU };

@@ -277,6 +277,18 @@ export function commandFromVerdict(verdict, text) {
 }
 
 /**
+ * Display language for a chat: stored pref wins, otherwise the Telegram
+ * client locale (RU stays RU, everything else is EN). Extracted so the
+ * failure paths (which must also be localized) share the one rule — and so
+ * a test can pin it without reaching into `main`.
+ */
+export function resolveChatLang(store, chatId, langCode) {
+  const stored = store ? getPrefs(store.state(), chatId) : {};
+  if (isLang(stored.lang)) return stored.lang;
+  return pickLang(langCode);
+}
+
+/**
  * User-input normalization: RU aliases, plurals and bare ids.
  *
  * Lets a RU chat type `/статус`, `/пул`, `/таск 12` or just `12` and land on
@@ -540,7 +552,12 @@ export function createHandlers(chain, config, ops = {}) {
     },
     async menu(args, ctx = {}) {
       const { lang, mode } = prefsOf(ctx);
-      return { text: renderMenu(lang, mode), markup: menuKeyboard(lang, mode) };
+      // The hub is the front door: a chat that never chose a depth gets the
+      // welcoming mode rather than the historical pro default. An explicit
+      // stored choice always wins; nothing is written here (unlike /start).
+      const stored = store ? getPrefs(store.state(), ctx.chatId) : {};
+      const m = stored.mode === "pro" || stored.mode === "simple" ? mode : "simple";
+      return { text: renderMenu(lang, m), markup: menuKeyboard(lang, m) };
     },
     async how(args, ctx = {}) {
       const { lang, mode } = prefsOf(ctx);
@@ -629,8 +646,11 @@ export function createHandlers(chain, config, ops = {}) {
       let text = out;
       if (readError) {
         // Error text comes from the RPC layer (proxies answer with HTML bodies);
-        // it is content, never markup.
-        text += `\n\n${"⚠️"} <b>${t(lang, "status.errReads", { err: htmlEscape(readError) })}</b>`;
+        // it is content, never markup. Cap it first: a multi-KB body wrapped
+        // in <b> would push /status past 4096 and Telegram would 400 the one
+        // screen that explains the outage.
+        const short = readError.length > 300 ? `${readError.slice(0, 300)}…` : readError;
+        text += `\n\n${"⚠️"} <b>${t(lang, "status.errReads", { err: htmlEscape(short) })}</b>`;
       } else if (queueWait > 10_000) {
         text += `\n\n${"⚠️"} <b>${t(lang, "status.errSlow", { s: Math.round(queueWait / 1000) })}</b>`;
       } else if (dropped > 0) {
@@ -733,7 +753,7 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
     const [head, ...rest] = target.split(":");
     const { lang, mode } = prefs();
     if (head === "s") return handlers().status([], { chatId, langCode });
-    if (head === "h" || head === "menu") return { text: renderMenu(lang, mode), markup: menuKeyboard(lang, mode) };
+    if (head === "h" || head === "menu") return handlers().menu([], { chatId, langCode });
     if (head === "how") return { text: renderHow(lang, mode), markup: howKeyboard(lang, mode) };
     if (head === "proto") return { text: renderProtocol(lang), markup: protoKeyboard(lang, mode) };
     if (head === "set") return handlers().settings([], { chatId, langCode });
@@ -747,7 +767,7 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
     }
     if (head === "p") return handlers().renderPoolPage(Number(rest[0]), { chatId, langCode });
     if (head === "t") return handlers().renderTaskView(BigInt(rest[0]), chatId, { chatId, langCode });
-    return { text: t(lang, "common.unavailable"), markup: undefined };
+    return { text: t(lang, "common.unavailable"), markup: navRow(lang) };
   };
   // Shared toggle body: lowercase "a" lands on the alerts screen, uppercase
   // "A" (settings keyboard) stays in settings. The toast confirms the flip
@@ -778,7 +798,7 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
         return { text: t(lang, "common.noWatch"), markup: undefined };
       }
       const res = await store.addWatch(chatId, parsed.arg);
-      await say(res.added ? `watching #${parsed.arg}` : res.reason);
+      await say(res.added ? t(prefs().lang, "toast.watching", { id: parsed.arg }) : res.reason);
       return renderTarget(`t:${parsed.arg}`);
     }
     case "u": {
@@ -787,7 +807,7 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
         return { text: t(lang, "common.noWatch"), markup: undefined };
       }
       const res = await store.removeWatch(chatId, parsed.arg);
-      await say(res.removed ? `unwatched #${parsed.arg}` : res.reason);
+      await say(res.removed ? t(prefs().lang, "toast.unwatched", { id: parsed.arg }) : res.reason);
       return renderTarget(`t:${parsed.arg}`);
     }
     case "s": {
@@ -795,7 +815,7 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
     }
     case "h":
     case "menu": {
-      return renderTarget("h");
+      return handlers().menu([], { chatId, langCode });
     }
     case "how": {
       return renderTarget("how");
@@ -843,8 +863,12 @@ export async function routeCallback(parsed, { chain, config, store, chatId, onTo
       if (store && chatId !== undefined) await store.setPref(chatId, "lang", lang);
       return renderTarget(target);
     }
-    default:
-      return { text: "that button is from an older bot — send the command again.", markup: undefined };
+    default: {
+      // Stale buttons used to strand the chat (no keyboard to get back with);
+      // keep the hub one tap away instead.
+      const { lang } = prefs();
+      return { text: t(lang, "toast.oldBot"), markup: navRow(lang) };
+    }
   }
 }
 
@@ -978,13 +1002,10 @@ async function main() {
     if (verdict.action === "deny-usage" || verdict.action === "deny-rate" || verdict.action === "shadow") {
       return { text: verdict.reply, markup: undefined };
     }
-    const guessLang = () => {
-      if (store) {
-        const cur = getPrefs(store.state(), chatId ?? msg.chat?.id);
-        if (isLang(cur.lang)) return cur.lang;
-      }
-      return pickLang(langCode);
-    };
+    // NOTE: the store is called `watchStore` in this scope (`store` lives
+    // only inside createHandlers/routeCallback). A bare `store` here throws
+    // ReferenceError and would replace the real handler error with itself.
+    const guessLang = () => resolveChatLang(watchStore, chatId ?? msg.chat?.id, langCode);
     try {
       return await abuseGuard.runHandler(chatId ?? msg.chat?.id ?? "unknown", async () => {
         const { name, args } = commandFromVerdict(verdict, text);
@@ -1003,14 +1024,15 @@ async function main() {
           // the RPC URL would put the provider's key in the chat's history.
           const message = htmlEscape(scrubRpcSecret(err.message, config.rpcUrl));
           const lang = guessLang();
-          return { text: t(lang, "common.failed", { name, err: message }), markup: undefined };
+          return { text: t(lang, "common.failed", { name, err: message }), markup: navRow(lang) };
         }
       });
     } catch (err) {
       // A failing command must not kill the process: an ops bot that crashes on
       // one bad RPC read is worse than one that says "that failed".
       const message = htmlEscape(scrubRpcSecret(err.message, config.rpcUrl));
-      return { text: t(guessLang(), "common.failedNoName", { err: message }), markup: undefined };
+      const lang = guessLang();
+      return { text: t(lang, "common.failedNoName", { err: message }), markup: navRow(lang) };
     }
   }
 
@@ -1042,9 +1064,14 @@ async function main() {
       log("warn", config)(`rejected callback from chat ${chatId} / user ${fromId}: not in allowlist`);
       return;
     }
+    // Toast language: stored prefs win, else the pressing client's locale.
+    // (The guard replies and the "not authorised" refusal stay English on
+    // purpose: the former has no chat context, the latter must not leak it.)
+    const storedPrefs = getPrefs(watchStore.state(), chatId);
+    const toastLang = isLang(storedPrefs.lang) ? storedPrefs.lang : pickLang(query.from?.language_code);
     const parsed = parseCallback(data);
     if (!parsed) {
-      await bot.answerCallbackQuery(query.id, "that button is stale — send the command again");
+      await bot.answerCallbackQuery(query.id, t(toastLang, "toast.stale"));
       return;
     }
     let verdict;
@@ -1076,7 +1103,7 @@ async function main() {
         })
       );
     } catch (err) {
-      await bot.answerCallbackQuery(query.id, "that failed — try again");
+      await bot.answerCallbackQuery(query.id, t(toastLang, "toast.failed"));
       log("error", config)("callback failed:", scrubRpcSecret(err.message, config.rpcUrl));
       return;
     }
@@ -1159,21 +1186,34 @@ async function main() {
   // --- alert scanner -------------------------------------------------------
   //
   // Alerts are `{ text, taskId, key, markup }`: `taskId` scopes watchlist
-  // filtering (`null` for global rotation alerts), `key` selects the per-chat
-  // flag (`mm` | `disp` | `rot`), and `markup` carries the deep-link button.
+  // filtering (`null` for global rotation/treasury/verifier alerts, which
+  // always bypass it), `key` selects the per-chat flag
+  // (`mm` | `disp` | `rot` | `tre` | `ver`), and `markup` carries the
+  // deep-link button.
 
   async function scanOnce(cursor, seen, digests = new Map()) {
     let head = await chain.blockNumber();
     if (head < cursor) {
       // Reorg below the cursor: block numbers now repeat with different contents.
-      // Rewind instead of skipping the range forever; the seen-set suppresses the
-      // logs that did not actually change.
+      // Rewind one block *before* the new head, not to it: the rewritten head
+      // block itself is never rescanned otherwise, and a rotation landing
+      // exactly there would be missed. The seen-set suppresses the logs that
+      // did not actually change, so the overlap is free.
       log("warn", config)(`head ${head} is below cursor ${cursor} (reorg); rewinding`);
-      cursor = head;
+      cursor = Math.max(0, head - 1);
     }
     if (head <= cursor) return { cursor, alerts: [], seen };
 
     const alerts = [];
+    // A failed block holds the cursor: the next poll rescans the same range
+    // and the seen-set dedupes what already alerted. That turns a transient
+    // RPC failure into a quiet retry instead of a silent loss — at the price
+    // of one repeated window, never a duplicate alert.
+    let nextCursor = head;
+    const failBlock = (name, err) => {
+      log("error", config)(`alert scan (${name}) failed, will retry range:`, scrubRpcSecret(err.message, config.rpcUrl));
+      nextCursor = cursor;
+    };
 
     // Commits, so a same-epoch digest disagreement can be detected. `digests`
     // holds the last-seen digest per (task, epoch, node) and is persisted with
@@ -1184,6 +1224,7 @@ async function main() {
     // pollAlerts (override wins, otherwise global): collecting always keeps
     // the digest/dedupe tracking correct even while a flag is off, so
     // toggling it on later does not replay history.
+    try {
     if (config.cipherTask) {
       const commits = dedupeEvents(await chain.commitEvents(cursor + 1, head), seen);
       for (const ev of commits) {
@@ -1206,7 +1247,9 @@ async function main() {
         }
       }
     }
+    } catch (err) { failBlock("commitments", err); }
 
+    try {
     if (config.cipherTask) {
       const events = dedupeEvents(await chain.disputeEvents(cursor + 1, head), seen);
       // Settlement amounts render at delivery; the scale is read once per scan
@@ -1227,7 +1270,9 @@ async function main() {
         });
       }
     }
+    } catch (err) { failBlock("disputes", err); }
 
+    try {
     if (config.networkParams) {
       const { executed, proposed, approved = [], cancelled = [] } = await chain.rotationEvents(cursor + 1, head);
       for (const ev of dedupeEvents(proposed, seen)) {
@@ -1295,7 +1340,9 @@ async function main() {
         });
       }
     }
+    } catch (err) { failBlock("key-rotation", err); }
 
+    try {
     if (config.cipherTask) {
       // The treasury rotation is the one rotation whose window is the whole point:
       // the money only moves if nobody objects during it. So the proposal is
@@ -1325,7 +1372,9 @@ async function main() {
         }
       }
     }
+    } catch (err) { failBlock("treasury", err); }
 
+    try {
     if (config.verifier) {
       // The verifier gates every payout, so its rotation is money rotation:
       // propose (owner) → 7-day timelock → execute (anyone) or cancel (owner).
@@ -1368,8 +1417,9 @@ async function main() {
         });
       }
     }
+    } catch (err) { failBlock("verifier-rotation", err); }
 
-    return { cursor: head, alerts, seen };
+    return { cursor: nextCursor, alerts, seen };
   }
 
   /**
@@ -1421,7 +1471,9 @@ async function main() {
         // At-least-once: send first, persist after. A crash between the two re-alerts
         // (the seen-set was not saved yet); a crash before sending loses nothing, because
         // the cursor did not move either. For security alerts a duplicate is noise and a
-        // loss is an incident, so this is the right bias.
+        // loss is an incident, so this is the right bias. Known boundary: an alert
+        // whose Telegram send keeps failing is logged and skipped while the cursor
+        // still advances — a total Telegram outage can lose, never duplicate.
         for (const a of alerts) {
           await deliverAlert(a);
         }

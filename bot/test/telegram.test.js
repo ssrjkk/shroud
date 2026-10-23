@@ -20,19 +20,22 @@ test("constructor validates its options", () => {
   assert.equal(bot.maxQueueWaitMs(), 0);
 });
 
-test("sendQueued bounds memory: over-cap alerts drop with a counter", async () => {
+test("sendQueued sheds the oldest waiting alert, not the newest", async () => {
   const bot = new TelegramBot("test-token", { maxQueued: 2, log: silent });
   bot.sendMessage = () => new Promise(() => {}); // hang forever: queue fills deterministically
   const p1 = bot.sendQueued(1, "a");
   const p2 = bot.sendQueued(2, "b");
-  void p1;
   void p2;
-  const dropped = await bot.sendQueued(3, "c");
-  assert.deepEqual(dropped, { dropped: true });
+  // Over cap: "a" is shed (it was still waiting), "c" takes its slot.
+  const p3 = bot.sendQueued(3, "c");
+  void p3;
+  assert.deepEqual(await p1, { dropped: true });
   assert.equal(bot.droppedSends, 1);
-  // Still bounded on repeat offenders.
-  await bot.sendQueued(4, "d");
+  // Still bounded on repeat offenders: "b" is shed next, "d" queued.
+  const p4 = bot.sendQueued(4, "d");
+  void p4;
   assert.equal(bot.droppedSends, 2);
+  assert.deepEqual(await p2, { dropped: true });
 });
 
 test("truncateText cuts explicitly and always fits the cap", () => {
