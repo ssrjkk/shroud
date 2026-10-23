@@ -190,7 +190,7 @@ know.
 npm test
 ```
 
-172 tests, no bot token and no chain required. They cover the parts that fail
+173 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup
@@ -238,7 +238,9 @@ quietly in production:
   2000) and skipped on rescan, and a reorg below the cursor rewinds instead of
   skipping the range. What remains: a crash between sending and persisting still
   re-alerts (a duplicate is noise; a loss would be an incident, so this is the
-  right bias), and a log the RPC never returns is never alerted on.
+  right bias), a log the RPC never returns is never alerted on, and a Telegram
+  send that keeps failing is logged and skipped while the cursor advances —
+  a total Telegram outage can lose, never duplicate.
 - **It reports what the chain says, not whether the chain is honest.** Every
   caveat in `/limits` applies to the bot too: it is a better way to notice a key
   rotation, not a way to prove one did not happen.

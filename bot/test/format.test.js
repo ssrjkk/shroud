@@ -454,6 +454,14 @@ test("renderPool handles the empty pool and the truncated tail", () => {
   assert.ok(many.includes("and 8 earlier"));
 });
 
+test("renderPool distinguishes unreadable from empty", () => {
+  // taskCount answered but every body read failed: must not render as "no tasks".
+  const out = renderPool([null, null], 25, null, "en", "pro");
+  assert.ok(!out.includes("no tasks"));
+  assert.ok(out.includes("25"));
+  assert.ok(out.includes("/status"));
+});
+
 test("commit mismatch alert names the epoch and both digests", () => {
   const out = renderCommitMismatch({
     taskId: "42",

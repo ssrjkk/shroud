@@ -169,6 +169,13 @@ export function renderPool(items, total, page = null, lang = "en", mode = "pro",
   if (!items.length) {
     return `${header("📋", t(lang, "pool.t"))}\n${DIV}\n\n${t(lang, "pool.empty")}`;
   }
+  // taskCount answered but every body read failed (dead RPC, not an empty
+  // pool): without this branch the screen renders a header with zero rows,
+  // which reads as "no tasks". The per-read failures are already recorded
+  // in the reader and surfaced by /status.
+  if (total > 0 && !items.some((it) => it)) {
+    return `${header("📋", t(lang, "pool.t"))}\n${DIV}\n\n${t(lang, "pool.unreadable", { total })}`;
+  }
 
   const title =
     page && page.pages > 1

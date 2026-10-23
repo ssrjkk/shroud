@@ -22,6 +22,14 @@ first tagged release.
   alerts with `/status` queue state, escrow-decimal money scaling (6-decimal
   USDC no longer renders as "0"), first/last pool page jumps, dead-key i18n
   guard, dead-end keyboards on every confirmation screen.
+- Harsh-review hardening pass: per-stage scan isolation with cursor hold and
+  loud retry (no more silent alert loss on transient RPC failures), reorg
+  rewind covers the rewritten head block, `/watch 007` canonicalizes to task 7,
+  `Revealing` no longer mislabeled as payouts and `None` no longer as "open",
+  honest dust (`<0.0001`) instead of `"0"`, bounded watchlist and read-error
+  rendering (no more 400-truncated dead screens), `/pool` distinguishes
+  unreadable from empty, GUARD: stale/error toasts and mode buttons speak the
+  chat's language, alert queue sheds the oldest waiting alert first.
 
 ### Tests: stateful vault invariants in Foundry (roadmap: Foundry-инварианты)
 
