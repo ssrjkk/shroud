@@ -350,11 +350,27 @@ export class ChainReader {
     return this.#decode(this.#ifaces.cipherTask, "TaskCreated", logs);
   }
 
-  /** Number of tasks the contract knows about. */
+  /**
+   * Number of tasks the contract knows about.
+   *
+   * A lying or broken RPC can answer 2^256-1 here. That value is not a pool,
+   * it is a readout failure: without this guard /pool would render a proud
+   * "page 1/9.6e+75" header over zero rows. Non-safe integers can never be a
+   * real task count (ids would stop being exactly representable), so they
+   * are reported as a read error and read as an empty pool with /status
+   * explaining why — the same fail-soft contract as every other reader.
+   */
   async taskCount() {
     if (!this.#config.cipherTask) return 0;
     const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
-    return Number(await c.taskCount());
+    try {
+      const n = Number(await c.taskCount());
+      if (!Number.isSafeInteger(n) || n < 0) throw new Error(`taskCount out of range: ${String(n).slice(0, 40)}`);
+      return n;
+    } catch (err) {
+      this.#noteReadError("taskCount", err);
+      return 0;
+    }
   }
 
   /**

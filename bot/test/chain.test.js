@@ -132,6 +132,18 @@ test("taskCount reads the view", async (t) => {
   assert.equal(await reader.taskCount(), 7);
 });
 
+test("taskCount treats an insane count as a read failure, not a pool", async (t) => {
+  // A lying RPC answering 2^256-1 must not produce "page 1/9.6e+75".
+  // Fail soft to empty (with the error recorded for /status), like task().
+  const { reader, routes, ifaces } = await setup(t);
+  routes.calls.set(
+    ifaces.cipherTask.getFunction("taskCount").selector,
+    ifaces.cipherTask.encodeFunctionResult("taskCount", [2n ** 256n - 1n])
+  );
+  assert.equal(await reader.taskCount(), 0);
+  assert.match(reader.lastReadError() ?? "", /taskCount/);
+});
+
 test("contributors lists the chain's set", async (t) => {
   const { reader, routes, ifaces } = await setup(t);
   routes.calls.set(

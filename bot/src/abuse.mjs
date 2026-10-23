@@ -115,7 +115,11 @@ export class ChatAbuseGuard {
    *   { action: "deny-rate", reply, retryAfterMs }         — квота исчерпана;
    *   { action: "shadow", reply }                          — теневой бан: правдоподобный
    *     ответ БЕЗ единого RPC-вызова, нарушитель не знает об изоляции.
-   * Вызывающий при "pass" выполняет хендлер и обязан вызвать noteResult().
+   * Вызывающий при "pass"/"pass-tarpitted" выполняет хендлер (вердикт уже
+   * несёт распарсенное имя и аргументы для диспетча); таймауты хендлеров
+   * скорит сам runHandler. Отдельного post-hoc вызова нет: риск считается
+   * только по pre-handler сигналам (квота, флуд-дубли, мусорный ввод) и
+   * зависаниям — и это осознанно, исход хендлера на квоту не влияет.
    */
   async guardChat(chatId, text, costOverride) {
     const subject = `chat:${chatId}`;
@@ -185,7 +189,7 @@ export class ChatAbuseGuard {
       case "pool": return "no tasks yet.";
       case "task": return "unknown task.";
       case "status": return "could not complete /status: rpc unreachable";
-      default: return "usage: /pool · /task <id> · /status · /limits · /help";
+      default: return "usage: /menu · /pool · /task <id> · /status · /help";
     }
   }
 
