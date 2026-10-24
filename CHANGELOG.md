@@ -6,6 +6,59 @@ first tagged release.
 
 ## Unreleased
 
+### SDK: `openEpoch` opens and pins hyperparams in one call (M5 closed)
+
+- New `CipherTaskClient.openEpoch(taskId, { encWeightsCid, weightsDigest,
+  encStateHandle, encStateProof, hyperparams })`: validates hyperparams locally,
+  opens the epoch, then pins `scale/lrQ16/l2Q16/minibatch/seed` on the epoch it
+  just opened (`nextEpoch` only advances on `finalizeEpoch`, so the pin cannot
+  drift; a failed pin leaves the epoch open and nodes fall back to local config
+  with a warning). New `validateHyperparams` mirrors the on-chain gate, plus
+  buyer-side `setContributionBondRequirement` / `setContributionBondPerRow` /
+  `setWeightByBond`. Re-exported from the SDK entrypoint; `devnet-execute-check`
+  pins the node defaults after opening epoch 0; buyer flow documented in
+  `USER_GUIDE.md`.
+
+### Devnet: the compose stack starts as documented, and the shots re-render
+
+- `shardstore` no longer crash-loops on a default `up`: the server is
+  fail-closed (exits without `AUTH_TOKEN`), so compose now defaults to
+  `ALLOW_UNAUTHENTICATED=1` for localhost dev and documents the production
+  `SHARDSTORE_AUTH_TOKEN` + `=0` pair. The stale "empty keeps the open
+  behaviour" comment is corrected.
+- Nodes were unstartable as composed: empty task/vault addresses (clap parse
+  error, not the clean `Missing`), no BLS keys, one shared operator key across
+  three nodes (registration collision), and `enforce_key_pin`/`strict_weights`
+  defaulting true with no env override. Fixed without touching Rust: a shared
+  read-only `infra/node/shroud-devnet.toml` (devnet opt-outs + compose
+  endpoints via `CM_CONFIG`), `env_file: ./devnet/addresses.env` from the deploy
+  (no hand-copying), distinct hardhat keys (#1/#2/#0) and throwaway BLS
+  identities, per-node peer lists without self-peers, per-node data volumes
+  (the follower cursor cannot be shared), localhost-bound devnet RPC, and a
+  shardstore `/healthz` healthcheck.
+- New `web/scripts/render-shots.mjs` re-renders `docs/shots/*.png`
+  deterministically (pinned RU/ink/newcomer, desktop + mobile viewports,
+  scroll-through for intersection-rendered sections); all four shots refreshed
+  from the current site.
+
+### Contracts: continuity, priced rows, pinned hyperparams, paged settlement
+
+- `finalizeEpoch` promotes the winner's `encWeightsCid`/`weightsDigest` into
+  `lastWeights*`, and `openEpoch` enforces continuity against them from epoch 1
+  (`WeightPinMismatch`): an epoch can no longer train from silently replaced
+  weights. `abort` is refused while an epoch is committing; `ProofVerifier`
+  rotation cannot be overwritten while pending; `disputeQuorum` reads the
+  terminal epoch correctly.
+- Contributor weight no longer trusts self-declared `rows` for free: optional
+  per-row bond surcharge prices each claimed row, and `setWeightByBond` switches
+  the task to secure mode (`effectiveRows = 1`, liveness only). Consensus
+  hyperparams pin per epoch (`pinEpochHyperparams`, buyer/manager only) so chain
+  truth wins over per-node config; first dispute action pins `(seed, total)`.
+- Settlement scales: `sweepTaskChannelsPaged` with an `openChannelCount` counter
+  and `SWEEP_PAGE` keeps every page under the block limit (`ChannelsImmature`
+  until channels mature). `CipherTask` stays deployable at 24_291/24_576 bytes
+  with 285 bytes of slack; `PaymentVault` at 12_875.
+
 ### Bot: speaks Russian, has a front door, and explains itself simply or fully
 
 - New /start with role guides (buyer/contributor/node/watcher), RU/EN with
