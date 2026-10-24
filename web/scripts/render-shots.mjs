@@ -18,7 +18,7 @@
  * a change that was supposed to be invisible, the change was not invisible.
  */
 import { createServer } from "node:http";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -70,11 +70,9 @@ const SHOTS = [
 ];
 
 let chromium;
-const errors = [];
 try {
   ({ chromium } = await import("playwright"));
-} catch (e) {
-  errors.push(String(e));
+} catch {
   // ESM `import()` ignores NODE_PATH and refuses directory imports, but CJS
   // `require()` resolves a package directory fine — use it for the override.
   if (process.env.PLAYWRIGHT_DIR) {
