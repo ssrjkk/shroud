@@ -445,7 +445,11 @@ impl OrchestratorClient {
 
     /// M5: pinned consensus hyperparams (scale, lrQ16, l2Q16, minibatch, seed).
     /// All-zero scale = unset (legacy task, use node config with a warning).
-    pub async fn epoch_hyperparams(&self, task_id: U256, epoch: u32) -> Result<(u32, u32, u32, u32, u64)> {
+    pub async fn epoch_hyperparams(
+        &self,
+        task_id: U256,
+        epoch: u32,
+    ) -> Result<(u32, u32, u32, u32, u64)> {
         let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
         c.epochHyperparams(task_id, epoch)
             .call()

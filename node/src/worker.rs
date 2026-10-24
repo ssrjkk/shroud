@@ -247,7 +247,9 @@ impl Worker {
                         let max_attempts = if work.is_exit_money()
                             || matches!(
                                 work,
-                                Work::Reexecute { .. } | Work::FileDispute { .. } | Work::Finalize { .. }
+                                Work::Reexecute { .. }
+                                    | Work::FileDispute { .. }
+                                    | Work::Finalize { .. }
                             ) {
                             u32::MAX // infinite retry
                         } else {
@@ -314,10 +316,12 @@ impl Worker {
         // `spawn_blocking`. Finalize/Reclaim gates on a stale `now` revert `TooEarly`
         // for gas. Re-read the chain clock on the two time-gated arms.
         let chain_now = match work {
-            Work::Finalize { .. } | Work::Reclaim { .. } => match self.client.latest_block().await {
-                Ok((_, ts)) => ts,
-                Err(_) => chain_now,
-            },
+            Work::Finalize { .. } | Work::Reclaim { .. } => {
+                match self.client.latest_block().await {
+                    Ok((_, ts)) => ts,
+                    Err(_) => chain_now,
+                }
+            }
             _ => chain_now,
         };
         match work {
@@ -732,7 +736,11 @@ impl Worker {
         };
         // M5: prefer on-chain pinned hyperparams; legacy tasks (scale==0) use local config.
         // A config typo must not fork honest nodes into a slash — chain wins, always.
-        let (scale, lr_q16, l2_q16, minibatch, seed) = match self.client.epoch_hyperparams(task_id, epoch).await {
+        let (scale, lr_q16, l2_q16, minibatch, seed) = match self
+            .client
+            .epoch_hyperparams(task_id, epoch)
+            .await
+        {
             Ok((s, lr, l2, mb, sd)) if s != 0 => (s, lr, l2, mb as usize, sd),
             Ok(_) => {
                 warn!(
