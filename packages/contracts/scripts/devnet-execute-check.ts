@@ -167,6 +167,10 @@ async function main() {
   const st = await externalUint64(taskAddr, buyer.address, 7n);
   await (await task.connect(buyer).openEpoch(id, putWeights.cid, seedDigest, st.handle, st.proof)).wait();
   console.log("epoch 0 opened");
+  // M5: pin the hyperparams the devnet nodes run with (node/src/config.rs defaults),
+  // so execution uses chain truth instead of per-node config.
+  await (await task.connect(buyer).pinEpochHyperparams(id, 0, 10_000, 65_536, 65, 8, 0x4369706865724d65n)).wait();
+  console.log("epoch 0 hyperparams pinned");
 
   // --- 5. Both nodes commit the same verified digest ----------------------------------
   const done = await waitFor(

@@ -18,8 +18,12 @@ docker compose up -d --build devnet shardstore
 
 - `devnet` starts a hardhat fhEVM node (the plugin etches the mock coprocessor into the
   standalone node) and deploys the contracts, writing addresses to `infra/devnet/addresses.json`
-  (plus the shell-sourcable `addresses.env`).
+  (plus the shell-sourcable `infra/devnet/addresses.env`, which the node services consume as
+  `env_file` — no manual copying).
 - `shardstore` serves the content-addressed store the SDK talks to (`PUT /objects`, `GET /objects/:cid`).
+  The server is fail-closed: it exits unless writes are authenticated. Compose defaults to
+  `SHARDSTORE_ALLOW_UNAUTH=1` (dev only, localhost-bound port); for anything beyond a laptop set
+  `SHARDSTORE_AUTH_TOKEN` (≥16 chars, 32-byte hex recommended) and `SHARDSTORE_ALLOW_UNAUTH=0`.
 
 ### 1a. ShardStore perimeter (`infra/shardstore/guard.mjs`)
 
@@ -62,8 +66,16 @@ docker compose build node-a node-b node-c
 docker compose up -d node-a node-b node-c
 ```
 
-Set `CM_TASK_ADDRESS` / `CM_VAULT_ADDRESS` on the nodes from `addresses.json` before bringing
-them up.
+No address wiring by hand: each node service reads `infra/devnet/addresses.env` (written by the
+deploy above) as its `env_file`, so `CM_TASK_ADDRESS` / `CM_VAULT_ADDRESS` arrive automatically.
+If that file is missing the nodes fail at creation with an env-file error — deploy devnet first.
+Each node already has a distinct operator key (hardhat #1/#2/#0) and a distinct throwaway BLS
+identity; sharing one key would collide registrations (one EOA = one registry seat). Per-node
+named volumes (`node-a-data` …) hold the watcher cursor and shard cache — sharing one directory
+would clobber the follower state. The shared `infra/node/shroud-devnet.toml` (mounted read-only
+via `CM_CONFIG`) carries only the values that are identical for every devnet node and unsettable
+via env: `enforce_key_pin = false` / `strict_weights = false` (the mock chain publishes no key
+pin and non-file seed weights) plus compose-network endpoints; identity stays in per-node env.
 
 ## Why the nodes are not built on this host
 

@@ -7,6 +7,14 @@
 # Bring up the chain + DA first (nodes are optional until the Rust binary is built):
 #   docker compose up -d devnet shardstore
 #
+# The deploy writes infra/devnet/addresses.json AND infra/devnet/addresses.env.
+# The node services read addresses.env as their env_file, so no address needs to
+# be copied by hand: after the deploy, just run
+#   docker compose up -d node-a node-b node-c
+# and each node picks up CM_TASK_ADDRESS / CM_VAULT_ADDRESS from the file.
+# (If the file is missing — devnet was never deployed — node creation fails with
+# a "env file not found" error. Deploy first; the nodes cannot work without it.)
+#
 # Build the node image where Rust compiles (CI / a dev machine - not on a host whose App Control
 # policy blocks Cargo build scripts):
 #   docker compose build node-a                    # tags shroud-node:dev, reused by node-b/c
@@ -14,8 +22,8 @@
 #   docker compose up -d node-a node-b node-c                # attach nodes
 #
 # After `devnet` is healthy, its addresses are in infra/devnet/addresses.json (and the
-# shell-sourcable infra/devnet/addresses.env); copy CM_TASK_ADDRESS / CM_VAULT_ADDRESS from
-# there into the node env below.
+# shell-sourcable infra/devnet/addresses.env); the node env_file wiring above reads the
+# .env copy, so nothing needs to be exported by hand.
 
 services:
   devnet:
@@ -23,11 +31,14 @@ services:
       context: ..
       dockerfile: infra/devnet/Dockerfile
     volumes:
-      # The deploy writes infra/devnet/addresses.{json,env} here so the host (and the operator
-      # wiring the nodes) can read them; without the mount they stay inside the container layer.
+      # The deploy writes infra/devnet/addresses.{json,env} here so the host (and the
+      # node services via env_file) can read them; without the mount they stay inside
+      # the container layer.
       - ./devnet:/infra/devnet
     ports:
-      - "8545:8545"
+      # Localhost-bound like shardstore below: the devnet RPC is a throwaway chain
+      # with well-known keys, it must not listen on LAN interfaces.
+      - "127.0.0.1:8545:8545"
     healthcheck:
       test: ["CMD", "node", "/healthcheck.mjs"]
       interval: 5s
@@ -46,30 +57,55 @@ services:
     command: ["node", "server.mjs"]
     environment:
       PORT: "8080"
-      # Bound to the compose network only. Writes additionally require the bearer token when
-      # set here (empty keeps the previous open behaviour); the SDK sends `Authorization: Bearer`
-      # whenever its own `authToken` is configured. Set SHARDSTORE_AUTH_TOKEN in a `.env` file
-      # next to this compose file to turn writes authenticated.
+      # The server is fail-closed: without a token it exits(1) unless dev mode is
+      # explicit. The compose default keeps the one-command devnet working; for
+      # anything beyond localhost set SHARDSTORE_AUTH_TOKEN (a 32-byte hex) and
+      # SHARDSTORE_ALLOW_UNAUTH=0.
       AUTH_TOKEN: ${SHARDSTORE_AUTH_TOKEN:-}
+      ALLOW_UNAUTHENTICATED: ${SHARDSTORE_ALLOW_UNAUTH:-1}
       HOST: "0.0.0.0"
       DATA_DIR: "/data"
       MAX_OBJECT_BYTES: "67108864" # 64 MiB
     ports:
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   node-a:
     build:
       context: ..
       dockerfile: infra/node/Dockerfile
     image: shroud-node:dev
-    environment: &nodeenv
+    # Deployment-specific addresses, written by the devnet deploy. Explicit
+    # `environment:` below wins over this file where both set a key.
+    env_file:
+      - ./devnet/addresses.env
+    volumes:
+      # Devnet defaults that cannot be set via the environment (the production
+      # fail-closed flags the mock chain cannot satisfy): enforce_key_pin=false,
+      # strict_weights=false, compose-network endpoints. Selected with CM_CONFIG;
+      # per-node identity stays in `environment:` (highest precedence).
+      - ./node/shroud-devnet.toml:/etc/shroud/shroud-devnet.toml:ro
+      # Watcher snapshots and the shard cache live here. One volume per node:
+      # node.data_dir holds the log-follower cursor, sharing it would make the
+      # nodes clobber each other's backfill state.
+      - node-a-data:/data
+    environment:
+      CM_CONFIG: /etc/shroud/shroud-devnet.toml
       CM_RPC_URL: http://devnet:8545
       CM_CHAIN_ID: "31337"
       CM_MESH_LISTEN: 0.0.0.0:7331
+      # No self-peer: each node lists the OTHER two.
       CM_MESH_PEERS: node-b:7331,node-c:7331
+      # hardhat#1. Distinct per node: sharing one operator key makes the second
+      # registration collide with the first (one EOA = one registry seat).
       CM_OPERATOR_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d" # hardhat#1
-      CM_TASK_ADDRESS: ""
-      CM_VAULT_ADDRESS: ""
+      # Throwaway devnet identity, distinct per node (mirrors the CI live-nodes).
+      CM_BLS_PUB_KEY: "0xabababababababababababababababababababababababababababababababab"
       CM_LOG: info
     depends_on:
       devnet:
@@ -78,7 +114,21 @@ services:
 
   node-b:
     image: shroud-node:dev
-    environment: *nodeenv
+    env_file:
+      - ./devnet/addresses.env
+    volumes:
+      - ./node/shroud-devnet.toml:/etc/shroud/shroud-devnet.toml:ro
+      - node-b-data:/data
+    environment:
+      CM_CONFIG: /etc/shroud/shroud-devnet.toml
+      CM_RPC_URL: http://devnet:8545
+      CM_CHAIN_ID: "31337"
+      CM_MESH_LISTEN: 0.0.0.0:7331
+      CM_MESH_PEERS: node-a:7331,node-c:7331
+      # hardhat#2 (0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC) — funded on a fresh chain.
+      CM_OPERATOR_KEY: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca573b" # hardhat#2
+      CM_BLS_PUB_KEY: "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+      CM_LOG: info
     depends_on:
       devnet:
         condition: service_healthy
@@ -86,7 +136,24 @@ services:
 
   node-c:
     image: shroud-node:dev
-    environment: *nodeenv
+    env_file:
+      - ./devnet/addresses.env
+    volumes:
+      - ./node/shroud-devnet.toml:/etc/shroud/shroud-devnet.toml:ro
+      - node-c-data:/data
+    environment:
+      CM_CONFIG: /etc/shroud/shroud-devnet.toml
+      CM_RPC_URL: http://devnet:8545
+      CM_CHAIN_ID: "31337"
+      CM_MESH_LISTEN: 0.0.0.0:7331
+      CM_MESH_PEERS: node-a:7331,node-b:7331
+      # hardhat#0 (0xf39Fd6e51aad88F6F4af6a45F42275F9a77bE2f) — the deployer account,
+      # reused here because the deploy is finished before nodes start (gated on
+      # devnet healthy). A fourth distinct pre-funded key does not exist on a
+      # fresh hardhat chain; a random key would own no ETH/TestToken to register.
+      CM_OPERATOR_KEY: "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f4ff80" # hardhat#0
+      CM_BLS_PUB_KEY: "0xefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef"
+      CM_LOG: info
     depends_on:
       devnet:
         condition: service_healthy
@@ -94,3 +161,6 @@ services:
 
 volumes:
   shardstore-data:
+  node-a-data:
+  node-b-data:
+  node-c-data:

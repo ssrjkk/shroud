@@ -67,6 +67,8 @@ nodes `commitEpoch` → `finalizeEpoch` after the dispute window (or quorum reje
 → `settle`/`settleFrom(cursor)` paged at 200 → `requestReveal` (committee BLS
 aggregate) → partials → `withdraw` → `Disclosed`. Buyer refund and channel claims
 are pull-based: `PaymentVault.claim()` / `redeem(...)`.
+SDK: `CipherTaskClient.openEpoch(taskId, { encWeightsCid, weightsDigest,
+encStateHandle, encStateProof, hyperparams })` opens and pins in one call.
 
 Money rules that bite: escrow is total and up-front; contributor/committee pools
 are reserved (reclaim/abort cannot touch them); `abort` reverts once every epoch
@@ -81,6 +83,12 @@ final page pays (`ChannelsImmature` until then).
 - Optional per-task bond (`setContributionBondRequirement`, capped): pulled on
   submit, slashed to treasury on `slashContributionBond`, released when terminal
   or settled. Default requirement is zero.
+- Optional per-row surcharge (`setContributionBondPerRow`): large row claims
+  lock more. Optional secure weight mode (`setWeightByBond(true)`): weight
+  ignores claimed rows entirely (liveness only) — use when shards are untrusted.
+- `pinEpochHyperparams` per epoch (or pass `hyperparams` to the SDK `openEpoch`):
+  pins `scale/lrQ16/l2Q16/minibatch/seed` on-chain; nodes prefer the pin over
+  local config, so a config typo cannot fork honest nodes into a slash.
 - `shapeProof` (Groth16 bytes) required iff the task demands it.
 
 ## 4. Node operator

@@ -20,7 +20,8 @@ export * from "./encrypt.js";
 export * from "./da.js";
 export * from "./weights.js";
 export * from "./gate.js";
-export { CipherTaskClient, NetworkParamsClient, NETWORK_PARAMS_ABI, PaymentVaultClient, taskIdFromReceipt } from "./cipher.js";
+export { CipherTaskClient, NetworkParamsClient, NETWORK_PARAMS_ABI, PaymentVaultClient, taskIdFromReceipt, validateHyperparams } from "./cipher.js";
+export type { EpochHyperparams } from "./cipher.js";
 
 export interface SdkConfig {
   cipherTask: string;

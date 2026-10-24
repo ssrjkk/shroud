@@ -13,6 +13,28 @@ import type { Hex, PreparedShard, TaskParams, RedeemSlice } from "./types.js";
 import { domainSeparator, encodeSliceSignature, popDigest, redeemDigest, signRedeemSlice, SLICE_DEADLINE, SLICE_INDEX } from "./eip712.js";
 
 /**
+ * Consensus hyperparams the buyer pins per epoch (M5: chain wins over node config).
+ * Must satisfy the on-chain gate: `scale > 0`, `lrQ16 > 0`, `minibatch > 0`
+ * (`l2Q16` may be 0 = no regularisation, `seed` any uint64).
+ */
+export interface EpochHyperparams {
+  scale: number;
+  lrQ16: number;
+  l2Q16: number;
+  minibatch: number;
+  seed: bigint;
+}
+
+/** Fail fast on hyperparams the contract would reject after an `openEpoch` for gas. */
+export function validateHyperparams(h: EpochHyperparams): void {
+  if (!Number.isInteger(h.scale) || h.scale <= 0) throw new Error(`hyperparams.scale must be a positive integer, got ${String(h.scale)}`);
+  if (!Number.isInteger(h.lrQ16) || h.lrQ16 <= 0) throw new Error(`hyperparams.lrQ16 must be a positive integer, got ${String(h.lrQ16)}`);
+  if (!Number.isInteger(h.l2Q16) || h.l2Q16 < 0) throw new Error(`hyperparams.l2Q16 must be a non-negative integer, got ${String(h.l2Q16)}`);
+  if (!Number.isInteger(h.minibatch) || h.minibatch <= 0) throw new Error(`hyperparams.minibatch must be a positive integer, got ${String(h.minibatch)}`);
+  if (typeof h.seed !== "bigint" || h.seed < 0n) throw new Error(`hyperparams.seed must be a non-negative bigint, got ${String(h.seed)}`);
+}
+
+/**
  * The task id a mined `createTask` produced, read from its `TaskCreated` event.
  *
  * Reading `taskCount()` back after the transaction was a race: a task created by anyone else in the
@@ -276,6 +298,32 @@ export class CipherTaskClient {
     return BigInt(await this.contract.contributionBondRequired(taskId));
   }
 
+  /** Set (or clear with 0) the flat contribution bond (buyer/updateManager, Opening only). */
+  async setContributionBondRequirement(taskId: bigint, amount: bigint): Promise<string> {
+    if (amount < 0n) throw new Error(`bond amount must be non-negative, got ${String(amount)}`);
+    const tx = await this.contract.setContributionBondRequirement(taskId, amount);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for setContributionBondRequirement");
+    return tx.hash;
+  }
+
+  /** Set (or clear with 0) the per-row bond surcharge (buyer/updateManager, Opening only). */
+  async setContributionBondPerRow(taskId: bigint, amount: bigint): Promise<string> {
+    if (amount < 0n) throw new Error(`per-row bond must be non-negative, got ${String(amount)}`);
+    const tx = await this.contract.setContributionBondPerRow(taskId, amount);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for setContributionBondPerRow");
+    return tx.hash;
+  }
+
+  /** Opt in/out of secure weight mode (weight ignores claimed rows). */
+  async setWeightByBond(taskId: bigint, byBond: boolean): Promise<string> {
+    const tx = await this.contract.setWeightByBond(taskId, byBond);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for setWeightByBond");
+    return tx.hash;
+  }
+
   /** Bond currently posted by `contributor` on `taskId`. */
   async contributionBondOf(taskId: bigint, contributor: string): Promise<bigint> {
     return BigInt(await this.contract.contributionBondOf(taskId, contributor));
@@ -316,6 +364,54 @@ export class CipherTaskClient {
   /** The ERC-20 token the orchestrator pulls contribution bonds (and escrow) in. */
   async escrowToken(): Promise<string> {
     return String(await this.contract.escrowToken());
+  }
+
+  /**
+   * Open epoch `nextEpoch` with seed weights + encrypted state, then pin consensus
+   * hyperparams for that epoch when given (M5: chain wins over node config).
+   *
+   * Validation runs before any transaction so a bad `hyperparams` shape fails
+   * locally instead of opening an unpinnable epoch for gas. The pin targets the
+   * epoch `openEpoch` just opened (`nextEpoch` only advances on `finalizeEpoch`),
+   * so the two calls cannot drift apart; if the pin reverts, retry `pinEpochHyperparams`
+   * alone — the epoch stays open and nodes fall back to local config with a warning.
+   */
+  async openEpoch(
+    taskId: bigint,
+    args: {
+      encWeightsCid: Hex;
+      weightsDigest: Hex;
+      encStateHandle: Hex;
+      encStateProof: Hex;
+      hyperparams?: EpochHyperparams;
+    }
+  ): Promise<{ openTx: string; pinTx?: string }> {
+    if (args.hyperparams) validateHyperparams(args.hyperparams);
+    const tx = await this.contract.openEpoch(
+      taskId,
+      args.encWeightsCid,
+      args.weightsDigest,
+      args.encStateHandle,
+      args.encStateProof
+    );
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for openEpoch");
+    let pinTx: string | undefined;
+    if (args.hyperparams) {
+      const h = args.hyperparams;
+      const epoch = Number(BigInt(await this.epochNumber(taskId)));
+      const pt = await this.contract.pinEpochHyperparams(taskId, epoch, h.scale, h.lrQ16, h.l2Q16, h.minibatch, h.seed);
+      const preceipt = await pt.wait();
+      if (!preceipt) throw new Error("no receipt for pinEpochHyperparams");
+      pinTx = pt.hash;
+    }
+    return { openTx: tx.hash, pinTx };
+  }
+
+  /** Current `nextEpoch` of `taskId` (the epoch `openEpoch` will open). */
+  async epochNumber(taskId: bigint): Promise<bigint> {
+    const t = await this.task(taskId);
+    return BigInt(t.nextEpoch);
   }
 
   /**

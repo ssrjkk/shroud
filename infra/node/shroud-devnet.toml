@@ -1,0 +1,31 @@
+# Shroud devnet node defaults: mounted read-only at /etc/shroud/shroud-devnet.toml
+# and selected with CM_CONFIG (see infra/docker-compose.yml).
+#
+# This file carries ONLY the values that are identical for every devnet node and
+# that cannot be set through the environment:
+#   * `node.enforce_key_pin = false` — the devnet mock coprocessor publishes no
+#     key pin, so the fail-closed production default would refuse to boot.
+#   * `node.strict_weights = false` — devnet mocks pin non-file seed weights,
+#     which the production default (SDK-encoded `shroud/weights/v1` only)
+#     rejects.
+#   * endpoint / directory defaults for the compose network.
+#
+# Per-node identity stays in the environment (highest precedence, see
+# `node/src/config.rs`): CM_OPERATOR_KEY, CM_BLS_PUB_KEY, CM_TASK_ADDRESS,
+# CM_VAULT_ADDRESS, CM_MESH_PEERS. Those differ per node and per deployment,
+# so they must NOT be baked into a shared image or file.
+
+[chain]
+rpc_url = "http://devnet:8545"
+chain_id = 31337
+
+[node]
+enforce_key_pin = false
+strict_weights = false
+data_dir = "/data"
+
+[shard]
+cache_dir = "/data/cache"
+
+[mesh]
+listen = "0.0.0.0:7331"
