@@ -1199,6 +1199,25 @@
     "inputs": [
       {
         "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "openChannelCount",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
         "name": "taskId",
         "type": "uint256"
       },
@@ -1525,6 +1544,25 @@
     "inputs": [
       {
         "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "name": "sweepCursor",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
         "name": "taskId",
         "type": "uint256"
       }
@@ -1535,6 +1573,35 @@
         "internalType": "uint128",
         "name": "recovered",
         "type": "uint128"
+      }
+    ],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "limit",
+        "type": "uint256"
+      }
+    ],
+    "name": "sweepTaskChannelsPaged",
+    "outputs": [
+      {
+        "internalType": "uint128",
+        "name": "recovered",
+        "type": "uint128"
+      },
+      {
+        "internalType": "bool",
+        "name": "done",
+        "type": "bool"
       }
     ],
     "stateMutability": "nonpayable",

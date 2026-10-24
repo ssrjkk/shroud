@@ -111,7 +111,19 @@ describe("CipherTask", () => {
   /** Run one full epoch: open, commit by `node`, wait out the dispute window, finalize. */
   async function runEpoch(fx: Fx, id: bigint, epoch: number, node: Fx["node"], traceDigest = bytes32Of(999)) {
     const { task, buyer, verifier } = fx;
-    await openEpochAs(fx, id, buyer, bytes32Of(100 + Number(epoch)), bytes32Of(200 + Number(epoch)), BigInt(epoch));
+    // H1 continuity: input of epoch N>0 must equal winner output of N-1 (promoted in
+    // finalizeEpoch) — or the unchanged input if N-1 was rejected. Read the chain.
+    let inCid: string;
+    let inDigest: string;
+    if (Number(epoch) === 0) {
+      inCid = bytes32Of(100);
+      inDigest = bytes32Of(200);
+    } else {
+      const t = await task.tasks(id);
+      inCid = t.lastWeightsCid;
+      inDigest = t.lastWeightsDigest;
+    }
+    await openEpochAs(fx, id, buyer, inCid, inDigest, BigInt(epoch));
     const transcript = await task.proofTranscript(id, epoch, traceDigest, node.address);
     if (await verifier.consumed(transcript)) {
       // Reusing a transcript across tests is a bug in the fixture, not in the contract.
@@ -1128,23 +1140,30 @@ describe("CipherTask", () => {
       const id = await sealed(fx, { epochs: 3 });
       await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
       await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
+      // H3: abort during a live dispute window (EpochCommitting) must revert — otherwise
+      // the buyer can front-run a forming quorum and zero reporter incentives.
+      await expect(task.connect(buyer).abort(id, reason4("too_expensive"))).to.be.revertedWithCustomError(
+        task,
+        "InvalidTaskStatus"
+      );
+      // Finalize first, then abort the remaining epochs: the winner was already paid the
+      // full epoch lock via its reward channel, abort refunds the rest.
+      await time.increase(3600 + 600);
+      await task.finalizeEpoch(id, 0);
+      const winnerChannel = await vault.channelNonce();
+      const wch = await vault.channelInfo(winnerChannel);
+      expect(wch.node).to.equal(node.address);
+      expect(wch.maxCumulative).to.be.greaterThan(0n);
+      const winnerPay = wch.maxCumulative;
       await task.connect(buyer).abort(id, reason4("too_expensive"));
 
-      // ABORT_LOCK_BPS is 2000, so the node keeps 20% of the 5e7 epoch lock, and it is a real
-      // redeemable channel rather than a number stuck in the sub-balance.
-      const slice = 10_000_000n;
-      const channelId = await vault.channelNonce();
-      const ch = await vault.channelInfo(channelId);
-      expect(ch.node).to.equal(node.address);
-      expect(ch.maxCumulative).to.equal(slice);
-
-      const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [channelId, 0, slice]);
-      const digest = await vault.redeemDigest(channelId, await task.getAddress(), node.address, slice, ch.unlockAt, ethers.MaxUint256);
-      await vault.connect(node).redeem(channelId, 0, slice, ethers.MaxUint256, sig);
-      expect(await token.balanceOf(node.address)).to.equal(slice);
+      const sig = ethers.AbiCoder.defaultAbiCoder().encode(["uint256", "uint256", "uint128"], [winnerChannel, 0, winnerPay]);
+      const digest = await vault.redeemDigest(winnerChannel, await task.getAddress(), node.address, winnerPay, wch.unlockAt, ethers.MaxUint256);
+      await vault.connect(node).redeem(winnerChannel, 0, winnerPay, ethers.MaxUint256, sig);
+      expect(await token.balanceOf(node.address)).to.equal(winnerPay);
 
       await vault.connect(buyer).claim();
-      expect(await token.balanceOf(buyer.address)).to.equal(escrow - slice);
+      expect(await token.balanceOf(buyer.address)).to.equal(escrow - winnerPay);
       expect(await vault.taskBalance(id)).to.equal(0n);
       expect(await vault.totalLocked()).to.equal(await vault.accountedLocked());
     });

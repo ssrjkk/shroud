@@ -245,6 +245,7 @@
       })()
     ));
     S.shardBytes = bytes; S.ctDigest = commit; S.cid = cid; S.pin = pin; S.ctRoot = ctRoot;
+    S.encScale = S.scale; S.encRowsKey = JSON.stringify(S.rows);
     S.leaves = [{ index: 0, cid: cid, ct: pin }];
     S.view.enc = { bytes: bytes.length, commit: commit, cid: cid, pin: pin, ctRoot: ctRoot };
     renderEnc(); renderLedger();
@@ -283,6 +284,10 @@
 
   function doExec() {
     if (!S.rows.length) throw new Error(t("lab.m.noexecdata"));
+    if (!S.shardBytes) throw new Error(t("lab.m.nodata"));
+    // Scale/CSV changed after encrypt → shard bytes and SGD input would diverge silently.
+    if (S.encScale !== undefined && S.encScale !== S.scale) throw new Error(t("lab.e.stale"));
+    if (S.encRowsKey !== undefined && S.encRowsKey !== JSON.stringify(S.rows)) throw new Error(t("lab.e.stale"));
     var h = hyper();
     var flat = [];
     S.rows.forEach(function (r) {

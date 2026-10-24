@@ -788,8 +788,13 @@ mod tfhe_backend {
                 }));
             }
             if in_batch > 0 {
+                // M2: tail uses its actual size. Reference `apply_update` divides by
+                // `in_batch`; reusing `step_ct` (derived for full `minibatch`) made every
+                // incomplete last batch diverge reference<->tfhe.
+                let tail_step = derive_step(inputs.lr_q16, inputs.scale, in_batch as usize)?;
+                let tail_ct = FheUint32::encrypt_trivial(tail_step);
                 for j in 0..f {
-                    let scaled = &grad[j] * &step_ct;
+                    let scaled = &grad[j] * &tail_ct;
                     let delta = &scaled >> STEP_SHIFT;
                     update_ct(&mut w[j], |w| &w - &delta);
                 }

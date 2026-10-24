@@ -73,8 +73,10 @@ export function scrubRpcSecret(text, url) {
   const raw = String(url);
   if (raw && out.includes(raw)) out = out.split(raw).join(redactRpcUrl(raw));
 
-  // The credentials themselves, wherever they appear.
+  // The credentials themselves, wherever they appear: userinfo, path, query, fragment.
   const secrets = [];
+  if (u.username) secrets.push(u.username);
+  if (u.password) secrets.push(u.password);
   for (const seg of u.pathname.split("/").filter(Boolean)) {
     if (!SHAPE.test(seg)) secrets.push(seg);
   }

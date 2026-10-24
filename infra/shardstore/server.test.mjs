@@ -67,12 +67,11 @@ describe("shardstore", () => {
     assert.deepEqual(Buffer.from(await get.arrayBuffer()), body);
   });
 
-  it("addresses objects by keccak-256, the same digest the chain pins", async () => {
-    // keccak256("") — известный вектор; sha3-256("") отличается.
+  it("rejects empty objects: they would pollute the LRU catalogue", async () => {
+    // keccak256("") is 0xc5d2... but empty PUTs are rejected — 4096 empties would
+    // otherwise evict legit shards. The digest function itself is covered in keccak.test.mjs.
     const empty = await fetch(`${BASE}/objects`, { method: "PUT", headers: authed(), body: Buffer.alloc(0) });
-    assert.equal(empty.status, 201);
-    const { cid } = await empty.json();
-    assert.equal(cid, "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470");
+    assert.equal(empty.status, 400);
   });
 
   it("reads without a token: the cid is the capability", async () => {

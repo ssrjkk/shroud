@@ -259,7 +259,7 @@ export function renderTask(view, taskId, lang = "en", mode = "pro", tokenDecimal
   lines.push(`<b>${t(lang, "task.contributors")}</b> ${mono(task.contributors)}`);
   lines.push(`<b>${t(lang, "task.shards")}</b>       ${mono(task.shards)}`);
   lines.push(`<b>${t(lang, "task.nextEpoch")}</b>   ${mono(task.nextEpoch)}`);
-  lines.push(`<b>${t(lang, "task.ctRoot")}</b>       ${mono(task.ctRootSet ? shortId(task.ctRoot) : t(lang, "task.ctRootUnset"))}`);
+  lines.push(`<b>${t(lang, "task.ctRoot")}</b>       ${mono(task.ctRootSet ? shortHash(task.ctRoot) : t(lang, "task.ctRootUnset"))}`);
 
   if (task.params) {
     lines.push("");

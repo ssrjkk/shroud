@@ -2441,6 +2441,25 @@
         "type": "uint256"
       }
     ],
+    "name": "contributionBondPerRow",
+    "outputs": [
+      {
+        "internalType": "uint128",
+        "name": "",
+        "type": "uint128"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
     "name": "contributionBondRequired",
     "outputs": [
       {
@@ -2836,6 +2855,50 @@
         "type": "uint32"
       }
     ],
+    "name": "epochHyperparams",
+    "outputs": [
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint64",
+        "name": "",
+        "type": "uint64"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint32",
+        "name": "epoch",
+        "type": "uint32"
+      }
+    ],
     "name": "epochWinner",
     "outputs": [
       {
@@ -3160,6 +3223,49 @@
         "type": "uint32"
       },
       {
+        "internalType": "uint32",
+        "name": "scale",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "lrQ16",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "l2Q16",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint32",
+        "name": "minibatch",
+        "type": "uint32"
+      },
+      {
+        "internalType": "uint64",
+        "name": "seed",
+        "type": "uint64"
+      }
+    ],
+    "name": "pinEpochHyperparams",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint32",
+        "name": "epoch",
+        "type": "uint32"
+      },
+      {
         "internalType": "bytes32",
         "name": "traceDigest",
         "type": "bytes32"
@@ -3400,6 +3506,24 @@
         "type": "uint128"
       }
     ],
+    "name": "setContributionBondPerRow",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint128",
+        "name": "amount",
+        "type": "uint128"
+      }
+    ],
     "name": "setContributionBondRequirement",
     "outputs": [],
     "stateMutability": "nonpayable",
@@ -3414,6 +3538,24 @@
       }
     ],
     "name": "setPaused",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      },
+      {
+        "internalType": "bool",
+        "name": "byBond",
+        "type": "bool"
+      }
+    ],
+    "name": "setWeightByBond",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -3833,6 +3975,25 @@
         "internalType": "contract PaymentVault",
         "name": "",
         "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "weightByBond",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
       }
     ],
     "stateMutability": "view",

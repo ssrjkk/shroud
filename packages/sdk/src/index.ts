@@ -291,7 +291,7 @@ export class ShroudSdk {
     await this.ensureChainId();
     await this.assertKeyPin();
 
-    if (opts.features <= 0) throw new Error("features must be positive");
+    if (!Number.isInteger(opts.features) || opts.features <= 0) throw new Error(`features must be a positive integer, got ${String(opts.features)}`);
     if (data.length % opts.features !== 0) {
       throw new Error(`data length ${data.length} is not a multiple of features ${opts.features}`);
     }
@@ -470,23 +470,28 @@ export class ShroudSdk {
     }
     const allowance = BigInt(await token.allowance(contributor, taskAddr));
     if (allowance < required) {
-      // Use increaseAllowance for tokens like USDT that require zero-first (they revert on
-      // non-zero-to-nonzero approve). If increaseAllowance is not available, fall back to
-      // approve directly — it will work for standard ERC-20s.
-      let tx;
+      // USDT pattern: no `increaseAllowance`, and `approve(nonZero→nonZero)` reverts.
+      // Try increaseAllowance first; on failure (revert or bad receipt) fall back to
+      // zero-first approve(0)+approve(required). Never leave a misleading error.
+      let ok = false;
       try {
-        tx = await (token as any)["increaseAllowance"](taskAddr, required);
+        const tx = await (token as any)["increaseAllowance"](taskAddr, required);
+        const receipt = await tx.wait();
+        ok = !!receipt && receipt.status === 1;
       } catch {
-        // Token doesn't support increaseAllowance: use approve directly. For USDT this
-        // would revert, so the caller must use a compatible token or this will surface.
-        tx = await token.approve(taskAddr, required);
+        ok = false;
       }
-      const receipt = await tx.wait();
-      if (!receipt || receipt.status !== 1) {
-        throw new Error(
-          `bond approval transaction failed (status ${receipt?.status}) — ` +
-            `token may require zero-first approval (USDT pattern); consider using increaseAllowance`
-        );
+      if (!ok) {
+        const zeroTx = await token.approve(taskAddr, 0n);
+        const zeroReceipt = await zeroTx.wait();
+        if (!zeroReceipt || zeroReceipt.status !== 1) {
+          throw new Error(`bond approval zero-first reset failed (status ${zeroReceipt?.status})`);
+        }
+        const tx = await token.approve(taskAddr, required);
+        const receipt = await tx.wait();
+        if (!receipt || receipt.status !== 1) {
+          throw new Error(`bond approval transaction failed (status ${receipt?.status})`);
+        }
       }
     }
   }

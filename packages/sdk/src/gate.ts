@@ -84,7 +84,12 @@ export class DecryptionGateClient {
     const pollMs = opts.pollMs ?? 5_000;
     const started = Date.now();
     for (;;) {
-      if (await this.revealCompleted(taskId)) return;
+      try {
+        if (await this.revealCompleted(taskId)) return;
+      } catch (e) {
+        // One RPC blip must not kill a 10-minute wait — retry until timeout.
+        if (Date.now() - started > timeoutMs) throw e;
+      }
       if (Date.now() - started > timeoutMs) {
         const partials = await this.partialCount(taskId).catch(() => -1n);
         throw new Error(`reveal for task ${taskId} did not complete within ${timeoutMs}ms (${partials} partials submitted)`);

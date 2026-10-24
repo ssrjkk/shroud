@@ -296,8 +296,10 @@ export class RiskEngine {
     s.updatedAt = at;
     // Timing regularity is weak evidence: a fixed upload cadence is what the SDK's own
     // loop produces. Only a real violation counts as a hard signal, and the shadowban
-    // needs one (see `hasHardSignal`).
-    if (signal !== RiskSignal.FAST_BURST) s.hard = (s.hard ?? 0) + 1;
+    // needs one (see `hasHardSignal`). M-1: NOT_FOUND (ordinary miss) and DUP_PAYLOAD
+    // (legit retry storm) are NOT hard — otherwise an honest client re-PUTting the same
+    // bytes hits HIGH and its shards vanish into a honeypot 201.
+    if (signal === RiskSignal.AUTH_FAIL || signal === RiskSignal.RATE_HIT || signal === RiskSignal.RANGE_ABUSE) s.hard = (s.hard ?? 0) + 1;
     return { score: s.score, level: this.#levelOf(s.score) };
   }
   /**

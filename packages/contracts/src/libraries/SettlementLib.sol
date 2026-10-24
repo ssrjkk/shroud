@@ -40,6 +40,11 @@ library SettlementLib {
     ///      is 3, so 64 is a generous headroom above any legitimate quorum.
     uint256 internal constant MAX_REPORTERS = 64;
 
+    /// @dev Channels swept per settlement call (M6). Skip-closed ~4.8k gas, close ~11.5k:
+    ///      1500 worst-case ≈ 17M, fits alongside nothing else (sweep-only calls return
+    ///      before contributor writes). Progress persists in the vault cursor.
+    uint256 internal constant SWEEP_PAGE = 1500;
+
     /// @notice Settlement progress for one task. Every field is keyed by `taskId`.
     /// @dev The host declares exactly one member of this type, so the slot block the library
     ///      reaches through the storage pointer is the block the host actually owns.
@@ -50,6 +55,7 @@ library SettlementLib {
         mapping(uint256 => uint256) distributed; // credited so far, for the dust leg
         mapping(uint256 => address) dustRecipient; // deterministic highest-address sink
         mapping(uint256 => uint128) userPool; // frozen by the first page
+        mapping(uint256 => bool) swept; // a full sweep pass completed (M6)
     }
 
     struct Outcome {
@@ -104,10 +110,18 @@ library SettlementLib {
         address treasury,
         uint256 pageSize
     ) external returns (Outcome memory out) {
-        // Return every un-redeemed reward lock to the sub-balance first, so the split below is
-        // computed against the vault's real balance rather than an assumption. Idempotent, so
-        // repeated pages are safe.
-        vault.sweepTaskChannels(taskId);
+        // M6: bounded sweep with vault cursor. Sweep-only calls return before the pool
+        // freeze, so 23k channels take ~16 permissionless calls instead of one 110M brick.
+        // After the first full pass `swept` skips re-scans on intermediate pages; the final
+        // page re-sweeps once (newly matured) and checks the O(1) open-channel counter.
+        if (!s.swept[taskId]) {
+            (, bool sweepDone) = vault.sweepTaskChannelsPaged(taskId, SWEEP_PAGE);
+            if (!sweepDone) {
+                emit SettleProgress(taskId, s.cursor[taskId], contributors.length);
+                return Outcome(false, 0, 0, 0);
+            }
+            s.swept[taskId] = true;
+        }
         uint256 available = vault.taskBalance(taskId);
 
         uint128 committeePool = (t.budget * t.params.committeeShareBps) / TaskParamsLib.BPS;
@@ -153,14 +167,22 @@ library SettlementLib {
             return Outcome(false, userPool, committeePool, 0);
         }
 
-        // Final page: every reward channel must have matured (redeemed, reclaimed, or swept
-        // above). Paying the committee/buyer legs against an incomplete balance permanently
+        // Final page: re-sweep once (channels may have matured since the first pass;
+        // bounded — if incomplete, retry the same cursor), then O(1) maturity check.
+        // Paying the committee/buyer legs against an incomplete balance permanently
         // shorts them — the task is terminal after this call, so no later call can top them
         // up (threat model F-22). Contributor pages are unaffected and may run at any time:
         // their shares come from the frozen pool, which node locks can never eat into.
         // If this reverts, wait out the reward window and call again; settlement is
         // permissionless, so anyone can finish it.
-        if (vault.hasImmatureChannels(taskId)) revert ICipherTask.ChannelsImmature(taskId);
+        (, bool finalSweepDone) = vault.sweepTaskChannelsPaged(taskId, SWEEP_PAGE);
+        if (!finalSweepDone) {
+            emit SettleProgress(taskId, end, count);
+            return Outcome(false, userPool, committeePool, 0);
+        }
+        // Sweep just closed everything mature: any still-open channel is immature by
+        // definition. O(1) counter instead of an O(n) scan.
+        if (vault.openChannelCount(taskId) > 0) revert ICipherTask.ChannelsImmature(taskId);
         s.settled[taskId] = true;
 
         uint128 dust = userPool > uint128(distributed) ? uint128(userPool) - uint128(distributed) : 0;

@@ -97,6 +97,14 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     mapping(uint256 => uint256) public taskChannelLocked;
     /// @notice Channel ids opened per task, for reclamation.
     mapping(uint256 => uint256[]) public taskChannels;
+    /// @dev M6: open (not closed) channel count per task. Incremented on open, decremented
+    ///      on every close (reclaim/closeChannel/sweep). After a complete sweep, remaining
+    ///      open channels are exactly the immature ones, so the final settlement page checks
+    ///      this O(1) counter instead of scanning all channels O(n).
+    mapping(uint256 => uint256) public openChannelCount;
+    /// @dev M6: sweep cursor per task for bounded `sweepTaskChannelsPaged`. Persists across
+    ///      settlement pages; reset to 0 when a full pass completes.
+    mapping(uint256 => uint256) public sweepCursor;
 
     uint256 public totalLocked; // = subBalancesTotal + channelLocksTotal + bondTotal
     uint256 public subBalancesTotal; // Σ taskBalance
@@ -455,6 +463,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         taskChannels[taskId].push(channelId);
         taskChannelLocked[taskId] += maxCumulative;
         channelLocksTotal += maxCumulative; // `totalLocked` unchanged: sub-balance -> channel
+        openChannelCount[taskId] += 1;
         _assertInvariant();
         emit ChannelOpened(channelId, taskId, node, msg.sender, maxCumulative, unlock);
     }
@@ -474,6 +483,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
             if (ch.closed) continue;
             if (ch.unlockAt > block.timestamp) continue; // still claimable
             ch.closed = true;
+            openChannelCount[taskId] -= 1;
             uint128 amount = ch.maxCumulative - ch.withdrawn;
             uint128 freed = ch.maxCumulative;
             taskChannelLocked[taskId] -= freed;
@@ -482,6 +492,46 @@ contract PaymentVault is ReentrancyGuard, Pausable {
             taskBalance[taskId] += amount;
             subBalancesTotal += amount;
             recovered += amount;
+        }
+        sweepCursor[taskId] = 0;
+        _assertInvariant();
+    }
+
+    /// @notice Bounded sweep of up to `limit` channels from the persisted cursor (M6).
+    /// @dev Settlement pages call this instead of the full sweep: O(limit) per call,
+    ///      progress persists in `sweepCursor`, `done` tells the caller the pass finished.
+    ///      `limit == 0` means "no bound" (single-pass, legacy behaviour for small sets).
+    function sweepTaskChannelsPaged(uint256 taskId, uint256 limit) external onlyTaskManager whenNotPaused nonReentrant returns (uint128 recovered, bool done) {
+        uint256[] storage ids = taskChannels[taskId];
+        uint256 n = ids.length;
+        uint256 cur = sweepCursor[taskId];
+        if (cur >= n) {
+            sweepCursor[taskId] = 0;
+            return (0, true);
+        }
+        uint256 end = limit == 0 ? n : cur + limit;
+        if (end > n) end = n;
+        for (uint256 i = cur; i < end; ++i) {
+            Channel storage ch = channels[ids[i]];
+            if (ch.closed) continue;
+            if (ch.unlockAt > block.timestamp) continue; // still claimable
+            ch.closed = true;
+            openChannelCount[taskId] -= 1;
+            uint128 amount = ch.maxCumulative - ch.withdrawn;
+            uint128 freed = ch.maxCumulative;
+            taskChannelLocked[taskId] -= freed;
+            channelLocksTotal -= amount;
+            if (amount == 0) continue;
+            taskBalance[taskId] += amount;
+            subBalancesTotal += amount;
+            recovered += amount;
+        }
+        if (end >= n) {
+            sweepCursor[taskId] = 0;
+            done = true;
+        } else {
+            sweepCursor[taskId] = end;
+            done = false;
         }
         _assertInvariant();
     }
@@ -565,6 +615,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         channelLocksTotal -= amount;
         totalLocked -= amount; // funds leave the vault to the earner
         totalWithdrawn += amount;
+        openChannelCount[ch.taskId] -= 1;
         _push(msg.sender, amount);
         _assertInvariant();
         emit ChannelReclaimed(channelId, msg.sender, amount);
@@ -582,6 +633,7 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         subBalancesTotal += amount;
         taskChannelLocked[ch.taskId] -= freed;
         channelLocksTotal -= amount;
+        openChannelCount[ch.taskId] -= 1;
         _assertInvariant();
         emit ChannelClosedByStreamer(channelId, amount, ch.taskId);
     }

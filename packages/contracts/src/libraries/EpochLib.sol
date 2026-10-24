@@ -204,7 +204,9 @@ library ContributeLib {
         if (rowCommitment == bytes32(0)) revert ICipherTask.RowCommitmentInvalid(taskId, contributor);
 
         uint32 leafIndex = t.shards;
-        uint96 w = uint96(Dividend.weight(rows, Dividend.liveness(t.createdAt, t.windowEnd, uint64(block.timestamp))));
+        // H2: secure mode ignores self-declared rows for weight (liveness only).
+        uint32 effRows = bonds.weightByBond[taskId] ? 1 : rows;
+        uint96 w = uint96(Dividend.weight(effRows, Dividend.liveness(t.createdAt, t.windowEnd, uint64(block.timestamp))));
         if (w == 0) revert ICipherTask.ZeroContribution();
 
         contributions[contributor] = ICipherTask.Contribution({
@@ -237,7 +239,8 @@ library ContributeLib {
         }
 
         // Bond last: a reverting pull must not leave a recorded contribution behind.
-        BondLib.pull(bonds, token, taskId, contributor);
+        // H2: rows are self-declared, so the pull scales with claimed rows (perRow).
+        BondLib.pull(bonds, token, taskId, contributor, rows);
 
         emit ContributionSubmitted(taskId, contributor, leafIndex, ciphertextCid, rows);
     }

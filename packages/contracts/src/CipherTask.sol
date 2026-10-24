@@ -151,6 +151,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     mapping(uint256 => address[]) private _contributorList;
     mapping(uint256 => mapping(uint32 => address)) private _epochWinner;
     mapping(uint256 => mapping(uint32 => uint256)) private _epochChannel;
+    /// @dev M5: on-chain hyperparams per epoch (scale, lrQ16, l2Q16, minibatch, seed).
+    ///      Consensus inputs were local config, so two honest nodes with different
+    ///      `shroud.toml` forked and one got slashed. Buyer/manager pins them via
+    ///      `pinEpochHyperparams`; nodes prefer on-chain when `scale != 0`, else local
+    ///      config with a warning (legacy tasks). Additive: old tasks read zero.
+    mapping(uint256 => mapping(uint32 => TaskParamsLib.EpochHyper)) private _epochHyper;
 
     mapping(uint256 => uint256) private _totalWeight;
     /// @dev Dispute state (counts, reporters, commitments), keyed by epoch, not just by task:
@@ -392,23 +398,7 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         uint128 escrowed = uint128(vault.taskBalance(taskId));
         if (escrowed != budget) revert EscrowMismatch(taskId, budget);
 
-        _tasks[taskId] = Task({
-            params: pm,
-            budget: escrowed,
-            locked: 0,
-            createdAt: uint64(block.timestamp),
-            windowEnd: uint64(block.timestamp) + pm.contributionWindow,
-            sealAt: 0,
-            epochDeadline: 0,
-            contributors: 0,
-            shards: 0,
-            nextEpoch: 0,
-            ctRoot: _EMPTY_ROOT,
-            lastWeightsCid: bytes32(0),
-            lastWeightsDigest: bytes32(0),
-            status: TaskStatus.Opening,
-            isSealed: false
-        });
+        TaskParamsLib.initTask(_tasks[taskId], pm, escrowed, _EMPTY_ROOT);
 
         emit TaskCreated(taskId, pm.buyer, escrowed, pm.epochs);
         _setStatus(taskId, TaskStatus.Opening);
@@ -532,7 +522,11 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     function _registerNode(uint256 taskId, address node, bytes32 blsPubKey) private {
-        if (_tasks[taskId].status == TaskStatus.None) revert UnknownTask(taskId);
+        TaskStatus st = _tasks[taskId].status;
+        if (st == TaskStatus.None) revert UnknownTask(taskId);
+        if (st != TaskStatus.Opening && st != TaskStatus.Collecting && st != TaskStatus.Sealed) {
+            revert InvalidTaskStatus(taskId, st, TaskStatus.Sealed);
+        }
         if (_nodeRegistered[taskId][node]) revert NodeAlreadyRegistered(taskId, node);
         if (_nodeCount[taskId] >= MAX_NODES) revert CapReached(taskId, MAX_NODES);
         _nodeRegistered[taskId][node] = true;
@@ -588,6 +582,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         uint32 epoch = t.nextEpoch;
         if (epoch >= t.params.epochs) revert AllEpochsRun(taskId, epoch);
 
+        if (epoch > 0) {
+            if (encWeightsCid != t.lastWeightsCid || weightsDigest != t.lastWeightsDigest) {
+                revert WeightPinMismatch(taskId, t.lastWeightsDigest, weightsDigest);
+            }
+        }
+
         uint128 epochLock = _epochLock(t);
         if (t.budget - t.locked < epochLock) revert BudgetExhausted(taskId, uint128(t.budget - t.locked), epochLock);
 
@@ -603,6 +603,26 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         _setStatus(taskId, TaskStatus.EpochOpen);
         emit EpochOpened(taskId, epoch, encWeightsCid, weightsDigest);
         emit FheStateCheckpoint(taskId, FHE.toBytes32(s.encState));
+    }
+
+    /// @notice Pin consensus hyperparams for `epoch` (M5). Buyer/updateManager only,
+    ///         only for the live `nextEpoch`. Zero `scale` = unset (legacy: node config).
+    function pinEpochHyperparams(
+        uint256 taskId,
+        uint32 epoch,
+        uint32 scale,
+        uint32 lrQ16,
+        uint32 l2Q16,
+        uint32 minibatch,
+        uint64 seed
+    ) external whenNotPaused {
+        TaskParamsLib.pinHyper(_tasks[taskId], _epochHyper, taskId, msg.sender, epoch, scale, lrQ16, l2Q16, minibatch, seed);
+    }
+
+    /// @notice Pinned hyperparams for `epoch` (all zero = unset, use node config).
+    function epochHyperparams(uint256 taskId, uint32 epoch) external view returns (uint32, uint32, uint32, uint32, uint64) {
+        TaskParamsLib.EpochHyper storage h = _epochHyper[taskId][epoch];
+        return (h.scale, h.lrQ16, h.l2Q16, h.minibatch, h.seed);
     }
 
     /// @notice Submit a ZK-STARK proof of compute for epoch `epoch` plus the encrypted weights
@@ -752,6 +772,9 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
             vault.slashBond(taskId, epoch, winner);
             emit EpochRejected(taskId, epoch, _disputes.reporters[taskId][epoch].length);
         } else if (winner != address(0)) {
+            ICipherTask.EpochCommit storage wc = _commits[taskId][epoch][winner];
+            t.lastWeightsCid = wc.encWeightsCid;
+            t.lastWeightsDigest = wc.weightsDigest;
             // `lock` is *already* this epoch's slice of the node pool (`_epochLock` divides
             // `budget * nodeShareBps` across the epochs), so the node share must not be taken
             // a second time here. Re-applying `nodeShareBps` would hand the winner 15% of
@@ -905,6 +928,10 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         if (msg.sender != t.params.buyer && msg.sender != owner && msg.sender != t.params.updateManager) {
             revert NotUpdateManagerOrOwner(taskId, msg.sender);
         }
+        // H3: abort in EpochCommitting would zero reporters.
+        if (t.status == TaskStatus.EpochCommitting) {
+            revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochSettled);
+        }
         if (t.status == TaskStatus.Aborted || t.status == TaskStatus.Disclosed) {
             revert AlreadyTerminal(taskId, t.status);
         }
@@ -979,15 +1006,21 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     ///      censor it. Set the bond before opening contributions; after the first shard it
     ///      is frozen for the task.
     function setContributionBondRequirement(uint256 taskId, uint128 amount) external whenNotPaused {
-        Task storage t = _tasks[taskId];
-        if (t.status == TaskStatus.None) revert UnknownTask(taskId);
-        if (msg.sender != t.params.buyer && msg.sender != t.params.updateManager) {
-            revert NotUpdateManagerOrOwner(taskId, msg.sender);
-        }
-        if (t.status != TaskStatus.Opening) revert InvalidTaskStatus(taskId, t.status, TaskStatus.Opening);
-        if (amount > MAX_CONTRIBUTION_BOND) revert BondRequirementInvalid(taskId, amount);
-        _bonds.required[taskId] = amount;
-        emit ContributionBondRequirementSet(taskId, amount);
+        BondLib.setFlat(_bonds, _tasks[taskId], taskId, msg.sender, amount);
+    }
+
+    /// @notice Set (or clear with 0) the per-row bond surcharge for `taskId`.
+    /// @dev H2: `rows` is self-declared and Groth16 is not verified on-chain, so a flat
+    ///      bond prices a 100k-row lie the same as an honest shard. perRow*rows makes the
+    ///      lie cost money. Same guards as the flat requirement; capped so 100k rows max
+    ///      out at MAX_CONTRIBUTION_BOND (1000 USDC at 6dp => perRow <= 10_000).
+    function setContributionBondPerRow(uint256 taskId, uint128 amount) external whenNotPaused {
+        BondLib.setPerRow(_bonds, _tasks[taskId], taskId, msg.sender, amount);
+    }
+
+    /// @notice Opt into secure weight mode: weight ignores claimed rows (H2 full close).
+    function setWeightByBond(uint256 taskId, bool byBond) external whenNotPaused {
+        BondLib.setWeightMode(_bonds, _tasks[taskId], taskId, msg.sender, byBond);
     }
 
     /// @notice Release a contributor's bond to them. Permissionless: the money can only go to
@@ -1033,6 +1066,16 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     /// @notice Bond required of new contributions to `taskId` (0 = none).
     function contributionBondRequired(uint256 taskId) external view returns (uint128) {
         return _bonds.required[taskId];
+    }
+
+    /// @notice Per-row bond surcharge for `taskId` (0 = flat only).
+    function contributionBondPerRow(uint256 taskId) external view returns (uint128) {
+        return _bonds.perRow[taskId];
+    }
+
+    /// @notice Secure weight mode for `taskId` (true = weight ignores claimed rows).
+    function weightByBond(uint256 taskId) external view returns (bool) {
+        return _bonds.weightByBond[taskId];
     }
 
     /// @notice Bond currently posted by `contributor` on `taskId`.
@@ -1170,7 +1213,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
     }
 
     function disputeQuorum(uint256 taskId) external view returns (uint256 need, uint256 have) {
-        return (DISPUTE_QUORUM, _disputes.count[taskId][_tasks[taskId].nextEpoch]);
+        Task storage t = _tasks[taskId];
+        uint32 qEpoch = t.nextEpoch;
+        if (qEpoch > 0 && t.status == TaskStatus.EpochSettled) {
+            unchecked { qEpoch--; }
+        }
+        return (DISPUTE_QUORUM, _disputes.count[taskId][qEpoch]);
     }
 
     /// @notice Expected dispute-committee seats per epoch (see `DisputeLib`).

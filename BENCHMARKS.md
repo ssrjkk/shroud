@@ -32,6 +32,12 @@ Why paging exists: at ~117k gas per contributor, a 5000-contributor `settle` nee
 buffers × 20 iterations. A 64 MiB max-size object hashes in ~6 s on this box —
 relevant because `PUT` addresses before storing and `getVerified` re-hashes
 before trusting. Node 24, Windows, single thread; CI runners differ.
+Operator consequence: the hash runs synchronously in the PUT handler, so one
+max-size PUT stalls the whole event loop (all GETs/healthz) for those ~6 s.
+Mitigations in place: per-connection and global in-flight budgets shed with 503,
+empty objects are rejected before hashing, and idempotency replays verify by hash
+instead of re-storing. For production DA, lower `MAX_OBJECT_BYTES` (e.g. 8 MiB)
+and/or front with ≥2 instances.
 
 ## Not measured here (pending key material / scale)
 

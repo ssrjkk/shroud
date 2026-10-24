@@ -52,6 +52,11 @@ library DisputeLib {
         /// (F-59) - the randomness alone was not enough. Every later report in the epoch
         /// evaluates against the same seed, so eligibility is stable within the epoch.
         mapping(uint256 => mapping(uint32 => bytes32)) seed;
+        /// M5: bond-total pinned alongside the seed. `reportDispute` used to read live
+        /// `vault.taskBondTotal` on every report, so a top-up between report 1 and 3
+        /// changed `total` under the same seed — probabilities within one epoch were
+        /// incomparable. First report pins (seed,total); later reports reuse it.
+        mapping(uint256 => mapping(uint32 => uint256)) seedTotal;
     }
 
     // Redeclared from the host so a delegatecall'd library logs from the host's address with
@@ -181,11 +186,16 @@ library DisputeLib {
         uint256 weight
     ) internal returns (bool) {
         bytes32 seed = s.seed[taskId][epoch];
+        uint256 pinnedTotal;
         if (seed == bytes32(0)) {
             seed = epochSeed(nodeSetHash, block.prevrandao, taskId, epoch);
             s.seed[taskId][epoch] = seed;
+            s.seedTotal[taskId][epoch] = totalWeight;
+            pinnedTotal = totalWeight;
+        } else {
+            pinnedTotal = s.seedTotal[taskId][epoch];
         }
-        return isEligibleSeed(seed, totalWeight, weight, reporter);
+        return isEligibleSeed(seed, pinnedTotal, weight, reporter);
     }
 
     /// @dev The shared counting logic. A report is only counted from an address holding its own

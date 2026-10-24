@@ -27,6 +27,13 @@ library BondLib {
     struct State {
         /// @dev Per-task bond required of new contributions. Zero (default) = none.
         mapping(uint256 => uint128) required;
+        /// @dev Per-row surcharge: rows are self-declared (H2), so a flat bond prices a
+        ///      100k-row lie the same as an honest 1k-row shard. perRow*rows makes large
+        ///      claims expensive to lie about. Zero (default) = flat only, backward compat.
+        mapping(uint256 => uint128) perRow;
+        /// @dev Secure weight mode (H2 full close): when true, weight ignores claimed rows
+        ///      (`effectiveRows = 1`, liveness only). Default false = legacy rows weight.
+        mapping(uint256 => bool) weightByBond;
         /// @dev Bonds posted, keyed by task then contributor.
         mapping(uint256 => mapping(address => uint128)) posted;
     }
@@ -36,10 +43,78 @@ library BondLib {
     event ContributionBondReleased(uint256 indexed taskId, address indexed contributor, uint128 amount);
     event ContributionBondSlashed(uint256 indexed taskId, address indexed contributor, uint128 amount);
 
+    uint128 private constant _MAX_BOND = 1_000_000_000;
+    uint128 private constant _MAX_PER_ROW = 10_000;
+
+    /// @notice Set flat bond requirement (external so the host stays small).
+    function setFlat(
+        State storage s,
+        ICipherTask.Task storage t,
+        uint256 taskId,
+        address caller,
+        uint128 amount
+    ) external {
+        if (t.status == ICipherTask.TaskStatus.None) revert ICipherTask.UnknownTask(taskId);
+        if (caller != t.params.buyer && caller != t.params.updateManager) {
+            revert ICipherTask.NotUpdateManagerOrOwner(taskId, caller);
+        }
+        if (t.status != ICipherTask.TaskStatus.Opening) {
+            revert ICipherTask.InvalidTaskStatus(taskId, t.status, ICipherTask.TaskStatus.Opening);
+        }
+        if (amount > _MAX_BOND) revert ICipherTask.BondRequirementInvalid(taskId, amount);
+        s.required[taskId] = amount;
+        emit ContributionBondRequirementSet(taskId, amount);
+    }
+
+    /// @notice Set per-row surcharge (external so the host stays small).
+    function setPerRow(
+        State storage s,
+        ICipherTask.Task storage t,
+        uint256 taskId,
+        address caller,
+        uint128 amount
+    ) external {
+        if (t.status == ICipherTask.TaskStatus.None) revert ICipherTask.UnknownTask(taskId);
+        if (caller != t.params.buyer && caller != t.params.updateManager) {
+            revert ICipherTask.NotUpdateManagerOrOwner(taskId, caller);
+        }
+        if (t.status != ICipherTask.TaskStatus.Opening) {
+            revert ICipherTask.InvalidTaskStatus(taskId, t.status, ICipherTask.TaskStatus.Opening);
+        }
+        if (amount > _MAX_PER_ROW) revert ICipherTask.BondRequirementInvalid(taskId, amount);
+        s.perRow[taskId] = amount;
+        emit ContributionBondRequirementSet(taskId, amount);
+    }
+
+    /// @notice Enable/disable secure weight mode (external so the host stays small).
+    /// @dev H2 full close opt-in: weight ignores claimed rows (effectiveRows = 1).
+    function setWeightMode(
+        State storage s,
+        ICipherTask.Task storage t,
+        uint256 taskId,
+        address caller,
+        bool byBond
+    ) external {
+        if (t.status == ICipherTask.TaskStatus.None) revert ICipherTask.UnknownTask(taskId);
+        if (caller != t.params.buyer && caller != t.params.updateManager) {
+            revert ICipherTask.NotUpdateManagerOrOwner(taskId, caller);
+        }
+        if (t.status != ICipherTask.TaskStatus.Opening) {
+            revert ICipherTask.InvalidTaskStatus(taskId, t.status, ICipherTask.TaskStatus.Opening);
+        }
+        s.weightByBond[taskId] = byBond;
+        emit ContributionBondRequirementSet(taskId, byBond ? uint128(1) : uint128(0));
+    }
+
     /// @notice Pull the required bond (if any) from `from`. Fail-closed on fee-on-transfer
     ///         tokens: a shortfall reverts instead of recording a bond never posted.
-    function pull(State storage s, IERC20 token, uint256 taskId, address from) external {
+    /// @dev Total = flat + perRow*rows (H2: self-declared rows must cost to claim).
+    function pull(State storage s, IERC20 token, uint256 taskId, address from, uint32 rows) external {
         uint128 req = s.required[taskId];
+        uint128 pr = s.perRow[taskId];
+        if (pr != 0 && rows != 0) {
+            req = req + uint128(uint256(pr) * uint256(rows));
+        }
         if (req == 0) return;
         uint256 before = token.balanceOf(address(this));
         (bool ok, bytes memory ret) =

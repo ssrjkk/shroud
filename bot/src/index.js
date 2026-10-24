@@ -75,6 +75,7 @@ import {
 } from "./watchlist.js";
 
 const CURSOR_FILE = resolve(ROOT, "state", "cursor.json");
+const TG_OFFSET_FILE = resolve(ROOT, "state", "tg-offset.json");
 
 const COMMANDS = [
   { command: "menu", description: "hub: status, tasks, guides, trust" },
@@ -168,6 +169,25 @@ export { redactRpcUrl, scrubRpcSecret };
 
 /** Cap on remembered commit digests: keys are short, values are 32-byte hashes. */
 export const MAX_SEEN_DIGESTS = 5000;
+
+/** Telegram `getUpdates` offset, persisted so a restart resumes instead of replaying. */
+export async function loadTgOffset(file = TG_OFFSET_FILE) {
+  try {
+    const raw = JSON.parse(await readFile(file, "utf8"));
+    if (Number.isInteger(raw.offset) && raw.offset >= 0) return raw.offset;
+  } catch {
+    // No offset yet, or unreadable: fall through to a fresh poll.
+  }
+  return 0;
+}
+
+export async function saveTgOffset(offset, file = TG_OFFSET_FILE) {
+  try {
+    await writeAtomic(file, JSON.stringify({ offset, at: Date.now() }));
+  } catch (err) {
+    console.warn("could not persist tg offset:", err.message);
+  }
+}
 
 export async function saveCursor(cursor, seen, digests = new Map(), file = CURSOR_FILE) {
   try {
@@ -1162,11 +1182,17 @@ async function main() {
   }
 
   async function pollCommands() {
-    let offset = 0;
+    let offset = await loadTgOffset();
     for (;;) {
       try {
         const { updates, nextOffset } = await bot.getUpdates(offset, 30);
-        offset = nextOffset;
+        if (nextOffset !== offset) {
+          offset = nextOffset;
+          // Persist before dispatch: a crash between poll and persist replays one
+          // batch (deduped by #seen), while persist-after-dispatch risks skipping.
+          // Fire-and-forget is fine — worst case is one replayed batch.
+          void saveTgOffset(offset);
+        }
 
         for (const update of updates) {
           // Fire-and-forget under the cap: the offset already advanced, so a

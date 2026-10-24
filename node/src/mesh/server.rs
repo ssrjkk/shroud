@@ -696,6 +696,26 @@ fn validate_hello(hello: &Hello, our_chain_id: u64) -> std::result::Result<Strin
             hello.node_id.len()
         ));
     }
+    // M7: bls/signing keys were ignored, so anyone could claim any node_id.
+    // Shape-check when present (empty = legacy peer, still accepted). Full
+    // signature binding needs a protocol change; this kills trivial spoofs and
+    // keeps mesh data hints-only (never drives FileDispute — that comes from
+    // chain logs in state.rs, not from gossip).
+    if (!hello.bls_pubkey.is_empty() && hello.bls_pubkey.len() != DIGEST_BYTES) {
+        return Err(format!(
+            "bls_pubkey must be {DIGEST_BYTES} bytes when present, got {}",
+            hello.bls_pubkey.len()
+        ));
+    }
+    if (!hello.signing_pubkey.is_empty()
+        && hello.signing_pubkey.len() != 33
+        && hello.signing_pubkey.len() != 65)
+    {
+        return Err(format!(
+            "signing_pubkey must be 33 or 65 bytes when present, got {}",
+            hello.signing_pubkey.len()
+        ));
+    }
     let claimed = match hello.chain_id.parse::<DecimalU256>() {
         Ok(id) => id.0,
         Err(e) => return Err(format!("chain_id is not a decimal uint256: {e}")),

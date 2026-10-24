@@ -460,6 +460,7 @@ export class ChainReader {
     const c = this.#contract("cipherTask", this.#config.cipherTask, this.#ifaces.cipherTask);
     // All reads in flight at once: the sequential loop paid a full RPC round trip per
     // node. Order is the contributor-list order either way (Promise.all preserves it).
+    let sawError = null;
     const settled = await Promise.all(
       nodes.map(async (node) => {
         try {
@@ -475,12 +476,15 @@ export class ChainReader {
             // chains); rendered by /task so operators can eyeball it, never interpreted.
             proof: r.proof,
           };
-        } catch {
-          // Read failure for one node must not hide the others.
+        } catch (e) {
+          // Read failure for one node must not hide the others, but must not look
+          // like "no commits yet" either — retain the error for /status.
+          if (!sawError) sawError = e;
           return null;
         }
       })
     );
+    if (sawError) this.#noteReadError("commitsForEpoch", sawError);
     return settled.filter((x) => x !== null);
   }
 
@@ -679,7 +683,8 @@ export class ChainReader {
         proposer: r.proposer,
         approver: r.approver,
       };
-    } catch {
+    } catch (e) {
+      this.#noteReadError("pendingRotation", e);
       return null;
     }
   }
@@ -728,7 +733,8 @@ const grab = async (name) =>
       const [verifier, executableAt] = await c.pendingRotation();
       if (verifier === "0x" + "0".repeat(40)) return null;
       return { to: verifier, executableAt: Number(executableAt) };
-    } catch {
+    } catch (e) {
+      this.#noteReadError("pendingVerifierRotation", e);
       return null;
     }
   }

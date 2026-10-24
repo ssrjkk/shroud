@@ -240,9 +240,15 @@ impl Worker {
                     Err(e) => {
                         let attempts = attempts + 1;
                         // H6 fix: exit-money (Redeem/Reclaim/Claim) uses infinite retry.
-                        // Giving up on these permanently loses funds, which is worse than
-                        // retrying forever on a persistent RPC outage.
-                        let max_attempts = if work.is_exit_money() {
+                        // M3: dispute-path work (Reexecute/FileDispute/Finalize) also retries
+                        // until the window closes — a transient reorg at attempt 5 must not
+                        // become "giving up" and miss the fraud window. These arms self-
+                        // terminate (wrong status → Done), so infinite cannot loop forever.
+                        let max_attempts = if work.is_exit_money()
+                            || matches!(
+                                work,
+                                Work::Reexecute { .. } | Work::FileDispute { .. } | Work::Finalize { .. }
+                            ) {
                             u32::MAX // infinite retry
                         } else {
                             MAX_ATTEMPTS
@@ -304,6 +310,16 @@ impl Worker {
 
     /// Dispatch one nudge.
     async fn handle(&self, work: &Work, chain_now: u64) -> Result<Outcome> {
+        // M4: `chain_now` is read once per pass, but `Execute` can block 40s+ in
+        // `spawn_blocking`. Finalize/Reclaim gates on a stale `now` revert `TooEarly`
+        // for gas. Re-read the chain clock on the two time-gated arms.
+        let chain_now = match work {
+            Work::Finalize { .. } | Work::Reclaim { .. } => match self.client.latest_block().await {
+                Ok((_, ts)) => ts,
+                Err(_) => chain_now,
+            },
+            _ => chain_now,
+        };
         match work {
             Work::Register { task_id } => self.on_register(*task_id).await,
             Work::Execute { task_id, epoch } => self.on_execute(*task_id, *epoch, chain_now).await,
@@ -504,6 +520,12 @@ impl Worker {
         epoch: u32,
         claimed_digest: B256,
     ) -> Result<Outcome> {
+        // C3: tfhe ciphertext bytes are randomised by PBS (fhe.rs), so digest_epoch never
+        // reproduces a claim. Re-execution on tfhe is always "divergent" — actively harmful.
+        if !matches!(self.cfg.fhe.backend, crate::config::FheBackend::Reference) {
+            debug!(task = %task_id, epoch, "tfhe backend: re-execution is nondeterministic; skipping dispute path");
+            return Ok(Outcome::Done);
+        }
         let me = self.client.operator();
         // Our own commit is the dispute material; the fold files from it without us.
         if let Some(t) = self.state.task(task_id) {
@@ -699,11 +721,42 @@ impl Worker {
             )));
         }
         let prev_weights_bytes = da::fetch(&dir, &endpoint, &task.last_weights_cid, max).await?;
+        // C2: every fetched object is re-hashed. Shards are verified above; seed weights
+        // were not — a bitter/malicious DA gave silent wrong execution.
+        da::verify_bytes(&task.last_weights_cid, &prev_weights_bytes)?;
         let reference = matches!(self.cfg.fhe.backend, crate::config::FheBackend::Reference);
         let prev_weights = if reference {
             Some(self.decode_prev_weights(task_id, &prev_weights_bytes, task)?)
         } else {
             None
+        };
+        // M5: prefer on-chain pinned hyperparams; legacy tasks (scale==0) use local config.
+        // A config typo must not fork honest nodes into a slash — chain wins, always.
+        let (scale, lr_q16, l2_q16, minibatch, seed) = match self.client.epoch_hyperparams(task_id, epoch).await {
+            Ok((s, lr, l2, mb, sd)) if s != 0 => (s, lr, l2, mb as usize, sd),
+            Ok(_) => {
+                warn!(
+                    task = %task_id, epoch,
+                    "no on-chain hyperparams pinned; using local fhe.* config (legacy path)"
+                );
+                (
+                    self.cfg.fhe.scale,
+                    self.cfg.fhe.lr_q16,
+                    self.cfg.fhe.l2_q16,
+                    self.cfg.fhe.minibatch,
+                    self.cfg.fhe.seed,
+                )
+            }
+            Err(e) => {
+                warn!(task = %task_id, epoch, error = %e, "hyperparams read failed; using local fhe.* config");
+                (
+                    self.cfg.fhe.scale,
+                    self.cfg.fhe.lr_q16,
+                    self.cfg.fhe.l2_q16,
+                    self.cfg.fhe.minibatch,
+                    self.cfg.fhe.seed,
+                )
+            }
         };
         Ok(EpochInputs {
             task_id,
@@ -713,11 +766,11 @@ impl Worker {
             ct_root: task.ct_root,
             prev_weights_digest: task.last_weights_digest,
             features: task.features,
-            scale: self.cfg.fhe.scale,
-            lr_q16: self.cfg.fhe.lr_q16,
-            l2_q16: self.cfg.fhe.l2_q16,
-            minibatch: self.cfg.fhe.minibatch,
-            seed: self.cfg.fhe.seed,
+            scale,
+            lr_q16,
+            l2_q16,
+            minibatch,
+            seed,
             prev_weights,
             prev_weights_bytes,
             shards,
@@ -785,6 +838,11 @@ impl Worker {
     /// the original revert reason when no commitment is open); if that fails too, the
     /// commitment may predate this tick, so reveal with the deterministic salt.
     async fn on_dispute(&self, task_id: U256, epoch: u32, our_digest: B256) -> Result<Outcome> {
+        // C3 companion: never file a dispute from a nondeterministic backend.
+        if !matches!(self.cfg.fhe.backend, crate::config::FheBackend::Reference) {
+            debug!(task = %task_id, epoch, "tfhe backend: dispute filing disabled (nondeterministic digests)");
+            return Ok(Outcome::Done);
+        }
         let me = self.client.operator();
         let task = self.client.task(task_id).await?;
         let ours = self.client.commit_of(task_id, epoch, me).await?;

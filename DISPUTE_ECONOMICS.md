@@ -44,3 +44,16 @@ survive terminality, random challenger selection, challenge windows. Each is a
 product decision with simulations attached — not a patch. Until then: griefing
 is an accepted, priced residual (F-04), and high-`reexecutionBps` tasks should
 expect rings.
+
+## Contributor weight (rows are self-declared)
+
+`weight = rows × liveness` prices declared rows, not proven bytes — Groth16 is
+not verified on-chain. Deterrence layers, in order of strength:
+
+1. `setContributionBondPerRow`: each claimed row locks `perRow` base units
+   (returned unless slashed). Lying about 100k rows locks 100k× the rate.
+2. `setWeightByBond` (secure mode): weight ignores `rows` entirely
+   (`effectiveRows = 1`, liveness only). No gain from inflating the claim.
+3. `slashContributionBond` (buyer/manager/owner, attested): burns the bond and
+   zeroes the weight share. Off-chain verification (DA bytes vs claim) is the
+   buyer's duty before slashing; the chain enforces custody, not truth.

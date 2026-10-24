@@ -443,6 +443,17 @@ impl OrchestratorClient {
             .map_err(Error::alloy)
     }
 
+    /// M5: pinned consensus hyperparams (scale, lrQ16, l2Q16, minibatch, seed).
+    /// All-zero scale = unset (legacy task, use node config with a warning).
+    pub async fn epoch_hyperparams(&self, task_id: U256, epoch: u32) -> Result<(u32, u32, u32, u32, u64)> {
+        let c = ICipherTaskView::new(self.cipher_task, self.provider.clone());
+        c.epochHyperparams(task_id, epoch)
+            .call()
+            .await
+            .map_err(Error::alloy)
+            .map(|h| (h._0, h._1, h._2, h._3, h._4))
+    }
+
     /// Contributors paid per settlement call (`CipherTask.SETTLE_PAGE_SIZE`).
     ///
     /// Read rather than hardcoded so a future paging change moves the node with it. The

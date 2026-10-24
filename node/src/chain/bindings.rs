@@ -125,6 +125,8 @@ sol! {
         /// Zero until the first dispute action on the epoch fixes the sortition seed; after
         /// that only drawn members may report.
         function committeeSeed(uint256 taskId, uint32 epoch) external view returns (bytes32);
+        /// M5: pinned consensus hyperparams (all zero = unset, use node config).
+        function epochHyperparams(uint256 taskId, uint32 epoch) external view returns (uint32, uint32, uint32, uint32, uint64);
         function isCommitteeEligible(uint256 taskId, uint32 epoch, address reporter) external view returns (bool);
         /// Contributors paid per settlement call. Read rather than hardcoded so a future
         /// paging change moves the node with it; the worker uses it to recognise the final

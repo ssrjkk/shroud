@@ -53,6 +53,38 @@ library TaskParamsLib {
         if (p.shapeRoot == bytes32(0)) revert ICipherTask.ShapeRootMissing();
     }
 
+    /// @notice On-chain hyperparams per epoch (M5). `scale == 0` = unset (legacy).
+    struct EpochHyper {
+        uint32 scale;
+        uint32 lrQ16;
+        uint32 l2Q16;
+        uint32 minibatch;
+        uint64 seed;
+    }
+
+    /// @notice Pin consensus hyperparams for `epoch` (external so the host stays small).
+    function pinHyper(
+        ICipherTask.Task storage t,
+        mapping(uint256 => mapping(uint32 => EpochHyper)) storage h,
+        uint256 taskId,
+        address caller,
+        uint32 epoch,
+        uint32 scale,
+        uint32 lrQ16,
+        uint32 l2Q16,
+        uint32 minibatch,
+        uint64 seed
+    ) external {
+        if (caller != t.params.buyer && caller != t.params.updateManager) {
+            revert ICipherTask.NotUpdateManagerOrOwner(taskId, caller);
+        }
+        if (epoch != t.nextEpoch) revert ICipherTask.EpochOutOfOrder(taskId, epoch);
+        if (scale == 0 || minibatch == 0 || lrQ16 == 0) {
+            revert ICipherTask.InvalidTaskStatus(taskId, t.status, ICipherTask.TaskStatus.EpochOpen);
+        }
+        h[taskId][epoch] = EpochHyper(scale, lrQ16, l2Q16, minibatch, seed);
+    }
+
     /// @notice The three payout legs must partition the budget exactly.
     /// @dev `external`, not `internal`: the compiler inlines an internal library call into the
     ///      caller, which would leave the bytecode exactly where it was. Measured on this pair, an
@@ -63,5 +95,32 @@ library TaskParamsLib {
         if (uint256(user) + uint256(node) + uint256(committee) != BPS) {
             revert ICipherTask.InvalidShares(user, node, committee);
         }
+    }
+
+    /// @notice Initialise a fresh `Task` slot (external so the host stays small).
+    /// @dev The 11-field struct assignment is ~200 bytes inline; a DELEGATECALL site is
+    ///      ~30 bytes with the body in the library. `pm` already has updateManager
+    ///      substituted by the caller.
+    function initTask(
+        ICipherTask.Task storage t,
+        ICipherTask.TaskParams memory pm,
+        uint128 escrowed,
+        bytes32 emptyRoot
+    ) external {
+        t.params = pm;
+        t.budget = escrowed;
+        t.locked = 0;
+        t.createdAt = uint64(block.timestamp);
+        t.windowEnd = uint64(block.timestamp) + pm.contributionWindow;
+        t.sealAt = 0;
+        t.epochDeadline = 0;
+        t.contributors = 0;
+        t.shards = 0;
+        t.nextEpoch = 0;
+        t.ctRoot = emptyRoot;
+        t.lastWeightsCid = bytes32(0);
+        t.lastWeightsDigest = bytes32(0);
+        t.status = ICipherTask.TaskStatus.Opening;
+        t.isSealed = false;
     }
 }

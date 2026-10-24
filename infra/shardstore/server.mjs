@@ -65,6 +65,13 @@ if (!Number.isFinite(MAX_TOTAL_BYTES) || MAX_TOTAL_BYTES < 1) {
   process.exit(1);
 }
 const AUTH_TOKEN = process.env.AUTH_TOKEN || null;
+if (AUTH_TOKEN === null && process.env.ALLOW_UNAUTHENTICATED !== "1") {
+  console.error("shardstore: AUTH_TOKEN is empty — refusing fail-open writes. Set AUTH_TOKEN or ALLOW_UNAUTHENTICATED=1 for dev.");
+  process.exit(1);
+}
+if (AUTH_TOKEN !== null && AUTH_TOKEN.length < 16) {
+  console.warn("shardstore: AUTH_TOKEN is shorter than 16 chars — use a strong random token");
+}
 const TLS_CERT = process.env.TLS_CERT || null;
 const TLS_KEY = process.env.TLS_KEY || null;
 const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 10_000);
@@ -506,6 +513,11 @@ async function routePut(req, res, url, ip) {
       req.on("aborted", () => { if (!aborted) { aborted = true; reject(new Error("client aborted")); } });
     }).finally(release);
 
+    // L-6: empty PUTs pollute the LRU catalogue (4096 empties evict legit shards).
+    if (payload.length === 0) {
+      metrics.incr("route:put:400");
+      return { status: 400, body: { error: "empty object" } };
+    }
     // Compute bodyHash alongside the CID: both are derived from the same payload.
     const cid = keccak(payload);
     const bodyHash = cid; // same keccak computation, stored for replay verification
@@ -920,7 +932,7 @@ server.listen(PORT, HOST, () => {
   const port = typeof bound === "object" && bound !== null ? bound.port : PORT;
   console.log(`shardstore listening on ${HOST}:${port}`);
   if (!DATA_DIR) console.log("shardstore: DATA_DIR unset, objects are memory-only and lost on restart");
-  if (AUTH_TOKEN === null) console.log("shardstore: AUTH_TOKEN unset, writes are unauthenticated");
+  if (AUTH_TOKEN === null) console.log("shardstore: ALLOW_UNAUTHENTICATED=1, writes are unauthenticated (dev only)");
   if (HOST === "0.0.0.0" && AUTH_TOKEN === null) {
     console.log("shardstore: WARNING bound to all interfaces with no authentication");
   }

@@ -11,7 +11,14 @@ PORT=8080 DATA_DIR=./data AUTH_TOKEN="$(openssl rand -hex 32)" node infra/shards
 ```
 
 - Writes require `AUTH_TOKEN` (reads stay open by design); without it the server
-  prints a warning and accepts anonymous PUTs — never do that past localhost.
+  refuses to start unless `ALLOW_UNAUTHENTICATED=1` (dev only, localhost).
+  Minimum 16 chars; generate with `openssl rand -hex 32`.
+- Rotating `AUTH_TOKEN`: set the new value, restart the process (no hot-reload by
+  design — a live secret swap would split the fleet mid-upload). Clients retry with
+  backoff; in-flight PUTs fail closed with 401 and must be retried.
+- Empty objects are rejected (400): they would otherwise evict legit shards via LRU.
+- `NOT_FOUND`/`DUP_PAYLOAD` never count as hard abuse signals (retries are normal);
+  only `AUTH_FAIL`/`RATE_HIT`/`RANGE_ABUSE` can trigger the honeypot shadowban.
 - Caps: `MAX_OBJECT_BYTES` (default 64 MiB), `MAX_OBJECTS` (default 4096, LRU).
   Over-cap PUTs get 413 mid-stream; full in-flight budget sheds with 503 + `Retry-After`.
 - TLS terminates with `TLS_CERT`/`TLS_KEY` (both or neither); behind a proxy set

@@ -65,8 +65,8 @@ pub struct Cli {
     pub start_block: Option<u64>,
 
     /// gRPC listen address for the peer mesh.
-    #[arg(long, env = "CM_MESH_LISTEN", default_value = "0.0.0.0:7331")]
-    pub mesh_listen: SocketAddr,
+    #[arg(long, env = "CM_MESH_LISTEN")]
+    pub mesh_listen: Option<SocketAddr>,
 
     /// Comma-separated seed peers.
     #[arg(long, env = "CM_MESH_PEERS", value_delimiter = ',')]
@@ -816,7 +816,8 @@ struct NodeOverride {
 
 #[derive(Debug, Serialize)]
 struct MeshOverride {
-    listen: SocketAddr,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    listen: Option<SocketAddr>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     peers: Vec<String>,
 }

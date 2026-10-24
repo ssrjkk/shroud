@@ -48,6 +48,7 @@ contract ProofVerifier is IProofVerifier {
     error NotOwner(address caller);
     error ZeroAddress();
     error NoPendingRotation();
+    error RotationAlreadyPending(address pending);
     error TooEarly(uint64 executableAt);
 
     constructor(address starkVerifier_, uint256 maxProofBytes_, bytes32 protocolDomain_) {
@@ -126,6 +127,10 @@ contract ProofVerifier is IProofVerifier {
     ///      should not have had different strength.
     function proposeRotation(address to) external onlyOwner {
         if (to == address(0)) revert ZeroAddress();
+        // M2 fix: never overwrite a live rotation. Without this the owner can show
+        // observers candidate A, then swap to B just before execution — the same class
+        // already guarded everywhere else (NetworkParams, vault, treasury).
+        if (pendingVerifier != address(0)) revert RotationAlreadyPending(pendingVerifier);
         pendingVerifier = to;
         pendingVerifierAt = uint64(block.timestamp + ROTATION_TIMELOCK);
         emit VerifierRotationProposed(starkVerifier, to, pendingVerifierAt);

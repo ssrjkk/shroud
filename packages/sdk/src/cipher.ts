@@ -22,10 +22,14 @@ import { domainSeparator, encodeSliceSignature, popDigest, redeemDigest, signRed
  * needed, and a receipt without the event is an error rather than a guess.
  */
 export function taskIdFromReceipt(
-  logs: readonly { topics: readonly string[]; data: string }[],
-  iface: Interface
+  logs: readonly { topics: readonly string[]; data: string; address?: string }[],
+  iface: Interface,
+  emitter?: string
 ): bigint | undefined {
   for (const log of logs) {
+    // Emitter check: a foreign contract with the same TaskCreated topic in the same
+    // receipt must not inject a foreign taskId. Ethers logs carry `address`.
+    if (emitter && log.address && log.address.toLowerCase() !== emitter.toLowerCase()) continue;
     // `parseLog` returns null for a topic0 this ABI does not declare, which is every log from a
     // contract the task manager called into — the DA, the verifier, the vault.
     const parsed = iface.parseLog(log);
@@ -62,7 +66,7 @@ export class CipherTaskClient {
     const tx = await this.contract.createTask(budget, params);
     const receipt = await tx.wait();
     if (!receipt) throw new Error("no receipt for createTask");
-    const taskId = taskIdFromReceipt(receipt.logs, this.contract.interface);
+    const taskId = taskIdFromReceipt(receipt.logs, this.contract.interface, await this.contract.getAddress());
     if (taskId === undefined) {
       throw new Error(
         `createTask was mined in ${tx.hash} but its receipt carries no TaskCreated event; ` +
@@ -275,6 +279,38 @@ export class CipherTaskClient {
   /** Bond currently posted by `contributor` on `taskId`. */
   async contributionBondOf(taskId: bigint, contributor: string): Promise<bigint> {
     return BigInt(await this.contract.contributionBondOf(taskId, contributor));
+  }
+
+  /** Per-row bond surcharge for `taskId` (0 = flat only). */
+  async contributionBondPerRow(taskId: bigint): Promise<bigint> {
+    return BigInt(await this.contract.contributionBondPerRow(taskId));
+  }
+
+  /** Secure weight mode for `taskId` (true = weight ignores claimed rows). */
+  async weightByBond(taskId: bigint): Promise<boolean> {
+    return Boolean(await this.contract.weightByBond(taskId));
+  }
+
+  /** Pin consensus hyperparams for `epoch` (buyer/updateManager, live epoch only). */
+  async pinEpochHyperparams(
+    taskId: bigint,
+    epoch: number,
+    scale: number,
+    lrQ16: number,
+    l2Q16: number,
+    minibatch: number,
+    seed: bigint
+  ): Promise<string> {
+    const tx = await this.contract.pinEpochHyperparams(taskId, epoch, scale, lrQ16, l2Q16, minibatch, seed);
+    const receipt = await tx.wait();
+    if (!receipt) throw new Error("no receipt for pinEpochHyperparams");
+    return tx.hash;
+  }
+
+  /** Pinned hyperparams for `epoch` (all zero = unset, node config applies). */
+  async epochHyperparams(taskId: bigint, epoch: number): Promise<{ scale: number; lrQ16: number; l2Q16: number; minibatch: number; seed: bigint }> {
+    const h = await this.contract.epochHyperparams(taskId, epoch);
+    return { scale: Number(h[0]), lrQ16: Number(h[1]), l2Q16: Number(h[2]), minibatch: Number(h[3]), seed: BigInt(h[4]) };
   }
 
   /** The ERC-20 token the orchestrator pulls contribution bonds (and escrow) in. */

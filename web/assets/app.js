@@ -83,11 +83,22 @@
       if (!burger) return;
       var open = nav && nav.classList.contains("open");
       burger.textContent = open ? tr("close") : tr("menu");
+      burger.setAttribute("aria-expanded", open ? "true" : "false");
     }
     if (burger && nav) {
+      if (!nav.id) nav.id = "sitenav";
+      burger.setAttribute("aria-controls", nav.id);
+      burger.setAttribute("aria-expanded", "false");
       burger.addEventListener("click", function () {
         nav.classList.toggle("open");
         syncBurger();
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && nav.classList.contains("open")) {
+          nav.classList.remove("open");
+          syncBurger();
+          burger.focus();
+        }
       });
       document.addEventListener("shroud:lang", syncBurger);
     }
@@ -259,6 +270,12 @@
         b.textContent = tr("ui.copy");
         b.setAttribute("data-copied", tr("ui.copied"));
         b.setAttribute("data-copy", p.textContent);
+      });
+      // License page button is not inside .prewrap — keep its labels in sync too.
+      Array.prototype.forEach.call(document.querySelectorAll(".copybtn[data-copy]"), function (b) {
+        if (b.closest(".prewrap")) return;
+        b.textContent = tr("ui.copy");
+        b.setAttribute("data-copied", tr("ui.copied"));
       });
       if (tocEl) tocEl.setAttribute("aria-label", tr("ui.toc"));
       toTop.title = tr("ui.top");

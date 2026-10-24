@@ -81,6 +81,75 @@ describe("Hardening", () => {
   }
 
   describe("contribution bonds (F-01)", () => {
+    it("per-row surcharge and secure weight mode are buyer-gated and capped", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, outsider } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+
+      await expect(task.connect(outsider).setContributionBondPerRow(id, 100n)).to.be.revertedWithCustomError(
+        task,
+        "NotUpdateManagerOrOwner"
+      );
+      await expect(task.connect(buyer).setContributionBondPerRow(id, 10_001n)).to.be.revertedWithCustomError(
+        task,
+        "BondRequirementInvalid"
+      );
+      await expect(task.connect(buyer).setContributionBondPerRow(id, 100n)).to.emit(
+        task,
+        "ContributionBondRequirementSet"
+      );
+      expect(await task.contributionBondPerRow(id)).to.equal(100n);
+
+      await expect(task.connect(outsider).setWeightByBond(id, true)).to.be.revertedWithCustomError(
+        task,
+        "NotUpdateManagerOrOwner"
+      );
+      await expect(task.connect(buyer).setWeightByBond(id, true)).to.emit(
+        task,
+        "ContributionBondRequirementSet"
+      );
+      expect(await task.weightByBond(id)).to.equal(true);
+
+      // Secure mode: 100k-row claim weighs the same as 1k rows (liveness only).
+      await fx.token.mint(fx.alice.address, 10_000_100n);
+      await fx.token.connect(fx.alice).approve(await task.getAddress(), 10_000_100n);
+      await fx.token.mint(fx.bob.address, 100_100n);
+      await fx.token.connect(fx.bob).approve(await task.getAddress(), 100_100n);
+      await task.connect(fx.alice).submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 100_000);
+      await task.connect(fx.bob).submitContribution(id, bytes32Of(5), bytes32Of(6), proofFor(7), bytes32Of(8), 1_000);
+      const a = await task.contributions(id, fx.alice.address);
+      const b = await task.contributions(id, fx.bob.address);
+      // Secure mode: rows ignored — both weigh ~1*liveness. Liveness decays per block,
+      // so allow 100 units of drift between the two submissions (Q16 scale).
+      expect(a.weightQ16).to.be.closeTo(b.weightQ16, 100);
+      expect(a.weightQ16).to.be.lessThan(100_000n);
+    });
+
+    it("hyperparams pinning is buyer-gated and epoch-scoped", async () => {
+      const fx = await deployFixture();
+      const { task, buyer, outsider } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 2 }));
+      const id = await task.taskCount();
+
+      await expect(
+        task.connect(outsider).pinEpochHyperparams(id, 0, 10000, 3277, 0, 8, 42)
+      ).to.be.revertedWithCustomError(task, "NotUpdateManagerOrOwner");
+      await expect(
+        task.connect(buyer).pinEpochHyperparams(id, 1, 10000, 3277, 0, 8, 42)
+      ).to.be.revertedWithCustomError(task, "EpochOutOfOrder");
+      await expect(
+        task.connect(buyer).pinEpochHyperparams(id, 0, 0, 3277, 0, 8, 42)
+      ).to.be.revertedWithCustomError(task, "InvalidTaskStatus");
+      await task.connect(buyer).pinEpochHyperparams(id, 0, 10000, 3277, 0, 8, 42);
+      const h = await task.epochHyperparams(id, 0);
+      expect(h[0]).to.equal(10000);
+      expect(h[1]).to.equal(3277);
+      expect(h[4]).to.equal(42);
+      const unset = await task.epochHyperparams(id, 1);
+      expect(unset[0]).to.equal(0);
+    });
+
     it("only the buyer/manager sets the requirement, capped and before seal", async () => {
       const fx = await deployFixture();
       const { task, buyer, outsider } = fx;
