@@ -860,9 +860,7 @@ reporters per epoch in expectation no matter how many Sybils register (each iden
 past the auto-pass threshold only dilutes the others), so a realistic worst case is
 ~8 channels × 365 epochs ≈ 2,900 — inside the skip-path limit as long as winners and
 reporters actually claim, and past the close-path one only if hundreds of max-disputed
-epochs all go unclaimed to maturity. The fix that would remove the bound instead of
-leaning on it — a live-channel list or a paged sweep — does not fit the 285-byte
-deployment headroom, so it stays recorded here as future work. (The 30M bound assumes an Ethereum-mainnet block; an L3 sequencer with a
+epochs all go unclaimed to maturity. The bound is now structural instead of statistical: unwind/reclaim sweep exactly one SWEEP_PAGE (1500) and revert SweepIncomplete on a leftover queue instead of bricking on an unbounded loop, and the vault paged sweep is permissionless — anyone can grind the queue down, page by page, then retry. Sweeping only closes matured channels, so grinding moves nothing anyone can still redeem. (The 30M bound assumes an Ethereum-mainnet block; an L3 sequencer with a
 lower limit bricks proportionally earlier — the per-channel numbers above are the portable
 part, the block count is not.)
 Regression: `packages/contracts/test/SettleScaling.spec.ts` — *"pins the per-channel

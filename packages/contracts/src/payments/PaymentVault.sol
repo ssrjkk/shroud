@@ -501,7 +501,12 @@ contract PaymentVault is ReentrancyGuard, Pausable {
     /// @dev Settlement pages call this instead of the full sweep: O(limit) per call,
     ///      progress persists in `sweepCursor`, `done` tells the caller the pass finished.
     ///      `limit == 0` means "no bound" (single-pass, legacy behaviour for small sets).
-    function sweepTaskChannelsPaged(uint256 taskId, uint256 limit) external onlyTaskManager whenNotPaused nonReentrant returns (uint128 recovered, bool done) {
+    /// @dev Permissionless by design (F-63): sweeping only closes *matured* channels and
+    ///      credits the task sub-balance, so no caller can steal or redirect anything — it
+    ///      merely grinds down a queue that `abort`/`reclaimUnspentEpochs` refuse to walk
+    ///      unboundedly (they revert `SweepIncomplete` on a leftover instead of bricking
+    ///      on OOG). Anyone may call this first, as many times as it takes, then retry them.
+    function sweepTaskChannelsPaged(uint256 taskId, uint256 limit) external whenNotPaused nonReentrant returns (uint128 recovered, bool done) {
         uint256[] storage ids = taskChannels[taskId];
         uint256 n = ids.length;
         uint256 cur = sweepCursor[taskId];

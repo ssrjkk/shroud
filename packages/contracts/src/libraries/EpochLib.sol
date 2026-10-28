@@ -271,6 +271,12 @@ library UnwindLib {
     ) external {
         if (settlement.settled[taskId]) revert ICipherTask.AlreadySettled(taskId);
         if (settlement.started[taskId]) revert ICipherTask.SettlementBegun(taskId);
+        // H3: unwinding in EpochCommitting would zero reporters. Both callers route
+        // through here (`abort` and `emergencyUnwind`), so one guard covers both —
+        // and it keeps the check out of the size-constrained host contract.
+        if (t.status == ICipherTask.TaskStatus.EpochCommitting) {
+            revert ICipherTask.InvalidTaskStatus(taskId, t.status, ICipherTask.TaskStatus.EpochSettled);
+        }
         // Every epoch ran: contributors and the committee are owed their pools via
         // `settle`, so `abort` must not refund the whole escrow to the buyer.
         if (t.nextEpoch >= t.params.epochs) revert ICipherTask.SettleReady(taskId);
@@ -278,7 +284,14 @@ library UnwindLib {
         address worker = winners[taskId][t.nextEpoch];
         uint128 keep = (t.locked > 0 && worker != address(0)) ? (t.locked * _ABORT_LOCK_BPS) / TaskParamsLib.BPS : 0;
 
-        vault.sweepTaskChannels(taskId);
+        // Bounded sweep (M6/F-63): the unbounded pass bricks abort on tasks with more
+        // open channels than fit one block. One page per call; a leftover queue reverts
+        // so the caller grinds it down with permissionless vault pages first
+        // (`PaymentVault.sweepTaskChannelsPaged` has no caller gate — only matured
+        // channels close, so grinding moves nothing anyone can still redeem)
+        // instead of burning the abort transaction on an OOG.
+        (, bool swept) = vault.sweepTaskChannelsPaged(taskId, SettlementLib.SWEEP_PAGE);
+        if (!swept) revert ICipherTask.SweepIncomplete(taskId);
         uint256 available = vault.taskBalance(taskId);
         t.locked = 0;
 

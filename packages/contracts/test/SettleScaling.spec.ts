@@ -5,7 +5,7 @@ import { ethers } from "hardhat";
 
 import { CipherTask } from "../typechain-types";
 import { DecryptionGate, MockBLS, MockStarkVerifier, PaymentVault, TestToken } from "../typechain-types";
-import { bytes32Of, externalUint64, matureRewardWindows, params, proofRef } from "./helpers";
+import { bytes32Of, externalUint64, matureRewardWindows, params, proofFor, proofRef } from "./helpers";
 import { deployLinked } from "../scripts/libraries";
 
 /**
@@ -178,6 +178,99 @@ describe("settlement scalability", () => {
     console.log(`      worst case: ${worstChannels} channels x ${perSkip} = ${worstSweep} gas`);
     expect(worstSweep).to.be.lessThan(BLOCK_GAS_LIMIT);
     void buyer;
+  });
+
+  it("permissionless paged sweep grinds a matured queue in bounded pages", async () => {
+    // F-63 follow-up: `abort`/`reclaim` sweep exactly one SWEEP_PAGE and revert
+    // `SweepIncomplete` on a leftover queue instead of bricking on an unbounded loop.
+    // That only works if the leftover is grindable by anyone, a page at a time —
+    // this pins the grinding primitive on the vault directly (no caller gate: only
+    // matured channels close, so grinding moves nothing anyone can still redeem).
+    const [owner, buyer, n1, n2, n3, n4, alice, outsider, treasury] = await ethers.getSigners();
+    const token: TestToken = await ethers.deployContract("TestToken");
+    const vault: PaymentVault = await ethers.deployContract("PaymentVault", [await token.getAddress()]);
+    const verifier: MockStarkVerifier = await ethers.deployContract("MockStarkVerifier", [48_576]);
+    const bls: MockBLS = await ethers.deployContract("MockBLS");
+    const gate: DecryptionGate = await ethers.deployContract("DecryptionGate", [
+      await bls.getAddress(),
+      bytes32Of("bls-agg"),
+      1,
+    ]);
+    const task: CipherTask = await deployLinked("CipherTask", [
+      await token.getAddress(),
+      await vault.getAddress(),
+      await verifier.getAddress(),
+      await gate.getAddress(),
+      treasury.address,
+      false,
+    ]);
+    await vault.setTaskManager(await task.getAddress());
+    await gate.setCipherTask(await task.getAddress());
+    await gate.initialize(owner.address, [owner.address]);
+    const budget = 10_000_000_000_000n;
+    await token.mint(buyer.address, budget);
+    await token.connect(buyer).approve(await vault.getAddress(), ethers.MaxUint256);
+    const bond = await vault.REGISTRATION_BOND();
+    const nodes = [n1, n2, n3, n4];
+    for (let i = 0; i < nodes.length; i++) {
+      await token.mint(nodes[i].address, bond);
+      await token.connect(nodes[i]).approve(await vault.getAddress(), ethers.MaxUint256);
+    }
+
+    await task.connect(buyer).createTask(budget, params(buyer.address, { minContributors: 1, epochs: 1 }));
+    const id = await task.taskCount();
+    await task
+      .connect(alice)
+      .submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 1_000);
+    await task.connect(buyer).sealTask(id);
+    for (let i = 0; i < nodes.length; i++) {
+      await task.connect(nodes[i]).registerNode(id, bytes32Of(9000 + i));
+    }
+    const st = await externalUint64(await task.getAddress(), buyer.address, 0n);
+    await task.connect(buyer).openEpoch(id, bytes32Of(101), bytes32Of(102), st.handle, st.proof);
+    // Winner first (first verified commit keeps the seat), then three divergent claims.
+    const digests = [bytes32Of("claim"), bytes32Of("d2"), bytes32Of("d3"), bytes32Of("d4")];
+    for (let i = 0; i < nodes.length; i++) {
+      await task
+        .connect(nodes[i])
+        .commitEpoch(id, 0, proofRef(20 + i), bytes32Of(301), bytes32Of(401), bytes32Of(501), digests[i]);
+    }
+    for (let i = 1; i < nodes.length; i++) {
+      const salt = bytes32Of(`salt-${i}`);
+      const commitment = ethers.keccak256(
+        ethers.AbiCoder.defaultAbiCoder().encode(
+          ["bytes32", "bytes32", "address"],
+          [digests[i], salt, nodes[i].address]
+        )
+      );
+      await task.connect(nodes[i]).commitDispute(id, 0, commitment);
+      await task.connect(nodes[i]).reportDisputeWithSalt(id, 0, digests[i], salt);
+    }
+    await task.finalizeEpoch(id, 0);
+    expect(await vault.openChannelCount(id)).to.equal(3n);
+    await matureRewardWindows();
+
+    // Permissionless: an outsider with no stake in the task can grind the queue
+    // through the vault directly — sweeping only closes matured channels, so no
+    // caller gate is needed.
+    const [, d1] = await vault.connect(outsider).sweepTaskChannelsPaged.staticCall(id, 1);
+    expect(d1).to.equal(false);
+    await vault.connect(outsider).sweepTaskChannelsPaged(id, 1);
+    expect(await vault.openChannelCount(id)).to.equal(2n);
+    const [, d2] = await vault.connect(outsider).sweepTaskChannelsPaged.staticCall(id, 1);
+    expect(d2).to.equal(false);
+    await vault.connect(outsider).sweepTaskChannelsPaged(id, 1);
+    expect(await vault.openChannelCount(id)).to.equal(1n);
+    const [recovered, done] = await vault.connect(outsider).sweepTaskChannelsPaged.staticCall(id, 100);
+    expect(done).to.equal(true);
+    expect(recovered).to.be.greaterThan(0n);
+    await vault.connect(outsider).sweepTaskChannelsPaged(id, 100);
+    expect(await vault.openChannelCount(id)).to.equal(0n);
+    expect(await vault.sweepCursor(id)).to.equal(0n);
+    // Idempotent once drained: nothing left to sweep, still done.
+    const [recoveredAgain, doneAgain] = await vault.connect(outsider).sweepTaskChannelsPaged.staticCall(id, 100);
+    expect(doneAgain).to.equal(true);
+    expect(recoveredAgain).to.equal(0n);
   });
 
   it("pays the whole contributor pool across pages exactly once", async () => {

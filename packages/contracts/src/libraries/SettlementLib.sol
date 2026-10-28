@@ -290,7 +290,11 @@ library SettlementLib {
     ///      lock, every epoch accounted for, settlement not begun) stay with the host.
     function reclaim(PaymentVault vault, uint256 taskId, ICipherTask.Task storage t) external returns (uint128 amount) {
         // Un-redeemed reward locks return to the sub-balance before the refund is computed.
-        vault.sweepTaskChannels(taskId);
+        // Bounded like the unwind path above (M6/F-63): one page per call, grind the rest
+        // with permissionless vault pages — `sweepTaskChannelsPaged` needs no caller
+        // gate, and only matured channels close.
+        (, bool swept) = vault.sweepTaskChannelsPaged(taskId, SWEEP_PAGE);
+        if (!swept) revert ICipherTask.SweepIncomplete(taskId);
 
         uint256 available = vault.taskBalance(taskId);
         if (available == 0) return 0;

@@ -6,6 +6,10 @@ first tagged release.
 
 ## Unreleased
 
+### Contracts: abort/reclaim can no longer brick on channel count (F-63)
+
+- `UnwindLib.unwind` and `SettlementLib.reclaim` swept every channel in one unbounded loop: past a few thousand open channels the call outgrows the block and the task (plus its escrow) bricks with no recourse — the reporter quorum exists precisely to multiply channels. Both now sweep exactly one SWEEP_PAGE (1500) and revert `SweepIncomplete` on a leftover queue, and `PaymentVault.sweepTaskChannelsPaged` lost its `onlyTaskManager` gate (sweeping only closes matured channels, so no caller can steal or redirect anything): anyone grinds the queue down page by page, then retries. Pinned by a 3-reporter quorum test that sweeps across page boundaries. Host bytecode actually shrank (24,246 bytes, 330 slack).
+
 ### Bot: owner-only read-only /admin panel
 
 - New `/admin` command for the deployer id (`TELEGRAM_OWNER_ID`, default

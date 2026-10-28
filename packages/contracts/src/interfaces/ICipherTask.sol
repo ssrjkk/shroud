@@ -256,6 +256,11 @@ interface ICipherTask {
     ///      redeemed. Paying the committee/buyer legs against that incomplete balance would
     ///      permanently short them (F-22): wait for the window, then settle again.
     error ChannelsImmature(uint256 taskId);
+    /// @dev The channel queue did not fit one bounded sweep page: grind it down with
+    ///      permissionless `PaymentVault.sweepTaskChannelsPaged` first, then retry. Reverting here instead
+    ///      of looping unboundedly is what keeps abort/reclaim callable no matter how
+    ///      many channels a task accumulated (F-63).
+    error SweepIncomplete(uint256 taskId);
     error NotTaskParty(uint256 taskId, address account);
     error ZeroAddress();
     /// @dev A dispute commitment is already open for this reporter: it must be revealed with

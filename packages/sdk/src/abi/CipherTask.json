@@ -1033,6 +1033,17 @@
         "type": "uint256"
       }
     ],
+    "name": "SweepIncomplete",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
     "name": "TaskNotStuck",
     "type": "error"
   },
