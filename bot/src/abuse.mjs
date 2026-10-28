@@ -21,7 +21,7 @@ export const COMMAND_COST = Object.freeze({
   pool: 15, // ~12 eth_call + taskCount + сборка: самая тяжёлая команда
   task: 5,  // task + commits(по контрибьюторам) + winner + quorum
   status: 4, // chainId + blockNumber + networkParams + rotation
-  limits: 1, help: 1,
+  limits: 1, help: 1, admin: 3, // chainId + taskCount: /status-sized work, owner only
   watch: 1, unwatch: 1, watchlist: 1, alerts: 1,
   menu: 1, start: 1, how: 1, protocol: 1, role: 1, settings: 1,
   pro: 1, simple: 1, lang: 1,

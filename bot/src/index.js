@@ -18,7 +18,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 import { writeAtomic } from "./atomic-write.js";
 
-import { loadConfig, configuredContracts, ConfigError, ROOT } from "./config.js";
+import { loadConfig, configuredContracts, isOwnerId, ConfigError, ROOT } from "./config.js";
 import { TelegramBot } from "./telegram.js";
 import { ChatAbuseGuard, loadAbuseConfig } from "./abuse.mjs";
 import { ChainReader, makeInterfaces, poolPage } from "./chain.js";
@@ -43,6 +43,7 @@ import {
   renderProtocol,
   renderSettings,
   renderAlert,
+  renderAdmin,
   htmlEscape,
 } from "./format.js";
 import {
@@ -95,6 +96,7 @@ const COMMANDS = [
   { command: "watchlist", description: "tasks this chat watches" },
   { command: "alerts", description: "per-chat alert flags" },
   { command: "limits", description: "what this deployment does not protect against" },
+  { command: "admin", description: "owner-only deployment diagnostics" },
   { command: "help", description: "this list" },
 ];
 
@@ -334,6 +336,7 @@ const ALIAS_GROUPS = {
   watchlist: ["watchlist", "вотчлист", "подписки"],
   alerts: ["alerts", "алерты", "уведомления"],
   limits: ["limits", "лимиты", "честность"],
+  admin: ["admin", "админ", "админка"],
   help: ["help", "помощь", "хелп"],
 };
 
@@ -631,11 +634,59 @@ export function createHandlers(chain, config, ops = {}) {
     },
     async help(args, ctx = {}) {
       const { lang, mode } = prefsOf(ctx);
-      return { text: renderHelp(lang), markup: hubLinkKeyboard(lang, mode, "help") };
+      // The owner panel is advertised only to its audience of one: listing
+      // /admin to every chat would teach scanners exactly which command to
+      // hammer (it denies them, but why hand out the address).
+      const extra = isOwnerId(config, ctx.chatId)
+        ? `\n<code>/admin</code>  ${t(lang, "help.admin")}`
+        : "";
+      return { text: renderHelp(lang) + extra, markup: hubLinkKeyboard(lang, mode, "help") };
     },
     async limits(args, ctx = {}) {
       const { lang, mode } = prefsOf(ctx);
       return { text: renderLimits(lang), markup: hubLinkKeyboard(lang, mode, "lim") };
+    },
+    async admin(args, ctx = {}) {
+      const { lang, mode } = prefsOf(ctx);
+      // Owner gate first, before any read: a non-owner learns nothing — not
+      // even whether the chain is up — and costs the deployment zero RPC.
+      if (!isOwnerId(config, ctx.chatId)) {
+        return { text: t(lang, "admin.denied"), markup: navRow(lang) };
+      }
+      // Fail-soft reads: the panel reports "unreadable", never throws. A
+      // throwing admin screen during an RPC outage would hide exactly the
+      // outage the owner opened it to see.
+      const [chainId, taskCount] = await Promise.all([
+        typeof chain.chainId === "function" ? chain.chainId().catch(() => null) : Promise.resolve(null),
+        typeof chain.taskCount === "function"
+          ? chain.taskCount().then((n) => n.toString()).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const chats = store ? Object.keys(store.state().chats ?? {}) : null;
+      const watchers =
+        store && chats
+          ? Object.values(store.state().chats).reduce(
+              (n, e) => n + (Array.isArray(e?.watched) ? e.watched.length : 0),
+              0
+            )
+          : null;
+      return {
+        text: renderAdmin(
+          {
+            chainId,
+            taskCount,
+            rpc: config.rpcUrl,
+            contracts: configuredContracts(config),
+            dropped: typeof ops.droppedSends === "function" ? ops.droppedSends() : null,
+            maxWaitMs: typeof ops.queueDelayMs === "function" ? ops.queueDelayMs() : null,
+            chats: chats === null ? null : chats.length,
+            watchers,
+            ownerId: config.ownerId,
+          },
+          lang
+        ),
+        markup: hubLinkKeyboard(lang, mode, "help"),
+      };
     },
     async status(args, ctx = {}) {
       const { lang, mode } = prefsOf(ctx);

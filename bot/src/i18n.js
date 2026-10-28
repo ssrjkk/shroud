@@ -70,6 +70,19 @@ const EN = {
     "No keys, no bond, no node. Subscribe and read: /watch &lt;id&gt; narrows task-scoped alerts to one task (empty watchlist means everything), /alerts toggles mismatch / disputes / rotations / treasury per chat.\n\n" +
     "The two alerts that matter most: a commit mismatch on an epoch (somebody's executor disagrees with the claim) and any rotation proposal (keys or treasury) — the proposal is the only moment anyone can still say no.",
 
+  // --- /admin (owner only, read-only diagnostics) ---------------------------
+  "admin.t": "Admin — deployment diagnostics",
+  "admin.denied": "owner only.",
+  "admin.rpc": "RPC",
+  "admin.chain": "chain",
+  "admin.contracts": "Contracts",
+  "admin.queue": "Send queue",
+  "admin.storage": "Chats",
+  "admin.owner": "Owner",
+  "admin.unreadable": "unreadable",
+  "admin.unconfigured": "not configured",
+  "help.admin": "owner-only deployment diagnostics (queue, config, watchers)",
+
   // --- /help ------------------------------------------------------------------
   "help.t": "Shroud ops bot",
   "help.m1": "plain words, key facts first (default for new chats)",
@@ -418,6 +431,19 @@ const RU = {
     "<b>Наблюдатель — алерты без запуска чего-либо.</b>\n\n" +
     "Ни ключей, ни бонда, ни узла. Подписался и читаешь: /watch &lt;id&gt; сужает алерты до одного таска (пустой вотчлист — значит все), /alerts переключает расхождение коммита / споры / ротации / казну под этот чат.\n\n" +
     "Два самых важных алерта: расхождение коммита на эпохе (чей-то исполнитель не согласен с клеймом) и любое предложение ротации (ключей или казны) — предложение единственный момент, когда ещё можно сказать «нет».",
+
+  // --- /admin (только владелец, только чтение) --------------------------------
+  "admin.t": "Админ — диагностика деплоя",
+  "admin.denied": "только для владельца.",
+  "admin.rpc": "RPC",
+  "admin.chain": "цепь",
+  "admin.contracts": "Контракты",
+  "admin.queue": "Очередь отправки",
+  "admin.storage": "Чаты",
+  "admin.owner": "Владелец",
+  "admin.unreadable": "не читается",
+  "admin.unconfigured": "не настроен",
+  "help.admin": "диагностика деплоя, только для владельца (очередь, конфиг, вотчеры)",
 
   // --- /help ----------------------------------------------------------------------
   "help.t": "Shroud ops bot",

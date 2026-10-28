@@ -56,7 +56,8 @@ the bot reports it as not configured instead of alerting on nothing.
 | `/watchlist` | tasks this chat watches — empty means everything |
 | `/alerts` | per-chat alert flags with tap-to-toggle buttons |
 | `/limits` | what this deployment does *not* protect against |
-| `/help` | the list above |
+| `/admin` | owner-only deployment diagnostics (redacted RPC, chain head, contract wiring, queue health, watcher counts) — RU alias `/админ` |
+| `/help` | the list above (`/admin` is listed only to the owner) |
 
 Two dimensions cut across every command: **language** (RU/EN) and **depth**
 (simple/geek). A fresh chat that runs /start gets its client's language and

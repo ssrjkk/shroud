@@ -20,6 +20,7 @@
 
 import { fmtEth, shortAddr, shortId, taskStatusName } from "./chain.js";
 import { t } from "./i18n.js";
+import { redactRpcUrl } from "./redact.js";
 
 const htmlEscape = (s) =>
   String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -507,6 +508,53 @@ export function renderLimits(lang = "en") {
     DIV,
     t(lang, "limits.foot"),
   ].join("\n");
+}
+
+/**
+ * Owner-only deployment diagnostics. Read-only by construction: everything
+ * here is a value the bot already holds (config) or reads for everyone
+ * (/status reads the same chain fields) — the panel only gathers them in one
+ * place, behind the owner gate in the `admin` handler. Secrets never render:
+ * the RPC URL goes through the same redactor as the logs.
+ *
+ * `view` is already-resolved plain values, never a chain handle (same rule as
+ * every other renderer): `{ chainId, taskCount, rpc, contracts, dropped,
+ * maxWaitMs, chats, watchers, ownerId }`. Nulls mean "unreadable right now",
+ * not zero — a queue that dropped nothing and a queue that cannot report are
+ * different facts.
+ */
+export function renderAdmin(view, lang = "en") {
+  const v = view ?? {};
+  const chainLine =
+    v.chainId === null || v.chainId === undefined
+      ? t(lang, "admin.unreadable")
+      : `${v.chainId}` + (v.taskCount === null || v.taskCount === undefined ? "" : ` · ${v.taskCount} tasks`);
+  const queueLine =
+    v.dropped === null || v.dropped === undefined
+      ? t(lang, "admin.unreadable")
+      : `dropped ${v.dropped}` + (v.maxWaitMs === null || v.maxWaitMs === undefined ? "" : ` · max wait ${v.maxWaitMs} ms`);
+  const lines = [
+    header("🛠", t(lang, "admin.t")),
+    DIV,
+    "",
+    `${t(lang, "admin.owner")}  ${mono(String(v.ownerId ?? "—"))}`,
+    `${t(lang, "admin.rpc")}  ${mono(redactRpcUrl(v.rpc ?? ""))}`,
+    `${t(lang, "admin.chain")}  ${mono(chainLine)}`,
+    "",
+    t(lang, "admin.contracts"),
+  ];
+  for (const c of v.contracts ?? []) {
+    lines.push(
+      `  ${mono(c.name)}  ` +
+        (c.configured ? mono(shortAddr(c.address)) : t(lang, "admin.unconfigured"))
+    );
+  }
+  lines.push(
+    "",
+    `${t(lang, "admin.queue")}  ${mono(queueLine)}`,
+    `${t(lang, "admin.storage")}  ${mono(`${v.chats ?? "—"} chats · ${v.watchers ?? "—"} watched`)}`
+  );
+  return lines.join("\n");
 }
 
 export function renderHelp(lang = "en") {

@@ -98,6 +98,30 @@ function address(name, { required: mustBeSet = false } = {}) {
   return normalized;
 }
 
+function optionalOwnerId() {
+  const raw = (process.env.TELEGRAM_OWNER_ID ?? "").trim();
+  // The default is the deployer's own id so a fresh bot answers /admin to its
+  // operator without extra wiring; setting the variable overrides it (multi-
+  // operator deployments), and garbage stops the boot instead of silently
+  // leaving the panel open to nobody — or to everybody.
+  if (!raw) return 397602448;
+  if (!/^-?\d+$/.test(raw)) {
+    throw new ConfigError(
+      `TELEGRAM_OWNER_ID must be a numeric Telegram id, got ${JSON.stringify(raw)}`
+    );
+  }
+  return Number(raw);
+}
+
+/**
+ * Whether this chat is the bot owner (the /admin audience of one).
+ *
+ * Compared numerically: Telegram ids arrive as numbers, and a string
+ * comparison would let "397602448 " or similar near-misses through the gate.
+ */
+export function isOwnerId(config, id) {
+  return typeof id === "number" && id === config?.ownerId;
+}
 /**
  * Numeric Telegram ids only.
  *
@@ -131,6 +155,9 @@ export function loadConfig() {
   const config = {
     telegramToken: required("TELEGRAM_BOT_TOKEN"),
     allowedChatIds: allowed,
+    // Owner of the /admin panel (read-only deployment diagnostics). Defaults
+    // to the deployer; override for shared operation.
+    ownerId: optionalOwnerId(),
 
     rpcUrl: (process.env.RPC_URL ?? "http://127.0.0.1:8545").trim(),
     chainId: optionalInt("CHAIN_ID", 0),
