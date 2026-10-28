@@ -47,7 +47,7 @@ the STARK trace stays in `u32` fields.
 ## 4. Key management
 
 ```
-DKG (n=7 committee, t=4, Pedersen DKG over BLS12-381 / BN254)
+DKG (target n=7 committee, t=4, Pedersen DKG over BLS12-381 / BN254 — devnet runs smaller)
 
   each member i  samples poly f_i(x) = a_i + b_i x + ... + b_{t-1} x^{t-1}
   broadcast commitments  C_j^k = commit_0(f_i(j))  for j in 0..n-1

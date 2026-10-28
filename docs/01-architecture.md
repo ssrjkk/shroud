@@ -50,7 +50,7 @@ a majority report triggers slashing. See `docs/03-proof-of-compute.md`.
 
 ```
                     ┌──────────────────────────────────────────────┐
-   DKG (n=7, t=4)   │  Shroud Network FHE Keypair              │
+   DKG (n=7, t=4 — target; devnet runs a smaller committee) │  Shroud Network FHE Keypair              │
    committee        │                                              │
                     │  s_pub  ── published at /v1/params/network   │
                     │  s      ── f(0), split as shares (i, f(i))    │
@@ -250,10 +250,11 @@ flowchart TB
       ▼                             ▼                 ▼
  ┌────────────────────────────────────┐         ┌──────────────┐
  │ Rust Compute Node                  │         │ Committee     │
- │  ├ shard_store   (range pull)     │         │ partial-dec   │
- │  ├ fhe::engine   (TFHE, no dec.)  │         │ of OUTPUT ct  │
- │  ├ stark::circuit + prover        │         └──────┬───────┘
- │  └ payment::signer (EIP-712)      │                │
+ │  ├ da             (range pull)     │         │ partial-dec   │
+ │  ├ fhe            (reference engine; │         │ of OUTPUT ct  │
+ │  │                tfhe-rs behind prover)        └──────┬───────┘
+ │  ├ chain/*        (watcher, transcript, slices)      │
+ │  └ mesh           (gossip, range serve)              │
  └──────┬─────────────────────────────┘                ▼
         │ commitEpoch{task, e, proof, encWeightsCid}  ┌──────────┐
         └──────────────────────────────────────────▶  │  Buyer   │
@@ -376,7 +377,7 @@ exactness and a tractable ZK trace.
 
 | # | Attack | Countermeasure | Code |
 |---|---|---|---|
-| A1 | User uploads garbage / poison rows to drain escrow | Groth16 membership proof binds `rowCommitment` over the buyer's `shapeRoot`; only the proof digest is kept on chain and re-execution checks it against fetched bytes. Opt-in contribution bond (`setContributionBondRequirement`, capped, slash-to-treasury only, closed after settle) prices spam; slashing is attested, not a fraud proof (F-01) | `submitContribution`, `slashContributionBond` |
+| A1 | User uploads garbage / poison rows to drain escrow | the contributor posts a Groth16 shape proof *digest* alongside a `rowCommitment` over the buyer's `shapeRoot` — but no Groth16 verification exists anywhere on- or off-chain yet, so the digest pins existence, not validity. Deterrence is economic (opt-in per-row bond, secure weight mode, attested slash), not cryptographic (F-01). Opt-in contribution bond (`setContributionBondRequirement`, capped, slash-to-treasury only, closed after settle) prices spam; slashing is attested, not a fraud proof (F-01) | `submitContribution`, `slashContributionBond` |
 | A2 | Node returns a STARK for a different dataset | Public input includes `ctRoot`, `epoch`, `chainId`, `address(this)`; domain-separated transcript | `ProofVerifier`, `proofTranscript` |
 | A3 | Node returns weights fitted on *some other* ciphertext set but not this one | Ordered fold of per-shard digests into `ctRoot` (byte-identical in `node/src/chain/transcript.rs`); the STARK binds the root, full fold re-checked by re-executors | `ctRoot`, dispute quorum |
 | A4 | Node lies about progress to farm micro-payments | Payment channel slices are only signed for epochs already `EPOCH_SETTLED`; contract settles before signing | `PaymentVault` |
@@ -386,7 +387,7 @@ exactness and a tractable ZK trace.
 | A8 | Front-running contribution to harvest the same shard | Contribution is per-address (one shard per address per task) and bound into `ctRoot` in leaf order; a copy from another address is a different leaf with no weight history | `submitContribution` |
 | A9 | Buyer aborts after nodes spent compute | Escrow is locked per-epoch on `openEpoch`; abort keeps a slice of the open lock only for an epoch with a *verified* commit (as a redeemable channel), refunds everything else; unspent node pool reclaimable after the last epoch | `abort`, `reclaimUnspentEpochs` |
 | A10 | DoS via absurd dataset size | `maxContributors`, `maxShards`, `maxCiphertextBytes`, `minRowsPerShard` all bounded at task creation | `TaskParams` validation |
-| A11 | Reorg reverts a settled epoch | Watchers only act on `finalized` blocks; STARK public input includes `chainId`; settlement is idempotent by `(taskId, epoch)` | `watcher.rs: FinalityPolicy` |
+| A11 | Reorg reverts a settled epoch | Watchers only act on `finalized` blocks (confirmation-gated fold with persisted cursor); STARK public input includes `chainId`; settlement is idempotent by `(taskId, epoch)` | `node/src/chain/watcher.rs`, `node/src/state.rs` |
 | A12 | Ciphertext decompression bomb on node | Range-pull with byte budget + streaming digest verification before TFHE parse | `node/src/da.rs` |
 
 ---
@@ -397,7 +398,8 @@ Given `B` = escrowed budget, `E` = epochs, `U` = set of contributors with accept
 contributions, and per-epoch `q` = number of nodes that produced a valid STARK:
 
 ```
-contributorPool = B * userShareBps / 10_000                 userShareBps = 8_000
+contributorPool = B * userShareBps / 10_000                 (devnet convention: userShareBps = 8_000;
+                                                             the code enforces only that the three shares sum to BPS)
 nodePool       = B * nodeShareBps / 10_000                   nodeShareBps = 1_500
 committeePool  = B * committeeShareBps / 10_000              committeeShareBps = 500
 
@@ -423,7 +425,7 @@ is never paid from an incomplete balance. See `libraries/Dividend.sol` and `Sett
 
 ```mermaid
 flowchart LR
-    subgraph peer["peer mesh (gRPC, mTLS, libp2p-style ids)"]
+    subgraph peer["peer mesh (gRPC; mTLS optional, plaintext by default)"]
         A["node-1"] <--> B["node-2"] <--> C["node-3"]
     end
     A --- D["Shim: dispute re-execution<br/>same (taskId, epoch) -> digest"]
@@ -439,9 +441,7 @@ flowchart LR
 
 - **gRPC** carries three things only: `ShardAnnounce`, `ShardRequest(range)`, `EpochDigest`
   (for the dispute quorum). Model weights and STARKs go to the chain/DA, never peer to peer.
-- Shard transport is **additionally encrypted** with a per-shard AEAD key derived from
-  `HKDF(chainId ‖ taskId ‖ shardCid)`; the DA layer is treated as untrusted-by-default for
-  the *transport*, not for the *content* (content integrity comes from `ctRoot`).
+- Shard transport has **no additional encryption today**: the `aead_transport` knob exists but fails closed (`shroud.aead_transport = true` is rejected at load) until a real AEAD transport lands — use mesh mTLS + DA-endpoint TLS instead. Content integrity comes from `ctRoot`, never from the transport.
 
 ---
 

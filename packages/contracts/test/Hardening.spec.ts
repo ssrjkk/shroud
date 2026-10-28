@@ -507,4 +507,42 @@ describe("Hardening", () => {
       ).to.be.revertedWithCustomError(task, "NotUpdateManagerOrOwner");
     });
   });
+
+  describe("unwind guards (H3 parity)", () => {
+    async function committingTask(fx: Fx) {
+      const { task, buyer, node, alice } = fx;
+      await task.connect(buyer).createTask(fx.escrow, params(buyer.address, { minContributors: 1, epochs: 1 }));
+      const id = await task.taskCount();
+      await task.connect(alice).submitContribution(id, bytes32Of(1), bytes32Of(2), proofFor(3), bytes32Of(4), 1_000);
+      await task.connect(buyer).sealTask(id);
+      await task.connect(node).registerNode(id, bytes32Of(4242));
+      const st = await externalUint64(await task.getAddress(), buyer.address, 0n);
+      await task.connect(buyer).openEpoch(id, bytes32Of(101), bytes32Of(102), st.handle, st.proof);
+      await task
+        .connect(node)
+        .commitEpoch(id, 0, proofRef(7), bytes32Of(301), bytes32Of(401), bytes32Of(501), bytes32Of(999));
+      return id;
+    }
+
+    it("abort reverts while the dispute window is live", async () => {
+      const fx = await deployFixture();
+      const id = await committingTask(fx);
+      await expect(fx.task.connect(fx.buyer).abort(id, "0x00000000")).to.be.revertedWithCustomError(
+        fx.task,
+        "InvalidTaskStatus"
+      );
+    });
+
+    it("emergencyUnwind cannot bypass the live-dispute guard either", async () => {
+      const fx = await deployFixture();
+      const id = await committingTask(fx);
+      // Move past the dispute window without finalizing: the old code would have
+      // proceeded to unwind here (deadline + window elapsed), zeroing reporters.
+      await time.increase(3600 + 600 + 1);
+      await expect(fx.task.connect(fx.owner).emergencyUnwind(id)).to.be.revertedWithCustomError(
+        fx.task,
+        "InvalidTaskStatus"
+      );
+    });
+  });
 });

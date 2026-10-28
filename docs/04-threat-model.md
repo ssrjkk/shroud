@@ -45,11 +45,9 @@ Regression: `packages/contracts/test/CipherTask.spec.ts` — *"enforces one shar
 
 ### F-02 — Proof replay across tasks (ADV2) — **Mitigated**
 The STARK transcript (`CipherTask.proofTranscript`) is bound to `chainId`, `address(this)`,
-`taskId`, `epoch`, `ctRoot`, `lastWeightsDigest` and the trace digest itself. `ProofVerifier`
+`taskId`, `epoch`, `ctRoot`, `lastWeightsDigest` and the trace digest itself, plus the committing node (`node`, bound since the H2 fix). `ProofVerifier`
 recomputes that binding in Solidity, so a proof lifted from another task fails binding. The
-committing node's identity is *not* one of the bound values: whoever holds a valid proof for
-these inputs can be its committer, which the dispute protocol has to absorb instead of the
-binding.
+committing node's identity *is* one of the bound values since the H2 fix (`proofTranscript(..., node)`): a proof lifted from another task — or replayed under a different committer — fails the binding. The dispute protocol absorbs divergent digests, not stolen ones.
 Regression: `packages/contracts/test/CipherTask.spec.ts` — *"rejects a proof that is not a STARK, and one whose transcript was already consumed"*.
 
 ### F-03 — Trained-on-wrong-dataset (ADV2) — **Partially mitigated**
@@ -863,7 +861,7 @@ past the auto-pass threshold only dilutes the others), so a realistic worst case
 ~8 channels × 365 epochs ≈ 2,900 — inside the skip-path limit as long as winners and
 reporters actually claim, and past the close-path one only if hundreds of max-disputed
 epochs all go unclaimed to maturity. The fix that would remove the bound instead of
-leaning on it — a live-channel list or a paged sweep — does not fit the 346-byte
+leaning on it — a live-channel list or a paged sweep — does not fit the 285-byte
 deployment headroom, so it stays recorded here as future work. (The 30M bound assumes an Ethereum-mainnet block; an L3 sequencer with a
 lower limit bricks proportionally earlier — the per-channel numbers above are the portable
 part, the block count is not.)

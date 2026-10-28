@@ -246,6 +246,10 @@
     ));
     S.shardBytes = bytes; S.ctDigest = commit; S.cid = cid; S.pin = pin; S.ctRoot = ctRoot;
     S.encScale = S.scale; S.encRowsKey = JSON.stringify(S.rows);
+    // A new shard restarts training: carrying trained lanes or an epoch count
+    // across re-encryption would mix the fresh ctRoot with stale weights in
+    // the next proof (silent digest mismatch against any re-execution).
+    S.prevLanes = zeros(S.features); S.epoch = 0; S.execHyper = null;
     S.leaves = [{ index: 0, cid: cid, ct: pin }];
     S.view.enc = { bytes: bytes.length, commit: commit, cid: cid, pin: pin, ctRoot: ctRoot };
     renderEnc(); renderLedger();
@@ -293,6 +297,10 @@
     S.rows.forEach(function (r) {
       r.forEach(function (v) { flat.push(Math.round(v * S.scale)); });
     });
+    // Snapshot the hyperparams this execution actually ran with: doProof re-reads
+    // the inputs live, and silently binding a digest to never-executed values
+    // would look identical to a verified run.
+    S.execHyper = { lrQ16: h.lrQ16, l2Q16: h.l2Q16, mb: h.mb };
     var res = C.referenceStep({
       features: S.features, scale: S.scale, lrQ16: h.lrQ16, l2Q16: h.l2Q16,
       minibatch: h.mb, prevLanes: S.prevLanes.slice(), shards: [flat]
@@ -312,6 +320,12 @@
     if (!S.epoch) throw new Error(t("lab.m.noepoch"));
     readTaskInputs();
     var h = hyper();
+    // Hyperparams edited after exec would be bound into the digest without ever
+    // running — the same silent mismatch class as the scale/CSV stale guard above.
+    if (S.execHyper !== undefined && S.execHyper !== null &&
+        (S.execHyper.lrQ16 !== h.lrQ16 || S.execHyper.l2Q16 !== h.l2Q16 || S.execHyper.mb !== h.mb)) {
+      throw new Error(t("lab.e.stale"));
+    }
     var taskHex = "0x" + C.hex(C.keccak256Bytes(asciiBytes("demo-task-" + S.taskId))).slice(0, 64);
     var nextD = C.weightsDigest(S.prevLanes);
     var input = {

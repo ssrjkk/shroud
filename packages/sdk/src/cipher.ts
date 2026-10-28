@@ -496,6 +496,12 @@ export class PaymentVaultClient {
     if (node === ethers.ZeroAddress) {
       throw new Error(`channel ${channelId} does not exist (its node is the zero address)`);
     }
+    // One authorised slice per channel (index 0, `consumed` counts up from it): re-reading a
+    // spent channel passes every check below and then reverts on-chain with SliceNotMonotonic.
+    // Fail locally instead of burning gas on a redemption that cannot pay anything.
+    if (BigInt(ch.consumed ?? 0) !== 0n) {
+      throw new Error(`channel ${channelId} is already redeemed (consumed ${String(ch.consumed)}); nothing left to claim`);
+    }
     const me = await this.signerAddress();
     if (me && me.toLowerCase() !== node.toLowerCase()) {
       throw new Error(

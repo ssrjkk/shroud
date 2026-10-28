@@ -191,7 +191,7 @@ know.
 npm test
 ```
 
-174 tests, no bot token and no chain required. They cover the parts that fail
+183 tests, no bot token and no chain required. They cover the parts that fail
 quietly in production:
 
 - HTML escaping of chain-derived values, so on-chain data cannot inject markup

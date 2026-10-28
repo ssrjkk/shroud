@@ -244,12 +244,18 @@ impl Worker {
                         // until the window closes — a transient reorg at attempt 5 must not
                         // become "giving up" and miss the fraud window. These arms self-
                         // terminate (wrong status → Done), so infinite cannot loop forever.
+                        // Settle and ReleaseBond join the infinite set: both self-terminate
+                        // through their gates once done, while five transient RPC failures
+                        // with no re-arming nudge would otherwise strand escrow (Settle)
+                        // or the operator's own bond (ReleaseBond) with no retry left.
                         let max_attempts = if work.is_exit_money()
                             || matches!(
                                 work,
                                 Work::Reexecute { .. }
                                     | Work::FileDispute { .. }
                                     | Work::Finalize { .. }
+                                    | Work::Settle { .. }
+                                    | Work::ReleaseBond { .. }
                             ) {
                             u32::MAX // infinite retry
                         } else {
@@ -736,36 +742,31 @@ impl Worker {
         };
         // M5: prefer on-chain pinned hyperparams; legacy tasks (scale==0) use local config.
         // A config typo must not fork honest nodes into a slash — chain wins, always.
-        let (scale, lr_q16, l2_q16, minibatch, seed) = match self
-            .client
-            .epoch_hyperparams(task_id, epoch)
-            .await
-        {
-            Ok((s, lr, l2, mb, sd)) if s != 0 => (s, lr, l2, mb as usize, sd),
-            Ok(_) => {
-                warn!(
-                    task = %task_id, epoch,
-                    "no on-chain hyperparams pinned; using local fhe.* config (legacy path)"
-                );
-                (
-                    self.cfg.fhe.scale,
-                    self.cfg.fhe.lr_q16,
-                    self.cfg.fhe.l2_q16,
-                    self.cfg.fhe.minibatch,
-                    self.cfg.fhe.seed,
-                )
-            }
-            Err(e) => {
-                warn!(task = %task_id, epoch, error = %e, "hyperparams read failed; using local fhe.* config");
-                (
-                    self.cfg.fhe.scale,
-                    self.cfg.fhe.lr_q16,
-                    self.cfg.fhe.l2_q16,
-                    self.cfg.fhe.minibatch,
-                    self.cfg.fhe.seed,
-                )
-            }
-        };
+        let (scale, lr_q16, l2_q16, minibatch, seed) =
+            match self.client.epoch_hyperparams(task_id, epoch).await {
+                Ok((s, lr, l2, mb, sd)) if s != 0 => (s, lr, l2, mb as usize, sd),
+                Ok(_) => {
+                    warn!(
+                        task = %task_id, epoch,
+                        "no on-chain hyperparams pinned; using local fhe.* config (legacy path)"
+                    );
+                    (
+                        self.cfg.fhe.scale,
+                        self.cfg.fhe.lr_q16,
+                        self.cfg.fhe.l2_q16,
+                        self.cfg.fhe.minibatch,
+                        self.cfg.fhe.seed,
+                    )
+                }
+                Err(e) => {
+                    // A failed read is NOT a legacy task: falling back to local config here
+                    // would execute with possibly different (scale, lr, l2, minibatch, seed)
+                    // than peers and commit a divergent — slashable — digest. Propagate so the
+                    // work loop retries with backoff; only an explicit all-zero pin (Ok arm
+                    // above) means "legacy, use local config".
+                    return Err(e);
+                }
+            };
         Ok(EpochInputs {
             task_id,
             epoch,

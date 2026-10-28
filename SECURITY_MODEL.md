@@ -1,7 +1,7 @@
 # Security model
 
 What this protocol protects, from whom, and under which assumptions. Every claim
-here traces to `docs/04-threat-model.md` (findings F-01…F-39), `docs/05-honest-limitations.md`,
+here traces to `docs/04-threat-model.md` (findings F-01…F-63), `docs/05-honest-limitations.md`,
 or the test suite — nothing here is new, it is the enforceable subset in one place.
 
 ## Assets

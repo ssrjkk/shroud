@@ -1513,7 +1513,7 @@ test("uploadAndMonetize omits the shape proof as empty bytes when none is requir
     [
       me, // buyer
       ethers.ZeroAddress, // updateManager
-      3, 1, 100, 1, 2, 8, 86400, 3600, 600, 1000, 8000, 1500, 500, 200,
+      3, 1, 100, 1, 3, 8, 86400, 3600, 600, 1000, 8000, 1500, 500, 200,
       ethers.ZeroHash, ethers.ZeroHash, 1,
     ],
     1_000_000_000n, 0n, 0n, 0n, 0n, 0n, 0, 0, 0,
@@ -1566,6 +1566,9 @@ test("uploadAndMonetize omits the shape proof as empty bytes when none is requir
           }
           if (data.startsWith(sel("contributionBondRequired"))) {
             return iface.encodeFunctionResult("contributionBondRequired", [0n]);
+          }
+          if (data.startsWith(sel("contributionBondPerRow"))) {
+            return iface.encodeFunctionResult("contributionBondPerRow", [0n]);
           }
           // TOCTOU dry-run: the SDK simulates submitContribution before sending it.
           // Empty returndata is a successful simulation of a state-changing call.
@@ -1634,6 +1637,71 @@ test("uploadAndMonetize omits the shape proof as empty bytes when none is requir
   }
 });
 
+test("uploadAndMonetize rejects features that do not match the task", async () => {
+  // No on-chain check exists (ContributeLib.submit never reads `features`), so a mismatch
+  // would silently mistrain: wrong `features` means wrong `rows`, which means a wrong
+  // reward weight and a wrong per-row bond, with zero reverts to catch it. The SDK fails
+  // loudly against the task's own spec instead of submitting a doomed shard.
+  const cipherTask = "0x00000000000000000000000000000000000000c1";
+  const vault = "0x00000000000000000000000000000000000000c2";
+  const wallet = new ethers.Wallet(ethers.id("features-test").slice(2, 66));
+  const me = await wallet.getAddress();
+  const iface = new ethers.Interface(sdkAbi("CipherTask"));
+  const sel = (sig: string) => iface.getFunction(sig)!.selector;
+  const taskTuple = [
+    [
+      me, ethers.ZeroAddress, 3, 1, 100, 1, 2, 8, 86400, 3600, 600, 1000,
+      8000, 1500, 500, 200, ethers.ZeroHash, ethers.ZeroHash, 1,
+    ],
+    1_000_000_000n, 0n, 0n, 0n, 0n, 0n, 0, 0, 0,
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 1, false,
+  ];
+  const noContribution = [
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 0, 0, 0, 0, false, false,
+  ];
+  const fr = new ethers.FetchRequest("http://stub.invalid");
+  fr.getUrlFunc = (async (req: { body?: Uint8Array }) => {
+    const envelope = (id: unknown, result: unknown) => ({
+      statusCode: 200,
+      statusMessage: "OK",
+      headers: {},
+      body: ethers.toUtf8Bytes(JSON.stringify({ jsonrpc: "2.0", id: id ?? 1, result })),
+    });
+    const parsed = JSON.parse(ethers.toUtf8String(req.body ?? new Uint8Array()));
+    const serveOne = (p: { id?: unknown; method: string; params: any[] }): unknown => {
+      if (p.method === "eth_chainId") return "0x7a69";
+      if (p.method !== "eth_call") throw new Error(`stub: unexpected method ${p.method}`);
+      const data: string = p.params[0].data;
+      if (data.startsWith(sel("taskCount"))) return iface.encodeFunctionResult("taskCount", [1n]);
+      if (data.startsWith(sel("tasks"))) return iface.encodeFunctionResult("tasks", [taskTuple]);
+      if (data.startsWith(sel("contributions"))) return iface.encodeFunctionResult("contributions", [noContribution]);
+      if (data.startsWith(sel("shapeProofsRequired"))) return iface.encodeFunctionResult("shapeProofsRequired", [false]);
+      throw new Error(`SENTINEL: upload must stop at the features check (call ${data.slice(0, 10)})`);
+    };
+    if (Array.isArray(parsed)) {
+      return {
+        statusCode: 200,
+        statusMessage: "OK",
+        headers: {},
+        body: ethers.toUtf8Bytes(JSON.stringify(parsed.map((p) => ({ jsonrpc: "2.0", id: p.id ?? 1, result: serveOne(p) })))),
+      };
+    }
+    return envelope(parsed.id, serveOne(parsed));
+  }) as unknown as (req: never) => Promise<never>;
+  const provider = new ethers.JsonRpcProvider(fr);
+  const sdk = new ShroudSdk({
+    cipherTask,
+    paymentVault: vault,
+    signer: new ethers.Wallet(wallet.privateKey, provider),
+    provider,
+    chainId: 31337n,
+  });
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3, 4, 5, 6], 1n, { features: 3, allowUnencrypted: true }),
+    /features 3 does not match task 1 \(expects 2\)/
+  );
+});
+
 test("uploadAndMonetize approves a missing contribution bond before submitting", async () => {
   // Bonded task: the SDK must approve exactly the requirement up front (never a max
   // approval) instead of burning gas on a BondInsufficient revert. The stub serves the
@@ -1653,7 +1721,7 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
   const sel = (sig: string) => iface.getFunction(sig)!.selector;
   const taskTuple = [
     [
-      me, ethers.ZeroAddress, 3, 1, 100, 1, 2, 8, 86400, 3600, 600, 1000,
+      me, ethers.ZeroAddress, 3, 1, 100, 1, 3, 8, 86400, 3600, 600, 1000,
       8000, 1500, 500, 200, ethers.ZeroHash, ethers.ZeroHash, 1,
     ],
     1_000_000_000n, 0n, 0n, 0n, 0n, 0n, 0, 0, 0,
@@ -1703,6 +1771,13 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
             }
             if (data.startsWith(sel("contributionBondRequired"))) {
               return iface.encodeFunctionResult("contributionBondRequired", [1_000_000n]);
+            }
+            if (data.startsWith(sel("contributionBondPerRow"))) {
+              // Per-row surcharge prices large row claims: 6 values / 3 features =
+              // 2 rows × 100 = 200 on top of the flat 1M. The SDK must approve the
+              // total pull amount, not the flat part alone (else submit reverts
+              // BondInsufficient after the upload).
+              return iface.encodeFunctionResult("contributionBondPerRow", [100n]);
             }
             if (data.startsWith(sel("contributionBondOf"))) {
               return iface.encodeFunctionResult("contributionBondOf", [0n]);
@@ -1789,7 +1864,7 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
     assert.equal(sent[0].to, token.toLowerCase());
     assert.equal(approval?.name, "increaseAllowance");
     assert.equal(approval?.args.spender.toLowerCase(), cipherTask.toLowerCase());
-    assert.equal(approval?.args.addedValue, 1_000_000n);
+    assert.equal(approval?.args.addedValue, 1_000_200n);
     const submission = iface.parseTransaction({ data: sent[1].data });
     assert.equal(sent[1].to, cipherTask.toLowerCase());
     assert.equal(submission?.name, "submitContribution");

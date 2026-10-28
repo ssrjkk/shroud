@@ -394,7 +394,10 @@ async fn store_remote(url: &str, cid: &B256, bytes: &[u8]) -> Result<()> {
     store
         .put(&location, bytes.to_vec().into())
         .await
-        .map_err(|e| Error::Other(anyhow::anyhow!("da store of {cid:#x} to {url}: {e}")))?;
+        .map_err(|e| {
+            let url = crate::redact::redact_endpoint(url);
+            Error::Other(anyhow::anyhow!("da store of {cid:#x} to {url}: {e}"))
+        })?;
     Ok(())
 }
 

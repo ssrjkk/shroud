@@ -463,7 +463,8 @@
     return v;
   }
 
-  // Lane updates saturate at i64 — like the node's apply_update — instead of throwing.
+  // Final lane fit saturates at i64 — like the node's apply_update, which clamps
+  // after its checked arithmetic — instead of throwing on an in-range result.
   function clampI64(v) {
     if (v < I64_MIN) return I64_MIN;
     if (v > I64_MAX) return I64_MAX;
@@ -487,10 +488,11 @@
     function apply(m) {
       var denom = 65536n * S * BigInt(m);
       for (var j = 0; j < f; j++) {
-        // Like the node (plain `*`, then clamp): the product is unchecked, the lane
-        // saturates instead of wrapping. Only accumulators are checked (see above).
-        var delta = (BigInt(o.lrQ16) * grad[j]) / denom; // truncates toward zero, like i128 /
-        w[j] = clampI64(w[j] - delta);
+        // Like the node (apply_update): the lr*acc product and the lane-delta
+        // subtraction are checked and abort the epoch on overflow. Only the
+        // final lane fit saturates — a wrap would fork the digest.
+        var delta = checkedI128(BigInt(o.lrQ16) * grad[j], "update") / denom; // truncates toward zero, like i128 /
+        w[j] = clampI64(checkedI128(w[j] - delta, "update"));
         grad[j] = 0n;
       }
     }

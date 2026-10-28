@@ -309,6 +309,18 @@ export class ShroudSdk {
       );
     }
 
+    // No on-chain check anywhere (`ContributeLib.submit` never reads `features`), so a
+    // mismatch here fails silently: wrong `features` means wrong `rows`, which means a
+    // wrong reward weight (unless `weightByBond`) and a wrong per-row bond — with zero
+    // reverts to catch it. Fail loudly against the task's own spec instead.
+    const wantFeatures = Number(t.params.features);
+    if (opts.features !== wantFeatures) {
+      throw new Error(
+        `features ${opts.features} does not match task ${resolvedId} (expects ${wantFeatures}); ` +
+          `re-encode the shard with the task's feature count`
+      );
+    }
+
     // `submitContribution` -> ShardTooSmall / ShardTooLarge.
     const minRows = Number(t.params.minRowsPerShard);
     if (rows < minRows) {
@@ -364,7 +376,7 @@ export class ShroudSdk {
     // approval, and only after every free check above passed. The approval deliberately
     // precedes encrypt/upload: a dangling exact-amount approval is consumed by the next
     // successful submit, while an uploaded-but-unsubmitted shard would pollute the DA.
-    await this.ensureContributionBond(resolvedId, me);
+    await this.ensureContributionBond(resolvedId, me, rows);
 
     // 1. Encrypt locally — plaintext never leaves the client.
     const { ciphertext, rowCommitment } = await this.encryptor.encryptRows(data, opts.features);
@@ -450,13 +462,18 @@ export class ShroudSdk {
    * Approve the contribution bond the task requires, if any is still missing.
    *
    * Reads, never guesses: the requirement and what this address already posted come from
-   * the chain, the token address from the orchestrator itself. A shortfall with no funds
+   * the chain, the token address from the orchestrator itself. The requirement is the
+   * full pull amount — flat plus per-row surcharge times this shard's rows
+   * (`BondLib.pull` charges `flat + perRow*rows`, so approving the flat part alone
+   * would revert post-upload with `BondInsufficient`). A shortfall with no funds
    * is a local error naming the exact figures; an approval covers exactly the requirement
    * (the pull takes the full requirement or reverts, so a partial approval would still
    * burn gas — approve the whole thing or fail loudly here).
    */
-  private async ensureContributionBond(taskId: bigint, contributor: string): Promise<void> {
-    const required = await this.cipherTask.contributionBondRequired(taskId);
+  private async ensureContributionBond(taskId: bigint, contributor: string, rows: number): Promise<void> {
+    const flat = await this.cipherTask.contributionBondRequired(taskId);
+    const perRow = await this.cipherTask.contributionBondPerRow(taskId);
+    const required = flat + perRow * BigInt(rows);
     if (required === 0n) return;
     const posted = await this.cipherTask.contributionBondOf(taskId, contributor);
     if (posted >= required) return;
@@ -471,12 +488,16 @@ export class ShroudSdk {
     }
     const allowance = BigInt(await token.allowance(contributor, taskAddr));
     if (allowance < required) {
+      // `increaseAllowance` adds to the existing allowance, so topping up by the full
+      // requirement would over-approve by whatever is already granted — despite the
+      // "exactly the requirement" rule above. Top up by the shortfall only.
+      const shortfall = required - allowance;
       // USDT pattern: no `increaseAllowance`, and `approve(nonZero→nonZero)` reverts.
       // Try increaseAllowance first; on failure (revert or bad receipt) fall back to
       // zero-first approve(0)+approve(required). Never leave a misleading error.
       let ok = false;
       try {
-        const tx = await (token as any)["increaseAllowance"](taskAddr, required);
+        const tx = await (token as any)["increaseAllowance"](taskAddr, shortfall);
         const receipt = await tx.wait();
         ok = !!receipt && receipt.status === 1;
       } catch {

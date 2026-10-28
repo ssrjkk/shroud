@@ -36,6 +36,11 @@ Capital returns afterwards: the grief is rentable, not burnable.
   once every epoch ran (`SettleReady`).
 - Inflating the reporter set to DoS finalization: registration capped
   (`MAX_NODES = 200`); settlement pages.
+- Aborting mid-task after data trained epochs: `abort` refunds the buyer
+  everything except a verified-commit slice, so contributors whose shards
+  already trained get nothing for settled-past work. Deliberate (abort is the
+  buyer's exit from a failing task, not a second settlement), and why buyers
+  with thin intent are a counterparty risk contributors price in.
 
 ## What would change the model (not implemented)
 

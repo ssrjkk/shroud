@@ -323,7 +323,9 @@ impl Watcher {
             let head = match self.provider.get_block_number().await {
                 Ok(h) => h,
                 Err(e) => {
-                    error!(error = %e, "watcher: head unavailable; retrying");
+                    // Same URL-in-error rule as the get_logs path below: log the
+                    // scrubbed form, never the raw transport error.
+                    error!(error = %Error::alloy(&e), "watcher: head unavailable; retrying");
                     tokio::select! {
                         _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                         _ = shutdown.changed() => return Ok(()),
@@ -486,7 +488,10 @@ impl Watcher {
                 .provider
                 .get_logs(&filter)
                 .await
-                .map_err(|e| Error::Chain(format!("eth_getLogs {cursor}..={end}: {e}")))?;
+                // Transport errors embed the request URL, and a managed RPC URL carries
+                // the provider key: route through the scrubbing constructor, not the
+                // plain Chain arm, or every failed poll writes the key into the log.
+                .map_err(|e| Error::alloy(format!("eth_getLogs {cursor}..={end}: {e}")))?;
 
             // Sort by (block, log_index): the fold must be deterministic regardless of the
             // order the RPC returns. A commit and its settlement in the same block applied in

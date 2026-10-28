@@ -6,6 +6,14 @@ first tagged release.
 
 ## Unreleased
 
+### Bot: owner-only read-only /admin panel
+
+- New `/admin` command for the deployer id (`TELEGRAM_OWNER_ID`, default
+  397602448): redacted RPC, chain head + task count, contract wiring, send-queue
+  health, watcher census. The gate runs before any read (non-owners cost zero
+  RPC), failures render as "unreadable" rather than stacks, and `/help`
+  advertises the panel only to the owner. Nine tests in `bot/test/admin.test.js`.
+
 ### SDK: `openEpoch` opens and pins hyperparams in one call (M5 closed)
 
 - New `CipherTaskClient.openEpoch(taskId, { encWeightsCid, weightsDigest,
@@ -311,9 +319,10 @@ first tagged release.
   *governance recovery*", "the file had no test harness" — which no machine can
   check and which had already gone stale in one place (F-28 still claimed the
   shard store had no test harness; it has had one for a while). The citations
-  are now in the checkable form, and **52 of the 58 findings name a file and a
-  test**. The six that do not are the ones with no test to name: four accepted
-  or residual risks, a removal, and the devnet deployment path.
+  are now in the checkable form, and **46 of the 63 findings name a file and a
+  test in the machine-checked form** (scripts/regression-refs.mjs resolves each
+  one against the suite). The rest cite their regressions in prose or are
+  accepted/residual risks, a removal, or the devnet deployment path.
 
 ### Node: the provider's key no longer reaches the log
 

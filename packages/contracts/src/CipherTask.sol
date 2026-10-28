@@ -356,6 +356,12 @@ contract CipherTask is ICipherTask, ReentrancyGuard, Pausable {
         Task storage t = _tasks[taskId];
         if (t.status == TaskStatus.None) revert UnknownTask(taskId);
         if (t.status == TaskStatus.Disclosed || t.status == TaskStatus.Aborted) revert AlreadyTerminal(taskId, t.status);
+        // Same H3 rule as `abort`: unwinding in EpochCommitting would zero reporters.
+        // The deadline check below does not cover it — a dispute window is live
+        // exactly when reporters are owed the most protection.
+        if (t.status == TaskStatus.EpochCommitting) {
+            revert InvalidTaskStatus(taskId, t.status, TaskStatus.EpochSettled);
+        }
         // No epoch ever opened (`epochDeadline == 0`): there is no deadline to be past, so the
         // timestamp check below would always pass and let the owner kill a live contribution
         // phase. Recovery there belongs to the buyer (`abort` needs no deadline).

@@ -17,6 +17,9 @@ documented. If any row is unacceptable for your use case, do not escrow value.
 | T-10 | One BLS identity per node (no key reuse across nodes) | A single operator poses as a quorum | Enforced on-chain (key uniqueness + proof-of-possession) |
 | T-11 | The relayer serves the correct key and does not censor inputs | Wrong-key ciphertexts; censored contributions miss the window | Key bytes hashed into `publicKeyHash` and pinned on-chain; `contractAddress` binding required (`assertInputBinding`); ordering/censorship by the relayer itself is not mitigated |
 
+| T-13 | The sequencer includes contributions and does not censor (F-07) | Censored shards lose liveness credit and reward share; `maxContributors`/`windowEnd` bound the damage, full censorship resistance is post-MVP | Accepted residual; encrypted mempool + forced inclusion reduce, not eliminate |
+| T-14 | Participation is unlinkable (F-12) | Anyone can read "address X contributed to task T"; rows stay encrypted, the graph leaks | Accepted residual; front via relayer/shielded pool if unlinkability is required |
+
 | T-12 | The registered node set of a task is what the dispute committee is drawn from | A Sybil ring that registers enough identities buys its way into the committee, and a dispute is decided by the ring | Every registration posts a bond and the *draw* is weighted by it (F-04); the *count* stays flat 3-of-drawn, so a concentrated holder can still be undrawable against — see `docs/05 §2a`. Bond totals are pinned per epoch (`seedTotal`); sequencer cannot pick the committee (F-59) |
 
 Removing a row requires code + tests + docs in the same change, never docs alone.

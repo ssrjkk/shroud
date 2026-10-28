@@ -33,15 +33,15 @@ live deployment of these contracts):
 4: epoch
 5: ctRoot                   (leaf chain over the sealed dataset)
 6: lastWeightsDigest        (w_e)
-7: traceDigest              (digest of the trace)
+7: traceDigest              (digest of the trace)8: node                      (the committing node — H2 fix: a proof cannot be replayed under a different address)
 ```
 
 ### What the circuit would additionally bind
 
-`nodeId`, `n_shards`, `lr`, `update_mode` and `w_{e+1}` belong to the intended statement, but the
+`n_shards`, `lr`, `update_mode` and `w_{e+1}` belong to the intended statement, but the
 contract cannot check them: they are not in the list above, and **no prover and no AIR for this
 statement are implemented in this repository** (see `docs/05-honest-limitations.md`). A proof
-verified today therefore attests to those eight values and nothing else; binding the rest means
+verified today therefore attests to those nine values and nothing else; binding the rest means
 either extending the transcript or committing them inside the proof's public-input vector and
 checking that commitment on chain.
 
@@ -110,11 +110,11 @@ against the segment's public-input range.
 EPOCH_COMMITTING
    │  first valid commit by node P opens the window for shard-set S
    ▼
-DISPUTE_WINDOW (t_dispute = 60s, configurable)
+DISPUTE_WINDOW (per-task `disputeWindow`, 1 min–1 hr at creation)
    │  any node may re-execute epoch e from DA and submit EpochDigest
    │  digests are gossiped over gRPC; the chain accepts at most 1 per (task, epoch, node)
    ▼
-  ∑  digests ≠ claimed digest  ≥  disputeThreshold (default 3 of 5)
+  ∑  digests ≠ claimed digest  ≥  disputeThreshold (flat 3 distinct reporters)
         →  P.stake slashed, weights rejected, epoch re-assigned, escrow untouched
         →  honest reporters get `disputeBounty` from P's bond
    else window expires
