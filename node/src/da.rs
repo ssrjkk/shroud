@@ -10,12 +10,16 @@
 //! * `s3://`, `gs://` and `https://` endpoints (feature `da` only) are fetched and written
 //!   through `object_store`, with the byte budget enforced before the bytes are trusted.
 //!
-//! Nothing here interprets payloads: callers verify `keccak256(bytes)` against the CID or
-//! digest the chain pinned before they decode anything.
+//! Nothing here interprets payloads: callers verify the bytes against the pin the chain
+//! carries before they decode anything. Two addressing schemes coexist by protocol
+//! convention — the SDK's transport cid is `sha256` (`FileShardStore`, the upload echo
+//! check), while the node's own cache writer and the reference shardstore address by
+//! `keccak256` — so [`verify_object_bytes`] accepts a preimage of the pin under either.
 
 use std::path::{Path, PathBuf};
 
 use alloy::primitives::{keccak256, B256};
+use sha2::Sha256;
 
 use crate::error::{Error, Result, ShardError};
 
@@ -172,6 +176,32 @@ pub fn verify_bytes(expected: &B256, bytes: &[u8]) -> Result<()> {
         }));
     }
     Ok(())
+}
+
+/// Verify a fetched object against a pin that may be either a `keccak256` digest or a
+/// `sha256` transport cid.
+///
+/// The SDK pins two kinds of 32-byte values on chain: byte digests (`ctDigest` =
+/// `keccak256(bytes)`, checked with [`verify_bytes`]) and *transport cids* — the
+/// address the store itself serves the object under, which the SDK convention fixes
+/// at `sha256` (`FileShardStore`, `FileShardStore.put`, and the upload echo check in
+/// `uploadAndMonetize` all recompute `sha256`). Seed weights carry only the transport
+/// cid (the on-chain `weightsDigest` is over the decoded lane words, not the file), so
+/// byte-level verification must accept the scheme the pin was minted with. Accepting
+/// either is not a weakening: both hashes must be preimage-broken simultaneously for a
+/// wrong-bytes DA to slip through, which is the property C2 relies on.
+pub fn verify_object_bytes(expected: &B256, bytes: &[u8]) -> Result<()> {
+    use sha2::Digest as _;
+    let mut sha = [0u8; 32];
+    sha.copy_from_slice(Sha256::digest(bytes).as_ref());
+    if keccak256(bytes) == *expected || B256::from(sha) == *expected {
+        return Ok(());
+    }
+    Err(Error::ShardStore(ShardError::DigestMismatch {
+        expected: *expected,
+        got: keccak256(bytes),
+        len: bytes.len() as u64,
+    }))
 }
 
 /// The DA endpoint scheme, parsed once so the worker branches on a value, not a string.
@@ -502,6 +532,26 @@ mod tests {
         let digest = keccak256(bytes);
         verify_bytes(&digest, bytes).expect("matches");
         assert!(verify_bytes(&B256::ZERO, bytes).is_err());
+    }
+
+    #[test]
+    fn transport_pin_accepts_either_addressing_scheme() {
+        // C2 with both conventions live: the SDK's `FileShardStore` pins a sha256
+        // transport cid, the node's own cache writer and the reference store pin
+        // keccak. `verify_object_bytes` must accept a preimage of the pin under
+        // either scheme and nothing else — a wrong-bytes DA has to break both
+        // preimage-resistant hashes at once to slip through.
+        use sha2::Digest as _;
+        let bytes = b"seed weights envelope";
+        let keccak_pin = keccak256(bytes);
+        let mut sha = [0u8; 32];
+        sha.copy_from_slice(Sha256::digest(bytes).as_ref());
+        let sha_pin = B256::from(sha);
+        verify_object_bytes(&keccak_pin, bytes).expect("keccak-addressed pin matches");
+        verify_object_bytes(&sha_pin, bytes).expect("sha256-addressed pin matches");
+        // Wrong bytes under either pin fail.
+        assert!(verify_object_bytes(&B256::ZERO, bytes).is_err());
+        assert!(verify_object_bytes(&keccak256(b"other"), bytes).is_err());
     }
 
     #[test]

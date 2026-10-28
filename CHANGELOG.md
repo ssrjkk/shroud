@@ -6,6 +6,10 @@ first tagged release.
 
 ## Unreleased
 
+### Node: seed-weights C2 verification finally matches the pin's addressing scheme (devnet e2e un-bricked)
+
+- `bed445d`'s C2 guard (`verify_bytes(&last_weights_cid, bytes)`) hashed fetched seed weights with `keccak256`, but the SDK pins a **sha256 transport cid** there (no keccak-of-file pin exists on chain for weights — `weightsDigest` is over lane words). Every live-node e2e run since then died with `digest mismatch ... after 34 bytes`: the honest bytes could never match a keccak check against a sha256 pin. `da::verify_object_bytes` now accepts a preimage of the pin under either addressing scheme (sha256 transport cid vs keccak cache/ref-store), which is sound — a wrong-bytes DA must break both preimage-resistant hashes at once, the property C2 needs. `worker.rs` routes the seed-weights check through it; shards keep the keccak `ctDigest` check. Unit-tested for both pins. Identified from CI: this and the foundry/audit fixes below were surfaced only by actually watching the red runs, which had been failing silently since `808a31e`.
+
 ### CI: three silent breakages surfaced and fixed
 
 - `npm audit --audit-level=high` started failing in the contracts job: five new high advisories on `undici` (GHSA-xjj6-f33q-929c and friends), all patched in 6.29.1. The pin override moved 6.28.1 -> ^6.29.1; the audit gate is clean again (18 low, nothing high/moderate).

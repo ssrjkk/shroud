@@ -731,9 +731,11 @@ impl Worker {
             )));
         }
         let prev_weights_bytes = da::fetch(&dir, &endpoint, &task.last_weights_cid, max).await?;
-        // C2: every fetched object is re-hashed. Shards are verified above; seed weights
-        // were not — a bitter/malicious DA gave silent wrong execution.
-        da::verify_bytes(&task.last_weights_cid, &prev_weights_bytes)?;
+        // C2: every fetched object is re-hashed. Shards are verified above against the
+        // keccak byte digest; seed weights carry only a transport cid (sha256 in the SDK
+        // convention, keccak in the node's own cache and the reference store), so the
+        // pin is checked under either scheme — a wrong-bytes DA must break both.
+        da::verify_object_bytes(&task.last_weights_cid, &prev_weights_bytes)?;
         let reference = matches!(self.cfg.fhe.backend, crate::config::FheBackend::Reference);
         let prev_weights = if reference {
             Some(self.decode_prev_weights(task_id, &prev_weights_bytes, task)?)
