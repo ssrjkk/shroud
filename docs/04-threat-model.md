@@ -849,9 +849,10 @@ switch that turns the requirement off"*.
 
 ### F-63 — Settlement sweep iterates every channel the task ever opened (ADV2) — **Partially mitigated**
 `taskChannels[taskId]` only grows: closed channels stay in the array, and
-`sweepTaskChannels` walks all of it on every settlement page (and once in `abort`),
-paying for the read even on entries it skips. Measured: ~11,500 gas to close a mature
-channel, ~4,800 to skip an already-closed one. One page bricks at ~2,600 mature
+sweeping it pays for the read even on entries it skips (settlement walks it
+paged from a persisted cursor; `abort`/`reclaimUnspentEpochs` take one page
+per call and revert `SweepIncomplete` on a leftover). Measured: ~11,500 gas to
+close a mature channel, ~4,800 to skip an already-closed one. One page bricks at ~2,600 mature
 unclosed channels on the close path, or ~6,300 closed ones on the skip path, against
 a 30M block — and a bricked first page means settlement never starts, so the escrow
 stays stuck with no recourse. The hard bound is 365 epochs × 65 channels = 23,725,

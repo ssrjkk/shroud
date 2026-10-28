@@ -6,6 +6,12 @@ first tagged release.
 
 ## Unreleased
 
+### CI: three silent breakages surfaced and fixed
+
+- `npm audit --audit-level=high` started failing in the contracts job: five new high advisories on `undici` (GHSA-xjj6-f33q-929c and friends), all patched in 6.29.1. The pin override moved 6.28.1 -> ^6.29.1; the audit gate is clean again (18 low, nothing high/moderate).
+- The forge `VaultInvariants` handler stands in as the task manager, and `topUpNodeBond` now asks the manager for the task status before allowing a top-up (entry-phase weight freeze). The handler never answered, so every fuzz top-up bounced off `BondTopUpClosed` and the harness dead-ended with `topUp never ran`. The handler now answers `Opening`, keeping the bond/top-up paths exercised.
+- `cargo check` under `-D warnings` flagged two unnecessary parentheses in `mesh/server.rs` `validate_hello` — the M7 shape-checks were never compiled anywhere until CI picked them up. Removed; `cargo fmt --check` clean.
+
 ### Disputes: bond weight freezes at entry, post-seed top-ups refused
 
 - `topUpNodeBond` had no phase gate, so a node could watch the first dispute report fix the sortition seed and then top up into the `COMMITTEE_SIZE * weight >= total` auto-pass for a known draw — stake rented for one dispute, returned afterwards. Like registration itself, top-ups now only work while the task is still `Opening`/`Collecting`/`Sealed` (`BondTopUpClosed` otherwise): weight is priced at entry, when the seed is unknowable. Pinned by a `Hardening`-style spec (`NodeBond`) plus the retimed whale-draw test.

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
+import "../../src/interfaces/ICipherTask.sol";
 import "../../src/payments/PaymentVault.sol";
 import "../../src/mocks/TestToken.sol";
 
@@ -79,6 +80,16 @@ contract VaultHandler is Test {
 
     function _task(uint256 seed) internal pure returns (uint256) {
         return bound(seed, 0, 2);
+    }
+
+    /// The handler stands in as the task manager, and `topUpNodeBond` asks the
+    /// manager for the task status before allowing a top-up (bond weight freezes
+    /// once the first epoch opens — a post-seed top-up cannot buy eligibility for
+    /// a revealed draw). Answer `Opening`, the entry phase, so the fuzzer keeps
+    /// exercising the bond/top-up paths instead of bouncing off `BondTopUpClosed`
+    /// and silently dead-ending the counter this harness asserts on.
+    function statusOf(uint256) external pure returns (ICipherTask.TaskStatus) {
+        return ICipherTask.TaskStatus.Opening;
     }
 
     function _node(uint256 seed) internal pure returns (address) {

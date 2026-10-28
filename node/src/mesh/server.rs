@@ -701,15 +701,15 @@ fn validate_hello(hello: &Hello, our_chain_id: u64) -> std::result::Result<Strin
     // signature binding needs a protocol change; this kills trivial spoofs and
     // keeps mesh data hints-only (never drives FileDispute — that comes from
     // chain logs in state.rs, not from gossip).
-    if (!hello.bls_pubkey.is_empty() && hello.bls_pubkey.len() != DIGEST_BYTES) {
+    if !hello.bls_pubkey.is_empty() && hello.bls_pubkey.len() != DIGEST_BYTES {
         return Err(format!(
             "bls_pubkey must be {DIGEST_BYTES} bytes when present, got {}",
             hello.bls_pubkey.len()
         ));
     }
-    if (!hello.signing_pubkey.is_empty()
+    if !hello.signing_pubkey.is_empty()
         && hello.signing_pubkey.len() != 33
-        && hello.signing_pubkey.len() != 65)
+        && hello.signing_pubkey.len() != 65
     {
         return Err(format!(
             "signing_pubkey must be 33 or 65 bytes when present, got {}",
