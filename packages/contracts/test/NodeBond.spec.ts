@@ -250,4 +250,21 @@ describe("node registration bonds", () => {
     );
     void buyer;
   });
+
+  it("freezes bond weight once the first epoch opens (no post-seed top-up)", async () => {
+    // Sortition eligibility reads the live bond against a seed that is fixed by the
+    // first dispute report. A top-up after the seed is known buys eligibility for a
+    // known draw (`COMMITTEE_SIZE * weight >= total` auto-passes) at the cost of a
+    // temporary lockup — so weight, like registration itself, is fixed at entry time.
+    const fx = await deployFixture();
+    const { task, vault, node } = fx;
+    const id = await sealed(fx, [node]);
+    await openEpochAs(fx, id, bytes32Of(101), bytes32Of(102));
+    const topUp = 5_000_000n;
+    await fx.token.mint(node.address, topUp);
+    await expect(vault.connect(node).topUpNodeBond(id, topUp)).to.be.revertedWithCustomError(
+      vault,
+      "BondTopUpClosed"
+    );
+  });
 });

@@ -362,6 +362,16 @@ contract PaymentVault is ReentrancyGuard, Pausable {
         address node = msg.sender;
         if (amount == 0) revert ZeroAmount();
         if (nodeBond[taskId][node] == 0) revert BondNotReleasable(taskId, node);
+        // Weight is priced at entry, like registration itself (which closes once the first
+        // epoch opens): a top-up after that point could wait for the dispute seed to be
+        // revealed and then buy eligibility (`COMMITTEE_SIZE * weight >= total` auto-passes),
+        // turning sortition into an auction the attacker times. Entry-phase top-ups stay.
+        ICipherTask.TaskStatus st = ICipherTask(taskManager).statusOf(taskId);
+        if (
+            st != ICipherTask.TaskStatus.Opening &&
+            st != ICipherTask.TaskStatus.Collecting &&
+            st != ICipherTask.TaskStatus.Sealed
+        ) revert ICipherTask.BondTopUpClosed(taskId);
         if (token.allowance(node, address(this)) < amount) {
             revert BondInsufficient(taskId, node, amount);
         }

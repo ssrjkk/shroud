@@ -30,7 +30,7 @@ Capital returns afterwards: the grief is rentable, not burnable.
 
 - Copying a proof to steal the winner seat: first verified commit keeps it
   (`CommitLib`), and a report must differ from the claim.
-- Copying a digest to free-ride the bounty: the report must match the reporter's
+- Topping up mid-dispute to buy eligibility for a revealed seed (`BondTopUpClosed` reverts past entry phase: weight, like registration, is fixed before the first epoch opens, when the seed is unknowable). Copying a digest to free-ride the bounty: the report must match the reporter's
   own verified commit (`DisputeDigestMismatch`).
 - Draining contributor/committee pools: settlement reserves them; `abort` reverts
   once every epoch ran (`SettleReady`).

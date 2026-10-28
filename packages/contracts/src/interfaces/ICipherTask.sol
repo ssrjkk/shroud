@@ -239,6 +239,9 @@ interface ICipherTask {
     error BlsKeyAlreadyUsed(uint256 taskId, bytes32 blsPubKey);
     error ZeroBlsKey(uint256 taskId, address node);
     error BondNotReleasable(uint256 taskId, address node);
+    /// @dev Bond weight is fixed at entry: top-ups stop once the first epoch opens, so a
+    ///      top-up cannot buy sortition eligibility after the dispute seed is revealed.
+    error BondTopUpClosed(uint256 taskId);
 
     /* ---------------------------- settlement ---------------------------- */
 

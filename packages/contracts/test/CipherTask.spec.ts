@@ -809,13 +809,15 @@ describe("CipherTask", () => {
       const fx = await deployFixture();
       const { task, vault, token, buyer, node, node2 } = fx;
       const id = await sealed(fx, { epochs: 1, nodes: [node, node2] });
-      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
       // 2 x 10M = 20M total; topping node2 up by 5M makes 7 x 15M >= 25M, so the
       // whale passes the lottery under every possible seed — deterministically.
+      // The top-up happens while sealed: bond weight freezes once the first epoch
+      // opens, so a post-seed top-up cannot buy eligibility for a known draw.
       const topUp = 5_000_000n;
       await token.mint(node2.address, topUp);
       await vault.connect(node2).topUpNodeBond(id, topUp);
       expect(await vault.taskBondTotal(id)).to.equal(25_000_000n);
+      await openEpochAs(fx, id, buyer, bytes32Of(100), bytes32Of(101));
       const claimDigest = bytes32Of(900);
       const chalDigest = bytes32Of(901);
       await task.connect(node).commitEpoch(id, 0, proofRef(1), bytes32Of(301), bytes32Of(401), bytes32Of(501), claimDigest);

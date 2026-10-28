@@ -6,6 +6,16 @@ first tagged release.
 
 ## Unreleased
 
+### Disputes: bond weight freezes at entry, post-seed top-ups refused
+
+- `topUpNodeBond` had no phase gate, so a node could watch the first dispute report fix the sortition seed and then top up into the `COMMITTEE_SIZE * weight >= total` auto-pass for a known draw — stake rented for one dispute, returned afterwards. Like registration itself, top-ups now only work while the task is still `Opening`/`Collecting`/`Sealed` (`BondTopUpClosed` otherwise): weight is priced at entry, when the seed is unknowable. Pinned by a `Hardening`-style spec (`NodeBond`) plus the retimed whale-draw test.
+
+### SDK upload path: simulate before storing, approve exactly, check everything twice
+
+- `uploadAndMonetize` used to upload the shard to the DA and only then simulate the submit: every revert left an orphan object (plaintext, with `allowUnencrypted`). The dry-run now runs first — all its inputs are local — and the store's echo CID is verified before submitting, so a lying store aborts instead of pinning garbage on chain. The bond approval finally covers the real pull amount (`flat + perRow*rows`, not the flat part), tops up by the shortfall instead of the full requirement on `increaseAllowance`, and refuses a `features` count the task never asked for (the contract has no such check, so a mismatch silently mistrained with zero reverts). `authorizedSlice` reads `consumed` locally instead of burning gas on an already-redeemed channel. Each behaviour is pinned by a smoke test, including a no-orphan-on-revert case and a per-row approval total.
+- New `.devcontainer/devcontainer.json` (Debian + Node 22 + Rust + protoc): the node never compiled on the author's host for lack of a linker, so local `cargo check/test` had no documented path. Rust edits stay compiler-unverified until run there or in CI.
+- `emergencyUnwind` can no longer bypass the H3 live-dispute guard: both unwind entry points funnel through one check in `UnwindLib.unwind`, covered by `Hardening` specs for `abort` and `emergencyUnwind` alike.
+
 ### Contracts: abort/reclaim can no longer brick on channel count (F-63)
 
 - `UnwindLib.unwind` and `SettlementLib.reclaim` swept every channel in one unbounded loop: past a few thousand open channels the call outgrows the block and the task (plus its escrow) bricks with no recourse — the reporter quorum exists precisely to multiply channels. Both now sweep exactly one SWEEP_PAGE (1500) and revert `SweepIncomplete` on a leftover queue, and `PaymentVault.sweepTaskChannelsPaged` lost its `onlyTaskManager` gate (sweeping only closes matured channels, so no caller can steal or redirect anything): anyone grinds the queue down page by page, then retries. Pinned by a 3-reporter quorum test that sweeps across page boundaries. Host bytecode actually shrank (24,246 bytes, 330 slack).

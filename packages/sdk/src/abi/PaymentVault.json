@@ -67,6 +67,17 @@
     "inputs": [
       {
         "internalType": "uint256",
+        "name": "taskId",
+        "type": "uint256"
+      }
+    ],
+    "name": "BondTopUpClosed",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
         "name": "channelId",
         "type": "uint256"
       }
