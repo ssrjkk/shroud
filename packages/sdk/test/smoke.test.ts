@@ -1702,6 +1702,85 @@ test("uploadAndMonetize rejects features that do not match the task", async () =
   );
 });
 
+test("a failing dry-run uploads nothing to the DA", async () => {
+  // The dry-run inputs are all local, so it runs before the DA put: a task that
+  // seals between preflight and submit must not leave an orphan object behind
+  // (with allowUnencrypted that orphan would be plaintext on the store).
+  const cipherTask = "0x00000000000000000000000000000000000000c1";
+  const vault = "0x00000000000000000000000000000000000000c2";
+  const wallet = new ethers.Wallet(ethers.id("dryrun-first-test").slice(2, 66));
+  const me = await wallet.getAddress();
+  const iface = new ethers.Interface(sdkAbi("CipherTask"));
+  const sel = (sig: string) => iface.getFunction(sig)!.selector;
+  const taskTuple = [
+    [
+      me, ethers.ZeroAddress, 3, 1, 100, 1, 3, 8, 86400, 3600, 600, 1000,
+      8000, 1500, 500, 200, ethers.ZeroHash, ethers.ZeroHash, 1,
+    ],
+    1_000_000_000n, 0n, 0n, 0n, 0n, 0n, 0, 0, 0,
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 1, false,
+  ];
+  const noContribution = [
+    ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, ethers.ZeroHash, 0, 0, 0, 0, false, false,
+  ];
+  const fr = new ethers.FetchRequest("http://stub.invalid");
+  fr.getUrlFunc = (async (req: { body?: Uint8Array }) => {
+    const envelope = (id: unknown, result: unknown) => ({
+      statusCode: 200,
+      statusMessage: "OK",
+      headers: {},
+      body: ethers.toUtf8Bytes(JSON.stringify({ jsonrpc: "2.0", id: id ?? 1, result })),
+    });
+    const parsed = JSON.parse(ethers.toUtf8String(req.body ?? new Uint8Array()));
+    const serveOne = (p: { id?: unknown; method: string; params: any[] }): unknown => {
+      if (p.method === "eth_chainId") return "0x7a69";
+      if (p.method !== "eth_call") throw new Error(`stub: unexpected method ${p.method}`);
+      const data: string = p.params[0].data;
+      if (data.startsWith(sel("taskCount"))) return iface.encodeFunctionResult("taskCount", [1n]);
+      if (data.startsWith(sel("tasks"))) return iface.encodeFunctionResult("tasks", [taskTuple]);
+      if (data.startsWith(sel("contributions"))) return iface.encodeFunctionResult("contributions", [noContribution]);
+      if (data.startsWith(sel("shapeProofsRequired"))) return iface.encodeFunctionResult("shapeProofsRequired", [false]);
+      if (data.startsWith(sel("contributionBondRequired"))) return iface.encodeFunctionResult("contributionBondRequired", [0n]);
+      if (data.startsWith(sel("contributionBondPerRow"))) return iface.encodeFunctionResult("contributionBondPerRow", [0n]);
+      if (data.startsWith(sel("submitContribution"))) throw new Error("execution reverted: TaskSealed");
+      throw new Error(`SENTINEL: unexpected eth_call ${data.slice(0, 10)}`);
+    };
+    if (Array.isArray(parsed)) {
+      return {
+        statusCode: 200,
+        statusMessage: "OK",
+        headers: {},
+        body: ethers.toUtf8Bytes(JSON.stringify(parsed.map((p) => ({ jsonrpc: "2.0", id: p.id ?? 1, result: serveOne(p) })))),
+      };
+    }
+    return envelope(parsed.id, serveOne(parsed));
+  }) as unknown as (req: never) => Promise<never>;
+  const provider = new ethers.JsonRpcProvider(fr);
+  let puts = 0;
+  const countingStore = {
+    async put(bytes: Uint8Array) {
+      puts++;
+      return { cid: ethers.sha256(bytes), digest: ethers.keccak256(bytes) };
+    },
+    async get() {
+      throw new Error("unused");
+    },
+  };
+  const sdk = new ShroudSdk({
+    cipherTask,
+    paymentVault: vault,
+    signer: new ethers.Wallet(wallet.privateKey, provider),
+    provider,
+    chainId: 31337n,
+    shardStore: countingStore,
+  });
+  await assert.rejects(
+    () => sdk.uploadAndMonetize([1, 2, 3, 4, 5, 6], 1n, { features: 3, allowUnencrypted: true }),
+    /submitContribution dry-run reverted/
+  );
+  assert.equal(puts, 0, "a reverted dry-run must not leave an object in the DA");
+});
+
 test("uploadAndMonetize approves a missing contribution bond before submitting", async () => {
   // Bonded task: the SDK must approve exactly the requirement up front (never a max
   // approval) instead of burning gas on a BondInsufficient revert. The stub serves the

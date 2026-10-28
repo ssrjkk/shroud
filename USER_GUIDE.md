@@ -86,6 +86,9 @@ final page pays (`ChannelsImmature` until then).
 - Optional per-row surcharge (`setContributionBondPerRow`): large row claims
   lock more. Optional secure weight mode (`setWeightByBond(true)`): weight
   ignores claimed rows entirely (liveness only) — use when shards are untrusted.
+  Recommendation: leave secure weight OFF only for shards you already trust
+  (Groth16 shape/rows are not verified on-chain, so with it off a liar buys
+  weight with a number; per-row bond prices the lie, secure mode removes it).
 - `pinEpochHyperparams` per epoch (or pass `hyperparams` to the SDK `openEpoch`):
   pins `scale/lrQ16/l2Q16/minibatch/seed` on-chain; nodes prefer the pin over
   local config, so a config typo cannot fork honest nodes into a slash.

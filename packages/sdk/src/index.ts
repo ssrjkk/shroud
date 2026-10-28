@@ -394,22 +394,29 @@ export class ShroudSdk {
       );
     }
 
-    // 2. Upload the shard to the DA.
-    const { cid } = await this.shardStore.put(ciphertext);
+    // 2. Commit the shard to the task — dry-run FIRST, upload second.
+    // Every dry-run input is already local (ciphertext bytes, rowCommitment, rows,
+    // locally-derived digests), so there is no reason to touch the DA before knowing
+    // the submit simulates cleanly. The old order (upload, then simulate) left an
+    // orphan object in the DA on every revert — with `allowUnencrypted` that orphan
+    // is plaintext on a store the task then refuses.
     const { ctDigest } = pinPayload(ciphertext);
-    if (ethers.dataLength(cid) !== 32) {
+    // Transport address, same convention the stores use (`sha256`, while the on-chain
+    // pin is `keccak256`). Recomputed by `put` below; a mismatch means a lying store
+    // and aborts before any transaction.
+    const localCid = ethers.sha256(ciphertext) as Hex;
+    if (ethers.dataLength(localCid) !== 32) {
       throw new Error(
-        `the shard store returned a ${ethers.dataLength(cid)}-byte cid (${cid}); the on-chain ` +
+        `computed a ${ethers.dataLength(localCid)}-byte cid (${localCid}); the on-chain ` +
           `ciphertextCid is a bytes32, so only a 32-byte content address can be committed to it`
       );
     }
 
-    // 3. Commit the shard to the task.
     // An omitted shape proof is empty bytes: the contract only rejects those when it
     // requires proofs (checked above), and passing `undefined` through would die inside
     // ethers' ABI encoder with an obscure BytesLike error instead of uploading.
     const shard: PreparedShard = {
-      ciphertextCid: cid,
+      ciphertextCid: localCid,
       ctDigest,
       shapeProof: (opts.shapeProof ?? "0x") as Hex,
       rowCommitment,
@@ -435,9 +442,18 @@ export class ShroudSdk {
       );
     }
 
-    const contributionTx = await this.cipherTask.submitContribution(resolvedId, shard);
+    // 3. Upload the shard to the DA — only after the submit is known to simulate.
+    const { cid } = await this.shardStore.put(ciphertext);
+    if (cid.toLowerCase() !== localCid.toLowerCase()) {
+      throw new Error(
+        `the shard store echoed cid ${cid} for bytes addressing ${localCid}; refusing to submit ` +
+          `a contribution the store itself cannot serve back`
+      );
+    }
 
-    return { taskId: resolvedId, ...shard, contributionTx };
+    const contributionTx = await this.cipherTask.submitContribution(resolvedId, { ...shard, ciphertextCid: cid });
+
+    return { taskId: resolvedId, ...shard, ciphertextCid: cid, contributionTx };
   }
 
   /**
