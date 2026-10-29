@@ -1,0 +1,17 @@
+{
+  "name": "@shroud/site-tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "SSRJKK (https://github.com/SSRJKK)",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test a11y.test.mjs && node a11y.mjs"
+  },
+  "devDependencies": {
+    "parse5": "8.0.0"
+  }
+}
