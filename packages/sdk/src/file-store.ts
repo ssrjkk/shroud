@@ -8,7 +8,9 @@
  * (temp + rename) so a crash never leaves a torn object behind.
  *
  * Like `MemoryShardStore`, the cid (sha256) and the on-chain pin (keccak256) differ by
- * design, mirroring the production service. Files written by the old keccak-named layout
+ * design, as this store's own dev-time scheme (deliberately not the reference service's,
+ * which uses keccak for the cid too — a difference that keeps dev code from ever assuming
+ * cid === pin). Files written by the old keccak-named layout
  * are ignored, not migrated: this store is development-only, and silent aliasing of two
  * addressing schemes would be worse than a clean break.
  *

@@ -6,13 +6,14 @@
  *
  * Note on addressing: a store's `cid` is a *transport* address and may be anything the store
  * chooses to call an object, while the value pinned on chain is `ctDigest` = keccak256(payload),
- * computed client-side in `pinPayload`. The development stores below mirror the production
- * split on purpose: `cid` = sha256(payload) (the transport address), `digest` =
- * keccak256(payload) (the on-chain pin, which is also what the reference service returns).
- * They are different identifiers for the same bytes — and a store's `cid` must never be
- * treated as the pin. An earlier revision used keccak256 for both, which hid exactly the
- * confusion production punishes: code that compared `cid` against `ctDigest` passed in dev
- * and failed live.
+ * computed client-side in `pinPayload`. The two implementations do not even agree on a scheme:
+ * the development stores (`MemoryShardStore`, `FileShardStore`) address the transport by
+ * `cid` = sha256(payload), while the reference `infra/` HTTP service addresses it by
+ * `cid` = keccak256(payload) (so there its cid and the on-chain pin coincide). Either is a
+ * valid transport address a node can fetch by; what must never happen is treating a store's
+ * `cid` as the pin — code that compared `cid` against `ctDigest` passed in dev and failed live.
+ * An earlier revision used keccak256 for both, which hid exactly the confusion production
+ * punishes.
  *
  * Consequently `getVerified` recomputes keccak256 over the fetched bytes and compares against the
  * expected `ctDigest`. Trusting the store's own addressing instead would mean a DA that returns
@@ -55,9 +56,11 @@ export class MemoryShardStore implements ShardStore {
   private readonly objects = new Map<string, Uint8Array>();
 
   async put(payload: Uint8Array): Promise<{ cid: string; digest: string }> {
-    // Content-addressed, with the production split: the transport address is sha256, the
-    // on-chain pin is keccak256. Using keccak256 for both here once hid cid/digest confusion
-    // that only failed live.
+    // Content-addressed dev store (see the header note): its own transport scheme is
+    // sha256 for the cid while the on-chain pin is keccak256 — deliberately NOT the
+    // reference service's scheme (keccak for both cid and pin), so that code written
+    // against this store cannot accidentally rely on cid === pin and fail live.
+    // Using keccak256 for both here once hid exactly that cid/digest confusion.
     // Copied on the way in and on the way out (see FileShardStore): the caller keeps a live
     // reference otherwise, and mutating it afterwards would corrupt every later read —
     // including another party's `getVerified` in the same process.

@@ -401,10 +401,14 @@ export class ShroudSdk {
     // orphan object in the DA on every revert — with `allowUnencrypted` that orphan
     // is plaintext on a store the task then refuses.
     const { ctDigest } = pinPayload(ciphertext);
-    // Transport address, same convention the stores use (`sha256`, while the on-chain
-    // pin is `keccak256`). Recomputed by `put` below; a mismatch means a lying store
-    // and aborts before any transaction.
+    // A content address recomputed locally: the dev stores (and the SDK's own echo
+    // convention) address by `sha256`, while the reference HTTP service addresses by
+    // `keccak256` (see `da.ts`). Either is a valid transport cid a node can fetch by;
+    // what must never be committed is a store that echoes a cid that is the content
+    // address of *neither* — that is a lying or broken DA, and pinning its address
+    // would strand a shard nobody can retrieve.
     const localCid = ethers.sha256(ciphertext) as Hex;
+    const keccakCid = ethers.keccak256(ciphertext) as Hex;
     if (ethers.dataLength(localCid) !== 32) {
       throw new Error(
         `computed a ${ethers.dataLength(localCid)}-byte cid (${localCid}); the on-chain ` +
@@ -444,10 +448,18 @@ export class ShroudSdk {
 
     // 3. Upload the shard to the DA — only after the submit is known to simulate.
     const { cid } = await this.shardStore.put(ciphertext);
-    if (cid.toLowerCase() !== localCid.toLowerCase()) {
+    // The store's transport scheme is its own (sha256 in the dev stores, keccak256 at
+    // the reference HTTP service): accept the echoed address iff it is the content
+    // address of the uploaded bytes under one of them. Anything else means the store
+    // cannot actually serve the object back — refusing beats pinning an orphan.
+    const echoed =
+      cid.toLowerCase() === localCid.toLowerCase() ||
+      cid.toLowerCase() === keccakCid.toLowerCase();
+    if (!echoed) {
       throw new Error(
-        `the shard store echoed cid ${cid} for bytes addressing ${localCid}; refusing to submit ` +
-          `a contribution the store itself cannot serve back`
+        `the shard store echoed cid ${cid}, which is neither sha256(${localCid}) nor ` +
+          `keccak256(${keccakCid}) of the uploaded bytes; refusing to submit a contribution ` +
+          `the store itself cannot serve back`
       );
     }
 

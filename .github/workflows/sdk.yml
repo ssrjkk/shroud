@@ -7,9 +7,12 @@ on:
     # ABIs against the compiled contracts, so a Solidity change with a stale
     # `src/abi/` snapshot must fail here even if packages/sdk/** is untouched
     # (that is exactly how the VRF-committee drift of #38 slipped through).
-    paths: ["packages/sdk/**", "packages/contracts/src/**", ".github/workflows/sdk.yml"]
+    # infra/shardstore/ is included on purpose: `http-store-live.test.ts` runs the
+    # real reference server as a child process and drives it through the SDK's
+    # HttpShardStore, so a server-protocol change must re-run that contract test.
+    paths: ["packages/sdk/**", "packages/contracts/src/**", "infra/shardstore/**", ".github/workflows/sdk.yml"]
   pull_request:
-    paths: ["packages/sdk/**", "packages/contracts/src/**", ".github/workflows/sdk.yml"]
+    paths: ["packages/sdk/**", "packages/contracts/src/**", "infra/shardstore/**", ".github/workflows/sdk.yml"]
   workflow_dispatch:
 
 jobs:

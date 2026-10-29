@@ -29,7 +29,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "export-abi": "node scripts/export-abi.cjs",
-    "test": "npm run build && node --test --experimental-strip-types test/smoke.test.ts",
+    "test": "npm run build && node --test --experimental-strip-types test/smoke.test.ts test/http-store-live.test.ts",
     "devnet:sdk": "node scripts/devnet-check.mjs"
   },
   "dependencies": {

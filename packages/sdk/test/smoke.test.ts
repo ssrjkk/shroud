@@ -1949,4 +1949,79 @@ test("uploadAndMonetize approves a missing contribution bond before submitting",
     assert.equal(submission?.name, "submitContribution");
     assert.match(out.contributionTx, /^0x[0-9a-f]{64}$/);
   }
+
+  {
+    // Reference-service parity: a store that addresses the same bytes by keccak256
+    // (the reference HTTP service's scheme) must be accepted. The echo check verifies
+    // the store can actually serve the object back—not that it uses the dev stores'
+    // sha256 addressing—so a keccak-addressed DA is a supported backend, not a lie.
+    sent.length = 0;
+    const provider = new ethers.JsonRpcProvider(fr);
+    const sdk = new ShroudSdk({
+      cipherTask,
+      paymentVault: vault,
+      signer: new ethers.Wallet(wallet.privateKey, provider),
+      provider,
+      chainId: 31337n,
+      shardStore: {
+        async put(p: Uint8Array) {
+          const cid = ethers.keccak256(p);
+          return { cid, digest: ethers.keccak256(p) };
+        },
+        async get() {
+          throw new Error("not served in this test");
+        },
+        async getVerified() {
+          throw new Error("not served in this test");
+        },
+      },
+    });
+    const out = await sdk.uploadAndMonetize([1, 2, 3, 4, 5, 6], 1n, {
+      features: 3,
+      allowUnencrypted: true,
+    });
+    assert.equal(sent.length, 2, "keccak-addressed store: approve then submit still run");
+    const submission = iface.parseTransaction({ data: sent[1].data });
+    assert.equal(submission?.name, "submitContribution");
+    // The committed ciphertextCid is the store's own (keccak) address: 32 bytes, and a
+    // node fetches the object back by exactly this value.
+    assert.equal(ethers.dataLength(out.ciphertextCid), 32);
+  }
+
+  {
+    // A store that echoes a cid which is the content address of NEITHER sha256 nor
+    // keccak cannot serve the object back: the SDK refuses instead of pinning an
+    // orphan the DA will never return.
+    sent.length = 0;
+    const provider = new ethers.JsonRpcProvider(fr);
+    const sdk = new ShroudSdk({
+      cipherTask,
+      paymentVault: vault,
+      signer: new ethers.Wallet(wallet.privateKey, provider),
+      provider,
+      chainId: 31337n,
+      shardStore: {
+        async put() {
+          return { cid: ethers.id("garbage-cid-address"), digest: ethers.ZeroHash };
+        },
+        async get() {
+          throw new Error("not served in this test");
+        },
+        async getVerified() {
+          throw new Error("not served in this test");
+        },
+      },
+    });
+    await assert.rejects(
+      () => sdk.uploadAndMonetize([1, 2, 3, 4, 5, 6], 1n, { features: 3, allowUnencrypted: true }),
+      /neither sha256\(.*\) nor keccak256\(.*\)/
+    );
+    // Only the bond approval left the machine; the lying store must not reach submit.
+    assert.equal(sent.length, 1, "a lying store must stop before the submit transaction");
+    assert.notEqual(
+      iface.parseTransaction({ data: sent[0].data })?.name,
+      "submitContribution",
+      "a lying store must never submit"
+    );
+  }
 });
