@@ -260,3 +260,7 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+**SSRJKK** — [GitHub](https://github.com/ssrjkk) · [Telegram](https://t.me/ssrjkk) · [Projects hub](https://ssrjkk.github.io/) · [Bot catalogue](https://t.me/ssrjkk_bot)
