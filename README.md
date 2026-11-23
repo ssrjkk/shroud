@@ -251,6 +251,7 @@ Operator configuration (backends, DA, key pin, timeouts) is documented in
 - [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) — honest MVP scope
 - [`infra/README.md`](infra/README.md) — devnet + node operator runbook
 - [`bot/README.md`](bot/README.md) — ops bot setup and limits
+- [User guide](USER_GUIDE.md)
 
 ## Contributing & security
 
