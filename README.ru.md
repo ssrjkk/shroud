@@ -9,7 +9,8 @@ fhEVM: эскроу задач, proof-of-compute, потоковые выпла�
 > с реальными средствами или приватными данными.** Текущая проверка вычислений —
 > fraud-proof/re-execution commitment, а не полная on-chain STARK-верификация.
 
-**Сайт:** https://ssrjkk.github.io/shroud/
+**Сайт:** https://ssrjkk.github.io/shroud/  
+**Исходники:** https://github.com/ssrjkk/shroud
 
 ## Возможности
 
