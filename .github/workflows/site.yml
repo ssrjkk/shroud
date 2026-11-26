@@ -13,21 +13,11 @@ on:
     paths: ["web/**", "node/**", "docs/04-threat-model.md", ".github/workflows/site.yml"]
   workflow_dispatch:
 
-# Pages deployment needs these; PRs from forks cannot deploy, so the deploy
-# job is main-only below while build still validates every PR.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  # Scoped per ref, not one global `pages` group: a single group makes every
-  # concurrently-open PR cancel every other one, so a batch of Dependabot PRs
-  # all report the site job as `cancelled` (and therefore red) even though the
-  # site itself is fine. Per-ref keeps the intended behaviour where it matters —
-  # a new push to main cancels the older main deploy — while letting
-  # unrelated PRs build in parallel.
-  group: pages-${{ github.ref }}
+  group: site-checks-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -46,7 +36,6 @@ jobs:
         run: npm ci --prefix web/tests --ignore-scripts
       - name: audit static-site test dependencies
         run: npm audit --prefix web/tests --audit-level=high
-      - uses: actions/configure-pages@v5
       - name: check internal links resolve
         run: |
           python3 - <<'EOF'
@@ -88,19 +77,3 @@ jobs:
         run: node web/tests/a11y.mjs
       - name: check the site's finding count matches the threat model
         run: node web/tests/findings.mjs
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web
-
-  deploy:
-    name: deploy to GitHub Pages
-    if: github.ref == 'refs/heads/main'
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
