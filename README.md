@@ -8,14 +8,7 @@
 > Read [`docs/05-honest-limitations.md`](docs/05-honest-limitations.md) and
 > [`TRUST_ASSUMPTIONS.md`](TRUST_ASSUMPTIONS.md) before using anything.
 
-[![contracts](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/contracts.yml)
-[![sdk](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/sdk.yml)
-[![rust](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/rust.yml)
-[![site](https://github.com/ssrjkk/shroud/actions/workflows/site.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/site.yml)
-[![bot](https://github.com/ssrjkk/shroud/actions/workflows/bot.yml/badge.svg)](https://github.com/ssrjkk/shroud/actions/workflows/bot.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
-
-🌐 **Live site: [ssrjkk.github.io/shroud](https://ssrjkk.github.io/shroud/)** — the project,
+ **Live site: [ssrjkk.github.io/shroud](https://ssrjkk.github.io/shroud/)** — the project,
 the protocol, the honest security posture, and a lab that runs the pipeline in your browser.
 
 | [Home](https://ssrjkk.github.io/shroud/) · [Pipeline](https://ssrjkk.github.io/shroud/pipeline.html) · [Practice](https://ssrjkk.github.io/shroud/use.html) · [Lab](https://ssrjkk.github.io/shroud/playground.html) · [Protocol](https://ssrjkk.github.io/shroud/protocol.html) · [Security](https://ssrjkk.github.io/shroud/security.html) · [License](https://ssrjkk.github.io/shroud/license.html) |
