@@ -1,5 +1,7 @@
 # Shroud — Private, programmable ML with verifiable compute and streaming payouts
 
+> **Languages:** [English](README.md) · [Русский](README.ru.md)
+
 > **Research prototype. Not audited. Do not use with real funds or real private data.**
 >
 > Current compute verification is **fraud-proof / re-execution commitment**, not full
